@@ -8,6 +8,7 @@ from auth import auth_bp
 from layers import layers_bp
 from features import features_bp
 from ingestion import ingestion_bp
+from analysis import analysis_bp
 
 
 def create_app(config=Config):
@@ -21,6 +22,7 @@ def create_app(config=Config):
     app.register_blueprint(layers_bp,     url_prefix='/api/v1/layers')
     app.register_blueprint(features_bp,   url_prefix='/api/v1/layers')
     app.register_blueprint(ingestion_bp,  url_prefix='/api/v1/layers')
+    app.register_blueprint(analysis_bp,   url_prefix='/api/v1/analysis')
 
     app.teardown_appcontext(close_db)
 

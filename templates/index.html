@@ -10,28 +10,21 @@
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
     :root {
-      --bg:       #0f172a;
-      --panel:    #1e293b;
-      --item:     #2d3f55;
-      --border:   #334155;
-      --text:     #f1f5f9;
-      --muted:    #94a3b8;
-      --accent:   #3b82f6;
-      --accent2:  #2563eb;
-      --danger:   #ef4444;
-      --success:  #22c55e;
-      --warn:     #f59e0b;
-      --sw: 272px;
+      --bg:    #0f172a;  --panel:  #1e293b;  --item:   #2d3f55;
+      --border:#334155;  --text:   #f1f5f9;  --muted:  #94a3b8;
+      --accent:#3b82f6;  --accent2:#2563eb;  --danger: #ef4444;
+      --success:#22c55e; --warn:   #f59e0b;  --sw: 272px;
     }
 
     body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
-    /* ── Header ─────────────────────────────────────────────────────────── */
-    header { height: 48px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; padding: 0 12px; flex-shrink: 0; z-index: 500; }
+    /* ── Header ── */
+    header { height: 48px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; padding: 0 12px; flex-shrink: 0; z-index: 500; }
     .logo { font-size: 14px; font-weight: 700; color: var(--accent); white-space: nowrap; display: flex; align-items: center; gap: 7px; }
+    .hdr-sep { width: 1px; height: 20px; background: var(--border); flex-shrink: 0; }
 
     /* Search */
-    #search-wrap { position: relative; flex: 1; max-width: 380px; }
+    #search-wrap { position: relative; flex: 1; max-width: 360px; }
     #search-input { width: 100%; background: var(--item); border: 1px solid var(--border); border-radius: 6px; padding: 7px 11px 7px 32px; color: var(--text); font-size: 13px; outline: none; transition: border-color .15s; }
     #search-input:focus { border-color: var(--accent); }
     .search-icon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
@@ -42,21 +35,26 @@
     .sr-name { font-size: 12px; }
     .sr-type { font-size: 10px; color: var(--muted); margin-top: 2px; text-transform: capitalize; }
 
-    /* ── Layout ──────────────────────────────────────────────────────────── */
-    .body { display: flex; flex: 1; overflow: hidden; }
+    /* Header icon buttons */
+    .hbtn { height: 30px; padding: 0 10px; background: none; border: 1px solid var(--border); color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; display: flex; align-items: center; gap: 5px; transition: all .15s; white-space: nowrap; }
+    .hbtn:hover { border-color: var(--accent); color: var(--text); }
 
-    /* ── Sidebar ─────────────────────────────────────────────────────────── */
+    /* ── Layout ── */
+    .body { display: flex; flex: 1; overflow: hidden; min-height: 0; }
+
+    /* ── Sidebar ── */
     .sidebar { width: var(--sw); background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
-    .sidebar-hdr { padding: 9px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .sidebar-hdr { padding: 9px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 6px; flex-shrink: 0; }
     .sidebar-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
     #layer-list { flex: 1; overflow-y: auto; padding: 6px; }
 
     .layer-card { background: var(--item); border: 1px solid transparent; border-radius: 7px; margin-bottom: 5px; overflow: hidden; transition: border-color .15s; }
     .layer-card.active-draw { border-color: var(--warn); }
-    .layer-main { display: flex; align-items: center; gap: 6px; padding: 9px 10px; cursor: pointer; }
+    .layer-main { display: flex; align-items: center; gap: 6px; padding: 8px 10px; cursor: pointer; }
     .layer-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
     .layer-name { font-size: 13px; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .badge { font-size: 9px; padding: 2px 5px; border-radius: 4px; background: var(--bg); color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+    .badge { font-size: 9px; padding: 2px 5px; border-radius: 4px; background: var(--bg); color: var(--muted); text-transform: uppercase; letter-spacing: .4px; flex-shrink: 0; }
+    .cnt-badge { font-size: 9px; padding: 2px 5px; border-radius: 4px; background: rgba(59,130,246,.15); color: var(--accent); flex-shrink: 0; }
     .chevron { color: var(--muted); font-size: 10px; transition: transform .2s; flex-shrink: 0; }
     .chevron.open { transform: rotate(180deg); }
     .toggle { width: 30px; height: 16px; background: var(--border); border-radius: 8px; position: relative; cursor: pointer; transition: background .15s; flex-shrink: 0; }
@@ -71,16 +69,16 @@
     .act-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid var(--border); background: none; color: var(--muted); border-radius: 5px; font-size: 11px; cursor: pointer; transition: all .15s; white-space: nowrap; }
     .act-btn:hover { border-color: var(--accent); color: var(--text); }
     .act-btn.draw-active { border-color: var(--warn); color: var(--warn); }
-    .act-btn.del { border-color: transparent; }
     .act-btn.del:hover { border-color: var(--danger); color: var(--danger); }
+    .act-btn.table-active { border-color: var(--success); color: var(--success); }
 
     .empty-msg { padding: 20px 12px; color: var(--muted); font-size: 12px; text-align: center; line-height: 1.7; }
 
-    /* ── Map ─────────────────────────────────────────────────────────────── */
-    .map-wrap { position: relative; flex: 1; }
+    /* ── Map ── */
+    .map-wrap { position: relative; flex: 1; min-width: 0; }
     #map { position: absolute; inset: 0; }
 
-    /* ── Floating measure toolbar ────────────────────────────────────────── */
+    /* ── Measure bar ── */
     #measure-bar { position: absolute; top: 12px; right: 52px; z-index: 1000; display: flex; gap: 4px; }
     .mbar-btn { height: 30px; padding: 0 10px; background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; display: flex; align-items: center; gap: 5px; transition: all .15s; white-space: nowrap; }
     .mbar-btn:hover { border-color: var(--accent); color: var(--accent); }
@@ -88,10 +86,28 @@
     .mbar-btn.clear { color: var(--muted); }
     .mbar-btn.clear:hover { border-color: var(--danger); color: var(--danger); }
 
-    /* ── Status bar ──────────────────────────────────────────────────────── */
-    .statusbar { height: 24px; background: var(--panel); border-top: 1px solid var(--border); display: flex; align-items: center; gap: 20px; padding: 0 12px; font-size: 11px; color: var(--muted); flex-shrink: 0; }
+    /* ── Attribute table panel ── */
+    #attr-panel { position: fixed; bottom: 24px; left: var(--sw); right: 0; height: 0; overflow: hidden; background: var(--panel); border-top: 2px solid var(--border); transition: height .25s ease; z-index: 800; display: flex; flex-direction: column; }
+    #attr-panel.open { height: 230px; }
+    .attr-hdr { display: flex; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--border); flex-shrink: 0; background: var(--panel); }
+    .attr-hdr-title { font-size: 12px; font-weight: 700; }
+    .attr-hdr-cnt { font-size: 11px; color: var(--muted); }
+    .attr-hdr-close { margin-left: auto; background: none; border: none; color: var(--muted); cursor: pointer; font-size: 14px; padding: 2px 6px; border-radius: 4px; transition: color .15s; }
+    .attr-hdr-close:hover { color: var(--danger); }
+    #attr-wrap { overflow: auto; flex: 1; }
+    .attr-table { width: 100%; border-collapse: collapse; font-size: 11px; white-space: nowrap; }
+    .attr-table th { position: sticky; top: 0; background: var(--bg); color: var(--muted); padding: 5px 10px; text-align: left; font-weight: 600; border-bottom: 1px solid var(--border); z-index: 1; }
+    .attr-table td { padding: 5px 10px; border-bottom: 1px solid rgba(51,65,85,.5); max-width: 200px; overflow: hidden; text-overflow: ellipsis; }
+    .attr-table tr { cursor: pointer; transition: background .1s; }
+    .attr-table tr:hover { background: var(--item); }
+    .attr-table tr.sel { background: rgba(59,130,246,.1); }
+    .attr-table td.row-num { color: var(--muted); text-align: right; font-size: 10px; }
+    .attr-zoom { background: none; border: none; color: var(--accent); cursor: pointer; font-size: 13px; padding: 0 4px; }
 
-    /* ── Buttons ─────────────────────────────────────────────────────────── */
+    /* ── Status bar ── */
+    .statusbar { height: 24px; background: var(--panel); border-top: 1px solid var(--border); display: flex; align-items: center; gap: 20px; padding: 0 12px; font-size: 11px; color: var(--muted); flex-shrink: 0; z-index: 900; }
+
+    /* ── Buttons ── */
     .btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 13px; background: var(--accent); color: #fff; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s; white-space: nowrap; }
     .btn:hover { background: var(--accent2); }
     .btn-sm { padding: 5px 10px; font-size: 12px; }
@@ -100,14 +116,14 @@
     .btn-danger { background: var(--danger); }
     .btn-danger:hover { background: #dc2626; }
 
-    /* ── Auth area ───────────────────────────────────────────────────────── */
+    /* ── Auth ── */
     .user-badge { display: flex; align-items: center; gap: 8px; }
     .avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
     .uname { font-size: 12px; }
     .btn-logout { background: none; border: 1px solid var(--border); color: var(--muted); padding: 4px 9px; border-radius: 5px; font-size: 11px; cursor: pointer; transition: all .15s; }
     .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
 
-    /* ── Modals ──────────────────────────────────────────────────────────── */
+    /* ── Modals ── */
     .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.65); z-index: 2000; display: flex; align-items: center; justify-content: center; padding: 16px; }
     .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 26px; width: 340px; max-width: 100%; }
     .modal-lg { width: 420px; }
@@ -116,18 +132,20 @@
     .tab { flex: 1; padding: 7px; background: var(--item); border: none; color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 13px; transition: all .15s; }
     .tab.active { background: var(--accent); color: #fff; }
     .field { margin-bottom: 13px; }
+    .field-row { display: flex; gap: 8px; }
+    .field-row .field { flex: 1; }
     label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 5px; }
-    input[type=text], input[type=email], input[type=password], select, textarea {
+    input[type=text], input[type=email], input[type=password], input[type=number], select, textarea {
       width: 100%; background: var(--item); border: 1px solid var(--border); border-radius: 6px; padding: 8px 11px; color: var(--text); font-size: 13px; outline: none; transition: border-color .15s; font-family: inherit;
     }
-    input[type=text]:focus, input[type=email]:focus, input[type=password]:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    input[type=text]:focus, input[type=email]:focus, input[type=password]:focus, input[type=number]:focus, select:focus, textarea:focus { border-color: var(--accent); }
     input[type=range] { width: 100%; accent-color: var(--accent); }
     input[type=color] { width: 48px; height: 32px; border: none; background: none; cursor: pointer; padding: 0; }
     .err { color: #f87171; font-size: 11px; margin-top: 5px; display: none; }
     .mfooter { display: flex; gap: 8px; margin-top: 8px; }
     .mfooter .btn { flex: 1; justify-content: center; }
 
-    /* ── Drop zone ───────────────────────────────────────────────────────── */
+    /* ── Drop zone ── */
     .dropzone { border: 2px dashed var(--border); border-radius: 8px; padding: 28px; text-align: center; cursor: pointer; transition: all .2s; }
     .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: rgba(59,130,246,.05); }
     .dropzone p { font-size: 13px; color: var(--muted); margin-top: 8px; }
@@ -135,14 +153,22 @@
     #file-input { display: none; }
     .file-name { font-size: 12px; color: var(--success); margin-top: 8px; }
 
-    /* ── Style panel ─────────────────────────────────────────────────────── */
+    /* ── Style panel ── */
     .color-row { display: flex; align-items: center; gap: 10px; }
     .swatch { width: 32px; height: 32px; border-radius: 6px; border: 2px solid var(--border); flex-shrink: 0; }
     .preset-colors { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
     .preset { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: border-color .15s; }
     .preset:hover, .preset.sel { border-color: #fff; }
 
-    /* ── Popup ───────────────────────────────────────────────────────────── */
+    /* ── Basemap grid ── */
+    .bm-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .bm-tile { background: var(--item); border: 2px solid var(--border); border-radius: 8px; padding: 12px; cursor: pointer; text-align: center; transition: all .15s; }
+    .bm-tile:hover { border-color: var(--accent); }
+    .bm-tile.active { border-color: var(--accent); background: rgba(59,130,246,.1); }
+    .bm-preview { height: 50px; border-radius: 5px; display: flex; align-items: center; justify-content: center; font-size: 20px; margin-bottom: 6px; }
+    .bm-tile span { font-size: 12px; font-weight: 600; }
+
+    /* ── Popup ── */
     .leaflet-popup-content-wrapper { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
     .leaflet-popup-tip { background: var(--panel); }
     .leaflet-popup-close-button { color: var(--muted) !important; }
@@ -150,25 +176,22 @@
     .fpop table { width: 100%; border-collapse: collapse; font-size: 11px; }
     .fpop td { padding: 3px 5px; border-bottom: 1px solid var(--border); }
     .fpop td:first-child { color: var(--muted); width: 45%; }
-    .fpop .sep td { color: var(--border); font-style: italic; font-size: 10px; padding-top: 6px; }
 
-    /* ── Leaflet draw dark theme ─────────────────────────────────────────── */
+    /* ── Leaflet draw dark theme ── */
     .leaflet-draw-toolbar a { background-color: var(--panel) !important; border-color: var(--border) !important; }
     .leaflet-draw-toolbar a:hover { background-color: var(--item) !important; }
     .leaflet-draw-section { border-color: var(--border) !important; }
     .leaflet-draw-actions a { background-color: var(--item) !important; color: var(--text) !important; }
     .leaflet-draw-actions a:hover { background-color: var(--accent) !important; }
-    .leaflet-draw-guide-dash { background: var(--accent) !important; }
 
-    /* ── Toast ───────────────────────────────────────────────────────────── */
+    /* ── Toast ── */
     #toast { position: fixed; bottom: 34px; right: 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 9px 13px; font-size: 12px; z-index: 3000; transform: translateX(130%); transition: transform .25s; max-width: 260px; }
     #toast.show { transform: translateX(0); }
     #toast.ok  { border-color: var(--success); }
     #toast.err { border-color: var(--danger); }
     #toast.warn{ border-color: var(--warn); }
 
-    /* ── Scrollbar ───────────────────────────────────────────────────────── */
-    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
@@ -178,7 +201,7 @@
 </head>
 <body>
 
-<!-- ── Header ─────────────────────────────────────────────────────────────── -->
+<!-- ── Header ── -->
 <header>
   <div class="logo">
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -197,12 +220,16 @@
     <div id="search-dd"></div>
   </div>
 
+  <div class="hdr-sep"></div>
+  <button class="hbtn" onclick="UI.show('bm-modal')">🗺 Basemap</button>
+  <button class="hbtn" id="analysis-btn" style="display:none" onclick="Analysis.open()">∩ Analysis</button>
+
   <div id="auth-area">
     <button class="btn btn-sm" onclick="UI.showAuth()">Login</button>
   </div>
 </header>
 
-<!-- ── Body ──────────────────────────────────────────────────────────────── -->
+<!-- ── Body ── -->
 <div class="body">
 
   <!-- Sidebar -->
@@ -219,24 +246,38 @@
   <!-- Map -->
   <div class="map-wrap">
     <div id="map"></div>
-    <!-- Measure toolbar -->
     <div id="measure-bar">
-      <button class="mbar-btn" id="btn-dist"  onclick="Measure.start('distance')">📏 Distance</button>
-      <button class="mbar-btn" id="btn-area"  onclick="Measure.start('area')">⬡ Area</button>
-      <button class="mbar-btn clear"           onclick="Measure.clearAll()">✕ Clear</button>
+      <button class="mbar-btn" id="btn-dist" onclick="Measure.start('distance')">📏 Distance</button>
+      <button class="mbar-btn" id="btn-area" onclick="Measure.start('area')">⬡ Area</button>
+      <button class="mbar-btn clear"         onclick="Measure.clearAll()">✕ Clear</button>
     </div>
   </div>
 </div>
 
-<!-- ── Status bar ─────────────────────────────────────────────────────────── -->
+<!-- ── Attribute table panel ── -->
+<div id="attr-panel">
+  <div class="attr-hdr">
+    <span class="attr-hdr-title" id="attr-title">Attribute Table</span>
+    <span class="attr-hdr-cnt"   id="attr-cnt"></span>
+    <button class="attr-hdr-close" onclick="AttrTable.close()">✕</button>
+  </div>
+  <div id="attr-wrap">
+    <table class="attr-table">
+      <thead><tr id="attr-head"></tr></thead>
+      <tbody id="attr-body"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── Status bar ── -->
 <div class="statusbar">
   <span id="s-coord">Lat: —  Lng: —</span>
   <span id="s-layers">Layers: 0</span>
   <span id="s-zoom">Zoom: —</span>
-  <span id="s-draw" style="color:var(--warn);display:none">✏ Draw mode active — double-click to finish</span>
+  <span id="s-draw" style="color:var(--warn);display:none">✏ Draw mode active</span>
 </div>
 
-<!-- ── Auth modal ─────────────────────────────────────────────────────────── -->
+<!-- ── Auth modal ── -->
 <div id="auth-modal" class="overlay" style="display:none">
   <div class="modal">
     <h2>Welcome</h2>
@@ -260,26 +301,16 @@
   </div>
 </div>
 
-<!-- ── Add layer modal ────────────────────────────────────────────────────── -->
+<!-- ── Add layer modal ── -->
 <div id="add-modal" class="overlay" style="display:none">
   <div class="modal">
     <h2>New Layer</h2>
     <div class="field"><label>Name *</label><input id="n-name" type="text" placeholder="e.g. Buildings" /></div>
     <div class="field"><label>Description</label><input id="n-desc" type="text" placeholder="Optional" /></div>
     <div class="field"><label>Geometry Type</label>
-      <select id="n-geom">
-        <option value="">Any</option>
-        <option value="Point">Point</option>
-        <option value="LineString">LineString</option>
-        <option value="Polygon">Polygon</option>
-        <option value="MultiPolygon">MultiPolygon</option>
-      </select>
+      <select id="n-geom"><option value="">Any</option><option value="Point">Point</option><option value="LineString">LineString</option><option value="Polygon">Polygon</option><option value="MultiPolygon">MultiPolygon</option></select>
     </div>
-    <div class="field">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-        <input id="n-pub" type="checkbox" style="width:auto" /> Public layer
-      </label>
-    </div>
+    <div class="field"><label style="display:flex;align-items:center;gap:8px;cursor:pointer"><input id="n-pub" type="checkbox" style="width:auto" /> Public layer</label></div>
     <div id="n-err" class="err"></div>
     <div class="mfooter">
       <button class="btn" onclick="Layers.create()">Create</button>
@@ -288,7 +319,7 @@
   </div>
 </div>
 
-<!-- ── Style modal ────────────────────────────────────────────────────────── -->
+<!-- ── Style modal ── -->
 <div id="style-modal" class="overlay" style="display:none">
   <div class="modal">
     <h2>Layer Style</h2>
@@ -312,7 +343,7 @@
   </div>
 </div>
 
-<!-- ── Upload modal ───────────────────────────────────────────────────────── -->
+<!-- ── Upload modal ── -->
 <div id="upload-modal" class="overlay" style="display:none">
   <div class="modal modal-lg">
     <h2>Upload GeoJSON</h2>
@@ -332,7 +363,61 @@
   </div>
 </div>
 
-<!-- ── Toast ──────────────────────────────────────────────────────────────── -->
+<!-- ── Basemap modal ── -->
+<div id="bm-modal" class="overlay" style="display:none">
+  <div class="modal" style="width:360px">
+    <h2>Basemap</h2>
+    <div class="bm-grid">
+      <div class="bm-tile" data-bm="Streets"   onclick="Basemaps.set('Streets')">
+        <div class="bm-preview" style="background:linear-gradient(135deg,#1e3a5f,#2563eb)">🗺</div><span>Streets</span></div>
+      <div class="bm-tile" data-bm="Dark"       onclick="Basemaps.set('Dark')">
+        <div class="bm-preview" style="background:linear-gradient(135deg,#0f172a,#1e293b)">🌙</div><span>Dark</span></div>
+      <div class="bm-tile" data-bm="Satellite"  onclick="Basemaps.set('Satellite')">
+        <div class="bm-preview" style="background:linear-gradient(135deg,#14532d,#166534)">🛰</div><span>Satellite</span></div>
+      <div class="bm-tile" data-bm="Topo"       onclick="Basemaps.set('Topo')">
+        <div class="bm-preview" style="background:linear-gradient(135deg,#451a03,#78350f)">⛰</div><span>Topo</span></div>
+    </div>
+    <button class="btn btn-ghost" style="width:100%;justify-content:center;margin-top:12px" onclick="UI.hide('bm-modal')">Close</button>
+  </div>
+</div>
+
+<!-- ── Analysis modal ── -->
+<div id="analysis-modal" class="overlay" style="display:none">
+  <div class="modal" style="width:380px">
+    <h2>Spatial Analysis</h2>
+    <div class="tabs" id="atabs">
+      <button class="tab active" onclick="Analysis.tab('buffer')">Buffer</button>
+      <button class="tab"        onclick="Analysis.tab('intersect')">Intersect</button>
+    </div>
+
+    <!-- Buffer -->
+    <div id="a-buffer">
+      <div class="field"><label>Source Layer</label><select id="a-src"></select></div>
+      <div class="field-row">
+        <div class="field"><label>Distance</label><input type="number" id="a-dist" value="100" min="1" /></div>
+        <div class="field" style="max-width:110px"><label>Unit</label>
+          <select id="a-unit"><option value="1">metres</option><option value="1000">km</option></select>
+        </div>
+      </div>
+      <div class="field"><label>Output Layer Name</label><input type="text" id="a-bname" value="Buffer" /></div>
+    </div>
+
+    <!-- Intersect -->
+    <div id="a-intersect" style="display:none">
+      <div class="field"><label>Layer A</label><select id="a-la"></select></div>
+      <div class="field"><label>Layer B</label><select id="a-lb"></select></div>
+      <div class="field"><label>Output Layer Name</label><input type="text" id="a-iname" value="Intersection" /></div>
+    </div>
+
+    <div id="a-err" class="err"></div>
+    <div class="mfooter">
+      <button class="btn" onclick="Analysis.run()">Run</button>
+      <button class="btn btn-ghost" onclick="UI.hide('analysis-modal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast ── -->
 <div id="toast"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -340,7 +425,7 @@
 <script>
 'use strict';
 
-// ─── Palette ──────────────────────────────────────────────────────────────────
+// ─── Palette ─────────────────────────────────────────────────────────────────
 const PALETTE = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6',
                  '#ec4899','#06b6d4','#84cc16','#f97316','#a78bfa'];
 const col = (i) => PALETTE[i % PALETTE.length];
@@ -351,9 +436,10 @@ const S = {
   user:    null,
   layers:  [],
   fgroups: {},   // layerId → L.FeatureGroup
-  visible: {},   // layerId → bool
-  colors:  {},   // layerId → hex string
-  opacity: {},   // layerId → 0-1
+  visible: {},
+  colors:  {},
+  opacity: {},
+  fcounts: {},   // layerId → feature count
   activeDrawLayerId: null,
 };
 
@@ -379,9 +465,6 @@ const API = {
 
 // ─── Map ──────────────────────────────────────────────────────────────────────
 const map = L.map('map', { zoomControl: false }).setView([6.297, 5.593], 13);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19, attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
-}).addTo(map);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.control.scale({ position: 'bottomleft', imperial: false }).addTo(map);
 
@@ -404,6 +487,37 @@ function toast(msg, type = 'ok') {
   _toastT = setTimeout(() => el.classList.remove('show'), 3500);
 }
 
+// ─── Basemaps ─────────────────────────────────────────────────────────────────
+const Basemaps = {
+  _current: null,
+  _defs: {
+    'Streets':   () => L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+                   { maxZoom: 19, attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>' }),
+    'Dark':      () => L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+                   { maxZoom: 20, attribution: '© CartoDB' }),
+    'Satellite': () => L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+                   { maxZoom: 19, attribution: '© Esri' }),
+    'Topo':      () => L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
+                   { maxZoom: 17, attribution: '© OpenTopoMap' }),
+  },
+
+  set(name) {
+    if (this._current) map.removeLayer(this._current);
+    this._current = this._defs[name]().addTo(map);
+    this._current.bringToBack();
+    localStorage.setItem('gis_basemap', name);
+    document.querySelectorAll('.bm-tile').forEach((el) =>
+      el.classList.toggle('active', el.dataset.bm === name)
+    );
+    UI.hide('bm-modal');
+  },
+
+  init() {
+    const saved = localStorage.getItem('gis_basemap') || 'Streets';
+    this.set(saved);
+  },
+};
+
 // ─── UI helpers ───────────────────────────────────────────────────────────────
 const UI = {
   show(id) { document.getElementById(id).style.display = 'flex'; },
@@ -421,8 +535,9 @@ const UI = {
   },
 
   setAuthArea() {
-    const area = document.getElementById('auth-area');
-    const btn  = document.getElementById('add-btn');
+    const area  = document.getElementById('auth-area');
+    const addBtn = document.getElementById('add-btn');
+    const aBtn  = document.getElementById('analysis-btn');
     if (S.user) {
       const init = S.user.username.slice(0, 2).toUpperCase();
       area.innerHTML = `<div class="user-badge">
@@ -430,10 +545,12 @@ const UI = {
         <span class="uname">${S.user.username}</span>
         <button class="btn-logout" onclick="Auth.logout()">Logout</button>
       </div>`;
-      btn.style.display = '';
+      addBtn.style.display = '';
+      aBtn.style.display   = '';
     } else {
       area.innerHTML = `<button class="btn btn-sm" onclick="UI.showAuth()">Login</button>`;
-      btn.style.display = 'none';
+      addBtn.style.display = 'none';
+      aBtn.style.display   = 'none';
     }
   },
 
@@ -445,24 +562,28 @@ const UI = {
       return;
     }
     list.innerHTML = S.layers.map((l, i) => {
-      const c = S.colors[l.id] || col(i);
+      const c   = S.colors[l.id] || col(i);
+      const cnt = S.fcounts[l.id];
       return `
       <div class="layer-card" id="card-${l.id}">
         <div class="layer-main" onclick="UI.toggleExpand('${l.id}')">
           <div class="layer-dot" id="dot-${l.id}" style="background:${c}"></div>
           <span class="layer-name" title="${l.name}">${l.name}</span>
           ${l.geometry_type ? `<span class="badge">${l.geometry_type}</span>` : ''}
+          ${cnt != null ? `<span class="cnt-badge" id="cnt-${l.id}">${cnt}</span>` : `<span class="cnt-badge" id="cnt-${l.id}" style="display:none"></span>`}
           <span class="chevron" id="chev-${l.id}">▾</span>
           <div class="toggle on" id="tog-${l.id}" onclick="Layers.toggle(event,'${l.id}')"></div>
         </div>
         <div class="layer-actions" id="act-${l.id}">
           ${l.description ? `<div class="layer-desc">${l.description}</div>` : ''}
           <div class="act-row">
-            <button class="act-btn" id="draw-btn-${l.id}" onclick="Draw.activate('${l.id}')">✏ Draw</button>
-            <button class="act-btn" onclick="Style.open('${l.id}')">🎨 Style</button>
-            <button class="act-btn" onclick="Upload.open('${l.id}')">↑ Upload</button>
-            <button class="act-btn" onclick="Layers.exportLayer('${l.id}','${l.name}')">↓ Export</button>
-            <button class="act-btn del" onclick="Layers.deleteLayer('${l.id}','${l.name}')">✕</button>
+            <button class="act-btn" id="draw-btn-${l.id}"  onclick="Draw.activate('${l.id}')">✏ Draw</button>
+            <button class="act-btn" id="tbl-btn-${l.id}"   onclick="AttrTable.open('${l.id}')">⊞ Table</button>
+            <button class="act-btn"                         onclick="Layers.zoomToLayer('${l.id}')">⤢ Zoom</button>
+            <button class="act-btn"                         onclick="Style.open('${l.id}')">🎨 Style</button>
+            <button class="act-btn"                         onclick="Upload.open('${l.id}')">↑ Upload</button>
+            <button class="act-btn"                         onclick="Layers.exportLayer('${l.id}','${l.name}')">↓ Export</button>
+            <button class="act-btn del"                     onclick="Layers.deleteLayer('${l.id}','${l.name}')">✕</button>
           </div>
         </div>
       </div>`;
@@ -496,8 +617,8 @@ const Auth = {
   async register() {
     const u = document.getElementById('r-user').value.trim();
     const em = document.getElementById('r-email').value.trim();
-    const p = document.getElementById('r-pass').value;
-    const e = document.getElementById('r-err');
+    const p  = document.getElementById('r-pass').value;
+    const e  = document.getElementById('r-err');
     e.style.display = 'none';
     try {
       const d = await API.post('/auth/register', { username: u, email: em, password: p });
@@ -532,14 +653,11 @@ const Layers = {
     try {
       const fc = await API.get(`/layers/${layer.id}/features`);
       const c  = S.colors[layer.id] || col(idx);
-      S.colors[layer.id] = c;
       const op = S.opacity[layer.id] ?? 0.8;
+      S.colors[layer.id]  = c;
       S.opacity[layer.id] = op;
 
-      // Remove old group if reloading
-      if (S.fgroups[layer.id]) {
-        map.removeLayer(S.fgroups[layer.id]);
-      }
+      if (S.fgroups[layer.id]) map.removeLayer(S.fgroups[layer.id]);
 
       const fg = L.featureGroup().addTo(map);
       fc.features.forEach((feature) => {
@@ -550,8 +668,8 @@ const Layers = {
           }),
         });
         gl.eachLayer((lyr) => {
-          lyr._featureId  = feature.id;
-          lyr._layerId    = layer.id;
+          lyr._featureId   = feature.id;
+          lyr._layerId     = layer.id;
           lyr._featureData = feature;
           lyr.on('click', (e) => { L.DomEvent.stopPropagation(e); this.showPopup(feature, layer.name, lyr); });
           fg.addLayer(lyr);
@@ -560,6 +678,11 @@ const Layers = {
 
       S.fgroups[layer.id] = fg;
       S.visible[layer.id] = true;
+
+      // Update feature count badge
+      S.fcounts[layer.id] = fc.features.length;
+      const cntEl = document.getElementById(`cnt-${layer.id}`);
+      if (cntEl) { cntEl.textContent = fc.features.length; cntEl.style.display = ''; }
     } catch (ex) {
       console.warn(`Features for "${layer.name}":`, ex.message);
     }
@@ -575,46 +698,46 @@ const Layers = {
     S.visible[layerId] ? map.addLayer(fg) : map.removeLayer(fg);
   },
 
+  zoomToLayer(layerId) {
+    const fg = S.fgroups[layerId];
+    if (!fg || !Object.keys(fg._layers).length) { toast('No features to zoom to', 'warn'); return; }
+    try { map.fitBounds(fg.getBounds().pad(0.15)); }
+    catch (_) { toast('Cannot compute bounds', 'warn'); }
+  },
+
   clearAll() {
     Object.values(S.fgroups).forEach((fg) => map.removeLayer(fg));
-    S.fgroups = {}; S.layers = []; S.visible = {}; S.colors = {}; S.opacity = {};
-    Draw.deactivate();
+    S.fgroups = {}; S.layers = []; S.visible = {}; S.colors = {}; S.opacity = {}; S.fcounts = {};
+    Draw.deactivate(); AttrTable.close();
     UI.renderLayers();
   },
 
   showPopup(feature, layerName, lyr) {
     const props = feature.properties || {};
-    const keys  = Object.keys(props).filter((k) => !k.startsWith('_'));
-    const meta  = Object.keys(props).filter((k) => k.startsWith('_'));
+    const keys  = Object.keys(props);
     const rows  = keys.length
       ? keys.map((k) => `<tr><td>${k}</td><td>${props[k] ?? '—'}</td></tr>`).join('')
       : '<tr><td colspan="2" style="color:var(--muted)">No properties</td></tr>';
-    const metaRows = meta.length
-      ? `<tr class="sep"><td colspan="2">metadata</td></tr>` +
-        meta.map((k) => `<tr><td>${k}</td><td>${props[k] ?? '—'}</td></tr>`).join('')
-      : '';
-    const html = `<div class="fpop"><h4>${layerName}</h4><table>${rows}${metaRows}</table></div>`;
-    let center;
-    try { center = lyr.getBounds().getCenter(); } catch (_) {
-      center = lyr.getLatLng ? lyr.getLatLng() : map.getCenter();
-    }
-    L.popup({ maxWidth: 280 }).setLatLng(center).setContent(html).openOn(map);
+    L.popup({ maxWidth: 280 })
+      .setLatLng((() => { try { return lyr.getBounds().getCenter(); } catch(_) { return lyr.getLatLng ? lyr.getLatLng() : map.getCenter(); } })())
+      .setContent(`<div class="fpop"><h4>${layerName}</h4><table>${rows}</table></div>`)
+      .openOn(map);
   },
 
   async create() {
-    const name = document.getElementById('n-name').value.trim();
-    const desc = document.getElementById('n-desc').value.trim();
-    const geom = document.getElementById('n-geom').value;
-    const pub  = document.getElementById('n-pub').checked;
+    const name  = document.getElementById('n-name').value.trim();
+    const desc  = document.getElementById('n-desc').value.trim();
+    const geom  = document.getElementById('n-geom').value;
+    const pub   = document.getElementById('n-pub').checked;
     const errEl = document.getElementById('n-err');
     errEl.style.display = 'none';
     if (!name) { errEl.textContent = 'Name is required'; errEl.style.display = 'block'; return; }
     try {
       const layer = await API.post('/layers', { name, description: desc, geometry_type: geom, is_public: pub });
       S.layers.unshift(layer);
-      const idx = 0;
-      S.colors[layer.id]  = col(idx);
+      S.colors[layer.id]  = col(0);
       S.opacity[layer.id] = 0.8;
+      S.fcounts[layer.id] = 0;
       S.fgroups[layer.id] = L.featureGroup().addTo(map);
       S.visible[layer.id] = true;
       UI.renderLayers();
@@ -626,18 +749,13 @@ const Layers = {
   },
 
   exportLayer(layerId, name) {
-    const token = S.token ? `?t=${encodeURIComponent(S.token)}` : '';
-    const a = document.createElement('a');
-    a.href = `/api/v1/layers/${layerId}/export`;
-    a.setAttribute('download', `${name}.geojson`);
-    // Use fetch to pass Authorization header
     fetch(`/api/v1/layers/${layerId}/export`, { headers: { Authorization: `Bearer ${S.token}` } })
       .then((r) => r.blob())
       .then((blob) => {
+        const a = document.createElement('a');
         a.href = URL.createObjectURL(blob);
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        a.download = `${name}.geojson`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
         toast(`Exported "${name}"`);
       })
       .catch(() => toast('Export failed', 'err'));
@@ -648,11 +766,11 @@ const Layers = {
     try {
       await API.delete(`/layers/${layerId}`);
       if (S.fgroups[layerId]) map.removeLayer(S.fgroups[layerId]);
-      delete S.fgroups[layerId];
-      delete S.colors[layerId];
-      delete S.opacity[layerId];
+      delete S.fgroups[layerId]; delete S.colors[layerId];
+      delete S.opacity[layerId]; delete S.fcounts[layerId];
       S.layers = S.layers.filter((l) => l.id !== layerId);
       if (S.activeDrawLayerId === layerId) Draw.deactivate();
+      if (AttrTable.layerId === layerId) AttrTable.close();
       UI.renderLayers();
       toast(`Layer "${name}" deleted`);
     } catch (ex) { toast('Delete failed: ' + ex.message, 'err'); }
@@ -664,31 +782,25 @@ const Draw = {
   control: null,
 
   activate(layerId) {
-    // Toggle off if same layer clicked again
     if (S.activeDrawLayerId === layerId) { this.deactivate(); return; }
     this.deactivate();
-
     const fg = S.fgroups[layerId];
     if (!fg) { toast('Load features first', 'warn'); return; }
-
     S.activeDrawLayerId = layerId;
     const c = S.colors[layerId] || '#3b82f6';
-
     this.control = new L.Control.Draw({
       position: 'topleft',
       edit: { featureGroup: fg, remove: true },
       draw: {
-        polygon:     { shapeOptions: { color: c, fillColor: c } },
-        polyline:    { shapeOptions: { color: c } },
-        marker:      true,
-        rectangle:   { shapeOptions: { color: c, fillColor: c } },
-        circle:      false,
+        polygon:      { shapeOptions: { color: c, fillColor: c } },
+        polyline:     { shapeOptions: { color: c } },
+        marker:       true,
+        rectangle:    { shapeOptions: { color: c, fillColor: c } },
+        circle:       false,
         circlemarker: false,
       },
     });
     map.addControl(this.control);
-
-    // Update UI
     document.getElementById(`card-${layerId}`)?.classList.add('active-draw');
     const btn = document.getElementById(`draw-btn-${layerId}`);
     if (btn) btn.classList.add('draw-active');
@@ -700,8 +812,7 @@ const Draw = {
     if (this.control) { map.removeControl(this.control); this.control = null; }
     if (S.activeDrawLayerId) {
       document.getElementById(`card-${S.activeDrawLayerId}`)?.classList.remove('active-draw');
-      const btn = document.getElementById(`draw-btn-${S.activeDrawLayerId}`);
-      if (btn) btn.classList.remove('draw-active');
+      document.getElementById(`draw-btn-${S.activeDrawLayerId}`)?.classList.remove('draw-active');
     }
     S.activeDrawLayerId = null;
     document.getElementById('s-draw').style.display = 'none';
@@ -713,14 +824,13 @@ const Draw = {
     const geojson = e.layer.toGeoJSON();
     try {
       const feature = await API.post(`/layers/${layerId}/features`, geojson);
-      // Add the returned feature (with ID) to the group
       const c  = S.colors[layerId] || '#3b82f6';
       const op = S.opacity[layerId] ?? 0.8;
+      const layerName = S.layers.find(l => l.id === layerId)?.name || '';
       const gl = L.geoJSON(feature, {
         style: () => ({ color: c, weight: 2, opacity: .9, fillColor: c, fillOpacity: op * .25 }),
         pointToLayer: (f, ll) => L.circleMarker(ll, { radius: 6, fillColor: c, color: '#fff', weight: 1.5, opacity: 1, fillOpacity: op }),
       });
-      const layerName = S.layers.find(l => l.id === layerId)?.name || '';
       gl.eachLayer((lyr) => {
         lyr._featureId   = feature.id;
         lyr._layerId     = layerId;
@@ -728,6 +838,9 @@ const Draw = {
         lyr.on('click', (ev) => { L.DomEvent.stopPropagation(ev); Layers.showPopup(feature, layerName, lyr); });
         S.fgroups[layerId].addLayer(lyr);
       });
+      S.fcounts[layerId] = (S.fcounts[layerId] || 0) + 1;
+      const cntEl = document.getElementById(`cnt-${layerId}`);
+      if (cntEl) cntEl.textContent = S.fcounts[layerId];
       toast('Feature created');
     } catch (ex) { toast('Create failed: ' + ex.message, 'err'); }
   },
@@ -737,25 +850,23 @@ const Draw = {
     if (!layerId) return;
     const updates = [];
     e.layers.eachLayer((lyr) => {
-      if (lyr._featureId) {
+      if (lyr._featureId)
         updates.push(API.put(`/layers/${layerId}/features/${lyr._featureId}`, { geometry: lyr.toGeoJSON().geometry }));
-      }
     });
-    try {
-      await Promise.all(updates);
-      toast(`${updates.length} feature(s) updated`);
-    } catch (ex) { toast('Update failed: ' + ex.message, 'err'); }
+    try { await Promise.all(updates); toast(`${updates.length} feature(s) updated`); }
+    catch (ex) { toast('Update failed: ' + ex.message, 'err'); }
   },
 
   async handleDeleted(e) {
     const layerId = S.activeDrawLayerId;
     if (!layerId) return;
     const dels = [];
-    e.layers.eachLayer((lyr) => {
-      if (lyr._featureId) dels.push(API.delete(`/layers/${layerId}/features/${lyr._featureId}`));
-    });
+    e.layers.eachLayer((lyr) => { if (lyr._featureId) dels.push(API.delete(`/layers/${layerId}/features/${lyr._featureId}`)); });
     try {
       await Promise.all(dels);
+      S.fcounts[layerId] = Math.max(0, (S.fcounts[layerId] || 0) - dels.length);
+      const cntEl = document.getElementById(`cnt-${layerId}`);
+      if (cntEl) cntEl.textContent = S.fcounts[layerId];
       toast(`${dels.length} feature(s) deleted`);
     } catch (ex) { toast('Delete failed: ' + ex.message, 'err'); }
   },
@@ -764,6 +875,72 @@ const Draw = {
 map.on(L.Draw.Event.CREATED, (e) => Draw.handleCreated(e));
 map.on(L.Draw.Event.EDITED,  (e) => Draw.handleEdited(e));
 map.on(L.Draw.Event.DELETED, (e) => Draw.handleDeleted(e));
+
+// ─── Attribute Table ──────────────────────────────────────────────────────────
+const AttrTable = {
+  layerId: null,
+  features: [],
+
+  async open(layerId) {
+    const layer = S.layers.find(l => l.id === layerId);
+    if (!layer) return;
+    try {
+      const fc = await API.get(`/layers/${layerId}/features`);
+      this.layerId  = layerId;
+      this.features = fc.features;
+
+      // Header
+      document.getElementById('attr-title').textContent = layer.name;
+      document.getElementById('attr-cnt').textContent   = `${fc.features.length} features`;
+
+      const panel = document.getElementById('attr-panel');
+      panel.classList.add('open');
+
+      // Derive column set
+      const keys = [...new Set(fc.features.flatMap(f => Object.keys(f.properties || {})))].slice(0, 20);
+
+      document.getElementById('attr-head').innerHTML =
+        '<th>№</th>' + keys.map(k => `<th title="${k}">${k}</th>`).join('') + '<th></th>';
+
+      document.getElementById('attr-body').innerHTML = fc.features.length
+        ? fc.features.map((f, i) => {
+            const p = f.properties || {};
+            return `<tr onclick="AttrTable.select(${i})">
+              <td class="row-num">${i + 1}</td>
+              ${keys.map(k => `<td title="${p[k] ?? ''}">${p[k] ?? ''}</td>`).join('')}
+              <td><button class="attr-zoom" onclick="event.stopPropagation();AttrTable.zoomTo(${i})" title="Zoom">⌖</button></td>
+            </tr>`;
+          }).join('')
+        : `<tr><td colspan="${keys.length + 2}" style="text-align:center;padding:16px;color:var(--muted)">No features in this layer</td></tr>`;
+
+      // Mark table button active
+      document.querySelectorAll('.act-btn').forEach(b => b.classList.remove('table-active'));
+      document.getElementById(`tbl-btn-${layerId}`)?.classList.add('table-active');
+    } catch (ex) { toast('Table load failed: ' + ex.message, 'err'); }
+  },
+
+  close() {
+    document.getElementById('attr-panel').classList.remove('open');
+    if (this.layerId) {
+      document.getElementById(`tbl-btn-${this.layerId}`)?.classList.remove('table-active');
+    }
+    this.layerId = null; this.features = [];
+  },
+
+  select(idx) {
+    document.querySelectorAll('#attr-body tr').forEach((tr, i) => tr.classList.toggle('sel', i === idx));
+  },
+
+  zoomTo(idx) {
+    const f = this.features[idx];
+    if (!f) return;
+    try {
+      const b = L.geoJSON(f).getBounds();
+      map.fitBounds(b.pad(0.3));
+    } catch (_) {}
+    this.select(idx);
+  },
+};
 
 // ─── Measure ──────────────────────────────────────────────────────────────────
 const Measure = {
@@ -778,7 +955,7 @@ const Measure = {
     map.on('dblclick', this._onDbl.bind(this));
     map.getContainer().style.cursor = 'crosshair';
     document.getElementById(`btn-${type === 'distance' ? 'dist' : 'area'}`).classList.add('active');
-    toast(type === 'distance' ? 'Click to add points. Double-click to finish.' : 'Click to add vertices. Double-click to finish.', 'warn');
+    toast(type === 'distance' ? 'Click to add points. Double-click to finish.' : 'Click vertices. Double-click to finish.', 'warn');
   },
 
   stop() {
@@ -794,21 +971,17 @@ const Measure = {
 
   clearAll() {
     this.stop();
-    this._saved.forEach((l) => map.removeLayer(l));
+    this._saved.forEach(l => map.removeLayer(l));
     this._saved = [];
     toast('Measurements cleared');
   },
 
-  _onClick(e) {
-    this.points.push(e.latlng);
-    this._draw();
-  },
+  _onClick(e) { this.points.push(e.latlng); this._draw(); },
 
   _onDbl(e) {
     L.DomEvent.stopPropagation(e);
     if (this.points.length < 2) { this.stop(); return; }
-    const result = this._finish();
-    toast(result, 'ok');
+    toast(this._finish(), 'ok');
     this.stop();
   },
 
@@ -816,31 +989,30 @@ const Measure = {
     if (this._lyr)   { map.removeLayer(this._lyr);   this._lyr   = null; }
     if (this._label) { map.removeLayer(this._label); this._label = null; }
     if (this.points.length < 2) return;
-
     if (this.active === 'distance') {
-      this._lyr = L.polyline(this.points, { color: '#f59e0b', weight: 2, dashArray: '6,4' }).addTo(map);
-      const txt = this._fmtDist(this._totalDist());
-      this._label = this._mkLabel(this.points[this.points.length - 1], txt);
+      this._lyr   = L.polyline(this.points, { color: '#f59e0b', weight: 2, dashArray: '6,4' }).addTo(map);
+      this._label = this._mkLabel(this.points[this.points.length - 1], this._fmtDist(this._totalDist()));
     } else if (this.points.length >= 3) {
-      this._lyr = L.polygon(this.points, { color: '#f59e0b', weight: 2, fillOpacity: .08 }).addTo(map);
-      const txt = this._fmtArea(this._polyArea(this.points));
-      this._label = this._mkLabel(this.points[this.points.length - 1], txt);
+      this._lyr   = L.polygon(this.points, { color: '#f59e0b', weight: 2, fillOpacity: .08 }).addTo(map);
+      this._label = this._mkLabel(this.points[this.points.length - 1], this._fmtArea(this._polyArea(this.points)));
     }
   },
 
   _finish() {
-    let msg = '';
+    let msg = '', lyr, lbl;
     if (this.active === 'distance') {
       const d = this._totalDist();
       msg = `Distance: ${this._fmtDist(d)}`;
-      const saved = L.polyline(this.points, { color: '#f59e0b', weight: 2, dashArray: '6,4' }).addTo(map);
-      this._saved.push(saved, this._mkLabel(this.points[this.points.length - 1], this._fmtDist(d)));
+      lyr = L.polyline(this.points, { color: '#f59e0b', weight: 2, dashArray: '6,4' }).addTo(map);
+      lbl = this._mkLabel(this.points[this.points.length - 1], this._fmtDist(d));
     } else if (this.points.length >= 3) {
       const a = this._polyArea(this.points);
       msg = `Area: ${this._fmtArea(a)}`;
-      const saved = L.polygon(this.points, { color: '#f59e0b', weight: 2, fillOpacity: .08 }).addTo(map);
-      this._saved.push(saved, this._mkLabel(this._centroid(this.points), this._fmtArea(a)));
+      lyr = L.polygon(this.points, { color: '#f59e0b', weight: 2, fillOpacity: .08 }).addTo(map);
+      lbl = this._mkLabel(this._centroid(this.points), this._fmtArea(a));
     }
+    if (lyr) this._saved.push(lyr);
+    if (lbl) this._saved.push(lbl);
     return msg;
   },
 
@@ -850,37 +1022,22 @@ const Measure = {
         className: '',
         html: `<div style="background:#f59e0b;color:#000;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.4)">${txt}</div>`,
         iconAnchor: [0, 0],
-      }),
-      interactive: false,
+      }), interactive: false,
     }).addTo(map);
   },
 
-  _totalDist() {
-    let d = 0;
-    for (let i = 1; i < this.points.length; i++) d += this.points[i - 1].distanceTo(this.points[i]);
-    return d;
-  },
-
+  _totalDist() { let d = 0; for (let i = 1; i < this.points.length; i++) d += this.points[i-1].distanceTo(this.points[i]); return d; },
   _polyArea(pts) {
-    const R = 6371000, n = pts.length;
-    let area = 0;
+    const R = 6371000, n = pts.length; let area = 0;
     for (let i = 0; i < n; i++) {
-      const j = (i + 1) % n;
-      const φ1 = pts[i].lat * Math.PI / 180, φ2 = pts[j].lat * Math.PI / 180;
-      const dλ = (pts[j].lng - pts[i].lng) * Math.PI / 180;
-      area += (2 + Math.sin(φ1) + Math.sin(φ2)) * dλ;
+      const j = (i+1)%n, φ1 = pts[i].lat*Math.PI/180, φ2 = pts[j].lat*Math.PI/180;
+      area += (2 + Math.sin(φ1) + Math.sin(φ2)) * (pts[j].lng - pts[i].lng) * Math.PI/180;
     }
-    return Math.abs(area * R * R / 2);
+    return Math.abs(area*R*R/2);
   },
-
-  _centroid(pts) {
-    const lat = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
-    const lng = pts.reduce((s, p) => s + p.lng, 0) / pts.length;
-    return L.latLng(lat, lng);
-  },
-
-  _fmtDist(m) { return m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${m.toFixed(0)} m`; },
-  _fmtArea(m) { return m >= 1e6 ? `${(m / 1e6).toFixed(3)} km²` : `${m.toFixed(0)} m²`; },
+  _centroid(pts) { return L.latLng(pts.reduce((s,p)=>s+p.lat,0)/pts.length, pts.reduce((s,p)=>s+p.lng,0)/pts.length); },
+  _fmtDist(m) { return m>=1000 ? `${(m/1000).toFixed(2)} km` : `${m.toFixed(0)} m`; },
+  _fmtArea(m) { return m>=1e6  ? `${(m/1e6).toFixed(3)} km²` : `${m.toFixed(0)} m²`; },
 };
 
 // ─── Search ───────────────────────────────────────────────────────────────────
@@ -895,12 +1052,8 @@ const Search = {
       if (q.length < 3) { this.hide(); return; }
       this._timer = setTimeout(() => this._query(q), 500);
     });
-    inp.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') { this.hide(); inp.blur(); }
-    });
-    document.addEventListener('click', (e) => {
-      if (!e.target.closest('#search-wrap')) this.hide();
-    });
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Escape') { this.hide(); inp.blur(); } });
+    document.addEventListener('click', (e) => { if (!e.target.closest('#search-wrap')) this.hide(); });
   },
 
   async _query(q) {
@@ -920,7 +1073,7 @@ const Search = {
     dd.innerHTML = this._results.map((r, i) => {
       const parts = r.display_name.split(',');
       return `<div class="sr" onclick="Search.goto(${i})">
-        <div class="sr-name">${parts.slice(0, 2).join(',')}</div>
+        <div class="sr-name">${parts.slice(0,2).join(',')}</div>
         <div class="sr-type">${r.type} · ${parts.slice(-1)[0].trim()}</div>
       </div>`;
     }).join('');
@@ -932,14 +1085,13 @@ const Search = {
   goto(idx) {
     const r = this._results[idx];
     if (!r) return;
-    const lat = parseFloat(r.lat), lng = parseFloat(r.lon);
-    map.setView([lat, lng], 14);
+    map.setView([parseFloat(r.lat), parseFloat(r.lon)], 14);
     const parts = r.display_name.split(',');
-    L.popup().setLatLng([lat, lng])
-      .setContent(`<div style="font-size:12px">${parts.slice(0, 3).join(',')}</div>`)
+    L.popup().setLatLng([parseFloat(r.lat), parseFloat(r.lon)])
+      .setContent(`<div style="font-size:12px">${parts.slice(0,3).join(',')}</div>`)
       .openOn(map);
     this.hide();
-    document.getElementById('search-input').value = parts.slice(0, 2).join(',');
+    document.getElementById('search-input').value = parts.slice(0,2).join(',');
   },
 };
 
@@ -949,15 +1101,12 @@ const Style = {
     document.getElementById('style-layer-id').value = layerId;
     const c  = S.colors[layerId]  || '#3b82f6';
     const op = S.opacity[layerId] ?? 0.8;
-    document.getElementById('style-color').value = c;
+    document.getElementById('style-color').value   = c;
     document.getElementById('style-swatch').style.background = c;
     document.getElementById('style-opacity').value = Math.round(op * 100);
     document.getElementById('opacity-val').textContent = `${Math.round(op * 100)}%`;
-
-    // Preset swatches
-    const presets = document.getElementById('style-presets');
-    presets.innerHTML = PALETTE.map((p) =>
-      `<div class="preset${p === c ? ' sel' : ''}" style="background:${p}" onclick="Style.setPreset('${p}')"></div>`
+    document.getElementById('style-presets').innerHTML = PALETTE.map((p) =>
+      `<div class="preset${p===c?' sel':''}" style="background:${p}" onclick="Style.setPreset('${p}')"></div>`
     ).join('');
     UI.show('style-modal');
   },
@@ -965,41 +1114,30 @@ const Style = {
   preview() {
     const c = document.getElementById('style-color').value;
     document.getElementById('style-swatch').style.background = c;
-    document.querySelectorAll('#style-presets .preset').forEach((el) => {
-      el.classList.toggle('sel', el.style.background === c || el.style.backgroundColor === c);
-    });
+    document.querySelectorAll('#style-presets .preset').forEach((el) =>
+      el.classList.toggle('sel', el.style.background === c || el.style.backgroundColor === c)
+    );
   },
 
   previewOpacity() {
-    const v = document.getElementById('style-opacity').value;
-    document.getElementById('opacity-val').textContent = `${v}%`;
+    document.getElementById('opacity-val').textContent = `${document.getElementById('style-opacity').value}%`;
   },
 
-  setPreset(c) {
-    document.getElementById('style-color').value = c;
-    this.preview();
-  },
+  setPreset(c) { document.getElementById('style-color').value = c; this.preview(); },
 
   apply() {
     const layerId = document.getElementById('style-layer-id').value;
     const c  = document.getElementById('style-color').value;
     const op = parseInt(document.getElementById('style-opacity').value) / 100;
-    S.colors[layerId]  = c;
-    S.opacity[layerId] = op;
-
+    S.colors[layerId] = c; S.opacity[layerId] = op;
     const fg = S.fgroups[layerId];
     if (fg) {
       fg.eachLayer((lyr) => {
-        if (lyr.setStyle) {
-          if (lyr instanceof L.CircleMarker) {
-            lyr.setStyle({ fillColor: c, fillOpacity: op });
-          } else {
-            lyr.setStyle({ color: c, fillColor: c, fillOpacity: op * .25 });
-          }
-        }
+        if (!lyr.setStyle) return;
+        if (lyr instanceof L.CircleMarker) lyr.setStyle({ fillColor: c, fillOpacity: op });
+        else lyr.setStyle({ color: c, fillColor: c, fillOpacity: op * .25 });
       });
     }
-    // Update sidebar dot
     const dot = document.getElementById(`dot-${layerId}`);
     if (dot) dot.style.background = c;
     UI.hide('style-modal');
@@ -1022,16 +1160,13 @@ const Upload = {
 
   fileSelected(e) {
     const f = e.target.files[0];
-    if (!f) return;
-    this._file = f;
-    document.getElementById('file-name').textContent = `Selected: ${f.name}`;
+    if (f) { this._file = f; document.getElementById('file-name').textContent = `Selected: ${f.name}`; }
   },
 
   dragOver(e) { e.preventDefault(); document.getElementById('dropzone').classList.add('drag'); },
   dragLeave()  { document.getElementById('dropzone').classList.remove('drag'); },
   drop(e) {
-    e.preventDefault();
-    document.getElementById('dropzone').classList.remove('drag');
+    e.preventDefault(); document.getElementById('dropzone').classList.remove('drag');
     const f = e.dataTransfer.files[0];
     if (f) { this._file = f; document.getElementById('file-name').textContent = `Selected: ${f.name}`; }
   },
@@ -1041,44 +1176,94 @@ const Upload = {
     const errEl   = document.getElementById('upload-err');
     errEl.style.display = 'none';
     if (!this._file) { errEl.textContent = 'Please select a file'; errEl.style.display = 'block'; return; }
-
     const fd = new FormData();
     fd.append('file', this._file);
     try {
       const r = await fetch(`/api/v1/layers/${layerId}/upload`, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${S.token}` },
-        body: fd,
+        method: 'POST', headers: { Authorization: `Bearer ${S.token}` }, body: fd,
       });
       const d = await r.json();
       if (!r.ok) throw new Error(d.error);
       UI.hide('upload-modal');
-      // Reload the layer features
-      const layer = S.layers.find((l) => l.id === layerId);
-      const idx   = S.layers.findIndex((l) => l.id === layerId);
+      const layer = S.layers.find(l => l.id === layerId);
+      const idx   = S.layers.findIndex(l => l.id === layerId);
       if (layer) await Layers.loadFeatures(layer, idx);
       toast(`Uploaded: ${d.inserted} features${d.errors ? `, ${d.errors} skipped` : ''}`);
     } catch (ex) { errEl.textContent = ex.message; errEl.style.display = 'block'; }
   },
 };
 
-// ─── Keyboard shortcuts ───────────────────────────────────────────────────────
+// ─── Analysis ─────────────────────────────────────────────────────────────────
+const Analysis = {
+  _mode: 'buffer',
+
+  open() {
+    const opts = S.layers.map(l => `<option value="${l.id}">${l.name}</option>`).join('');
+    ['a-src', 'a-la', 'a-lb'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.innerHTML = opts || '<option disabled>No layers available</option>';
+    });
+    document.getElementById('a-err').style.display = 'none';
+    UI.show('analysis-modal');
+  },
+
+  tab(mode) {
+    this._mode = mode;
+    document.getElementById('a-buffer').style.display    = mode === 'buffer'    ? '' : 'none';
+    document.getElementById('a-intersect').style.display = mode === 'intersect' ? '' : 'none';
+    document.querySelectorAll('#atabs .tab').forEach((t, i) =>
+      t.classList.toggle('active', (i === 0) === (mode === 'buffer'))
+    );
+  },
+
+  async run() {
+    const errEl = document.getElementById('a-err');
+    errEl.style.display = 'none';
+    try {
+      let result;
+      if (this._mode === 'buffer') {
+        const layerId = document.getElementById('a-src').value;
+        const dist    = parseFloat(document.getElementById('a-dist').value);
+        const unit    = parseFloat(document.getElementById('a-unit').value);
+        const name    = document.getElementById('a-bname').value.trim() || 'Buffer';
+        if (!layerId) throw new Error('Select a source layer');
+        if (!dist || dist <= 0) throw new Error('Distance must be positive');
+        result = await API.post('/analysis/buffer', { layer_id: layerId, distance: dist * unit, output_name: name });
+      } else {
+        const la   = document.getElementById('a-la').value;
+        const lb   = document.getElementById('a-lb').value;
+        const name = document.getElementById('a-iname').value.trim() || 'Intersection';
+        if (!la || !lb) throw new Error('Select both layers');
+        result = await API.post('/analysis/intersect', { layer_a: la, layer_b: lb, output_name: name });
+      }
+      const newLayer = result.layer;
+      S.layers.unshift(newLayer);
+      S.colors[newLayer.id]  = col(0);
+      S.opacity[newLayer.id] = 0.8;
+      UI.renderLayers();
+      await Layers.loadFeatures(newLayer, 0);
+      UI.hide('analysis-modal');
+      toast(`Created "${newLayer.name}" (${result.count} features)`);
+    } catch (ex) { errEl.textContent = ex.message; errEl.style.display = 'block'; }
+  },
+};
+
+// ─── Keyboard ─────────────────────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    UI.hide('auth-modal'); UI.hide('add-modal');
-    UI.hide('style-modal'); UI.hide('upload-modal');
+    ['auth-modal','add-modal','style-modal','upload-modal','bm-modal','analysis-modal'].forEach(id => UI.hide(id));
     Search.hide(); map.closePopup();
-    Measure.stop(); Draw.deactivate();
+    Measure.stop(); Draw.deactivate(); AttrTable.close();
   }
   if (e.key === 'Enter') {
     const am = document.getElementById('auth-modal');
-    if (am.style.display !== 'none') {
+    if (am.style.display !== 'none')
       document.getElementById('login-pane').style.display !== 'none' ? Auth.login() : Auth.register();
-    }
   }
 });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
+Basemaps.init();
 Search.init();
 
 (async function boot() {
