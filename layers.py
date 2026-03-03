@@ -1,5 +1,5 @@
 import json
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from db import get_db
 
@@ -138,6 +138,46 @@ def update_layer(layer_id):
     r['created_by'] = None
     db.commit()
     return jsonify(_serialize(r))
+
+
+@layers_bp.route('/<layer_id>/export', methods=['GET'])
+@jwt_required(optional=True)
+def export_layer(layer_id):
+    user_id = get_jwt_identity()
+    db = get_db()
+    cur = db.cursor()
+
+    cur.execute(
+        "SELECT name FROM layers WHERE id = %s AND (is_public = TRUE OR created_by = %s::uuid)",
+        (layer_id, user_id)
+    )
+    layer = cur.fetchone()
+    if not layer:
+        return jsonify({'error': 'Layer not found'}), 404
+
+    cur.execute("""
+        SELECT f.id, ST_AsGeoJSON(f.geometry) AS geometry, f.properties
+        FROM features f
+        WHERE f.layer_id = %s
+        ORDER BY f.created_at
+    """, (layer_id,))
+
+    fc = json.dumps({
+        'type': 'FeatureCollection',
+        'features': [{
+            'type': 'Feature',
+            'id': str(r['id']),
+            'geometry': json.loads(r['geometry']),
+            'properties': r['properties'],
+        } for r in cur.fetchall()],
+    }, indent=2)
+
+    filename = layer['name'].replace(' ', '_')
+    return Response(
+        fc,
+        mimetype='application/geo+json',
+        headers={'Content-Disposition': f'attachment; filename="{filename}.geojson"'},
+    )
 
 
 @layers_bp.route('/<layer_id>', methods=['DELETE'])

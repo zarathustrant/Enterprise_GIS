@@ -5,321 +5,174 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Enterprise GIS</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css" />
   <style>
     *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
     :root {
-      --bg:        #0f172a;
-      --panel:     #1e293b;
-      --item:      #2d3f55;
-      --border:    #334155;
-      --text:      #f1f5f9;
-      --muted:     #94a3b8;
-      --accent:    #3b82f6;
-      --accent2:   #2563eb;
-      --danger:    #ef4444;
-      --success:   #22c55e;
-      --warn:      #f59e0b;
-      --sidebar-w: 270px;
+      --bg:       #0f172a;
+      --panel:    #1e293b;
+      --item:     #2d3f55;
+      --border:   #334155;
+      --text:     #f1f5f9;
+      --muted:    #94a3b8;
+      --accent:   #3b82f6;
+      --accent2:  #2563eb;
+      --danger:   #ef4444;
+      --success:  #22c55e;
+      --warn:     #f59e0b;
+      --sw: 272px;
     }
 
-    body {
-      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      height: 100vh;
-      display: flex;
-      flex-direction: column;
-      overflow: hidden;
-    }
+    body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
 
     /* ── Header ─────────────────────────────────────────────────────────── */
-    header {
-      height: 48px;
-      background: var(--panel);
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 0 16px;
-      flex-shrink: 0;
-      z-index: 500;
-    }
-    .logo {
-      font-size: 15px;
-      font-weight: 700;
-      color: var(--accent);
-      letter-spacing: .4px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .logo svg { flex-shrink: 0; }
+    header { height: 48px; background: var(--panel); border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; padding: 0 12px; flex-shrink: 0; z-index: 500; }
+    .logo { font-size: 14px; font-weight: 700; color: var(--accent); white-space: nowrap; display: flex; align-items: center; gap: 7px; }
 
-    /* ── Body layout ─────────────────────────────────────────────────────── */
+    /* Search */
+    #search-wrap { position: relative; flex: 1; max-width: 380px; }
+    #search-input { width: 100%; background: var(--item); border: 1px solid var(--border); border-radius: 6px; padding: 7px 11px 7px 32px; color: var(--text); font-size: 13px; outline: none; transition: border-color .15s; }
+    #search-input:focus { border-color: var(--accent); }
+    .search-icon { position: absolute; left: 9px; top: 50%; transform: translateY(-50%); color: var(--muted); pointer-events: none; }
+    #search-dd { position: absolute; top: calc(100% + 4px); left: 0; right: 0; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; z-index: 9999; display: none; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+    .sr { padding: 9px 12px; cursor: pointer; border-bottom: 1px solid var(--border); transition: background .1s; }
+    .sr:last-child { border-bottom: none; }
+    .sr:hover { background: var(--item); }
+    .sr-name { font-size: 12px; }
+    .sr-type { font-size: 10px; color: var(--muted); margin-top: 2px; text-transform: capitalize; }
+
+    /* ── Layout ──────────────────────────────────────────────────────────── */
     .body { display: flex; flex: 1; overflow: hidden; }
 
     /* ── Sidebar ─────────────────────────────────────────────────────────── */
-    .sidebar {
-      width: var(--sidebar-w);
-      background: var(--panel);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      flex-shrink: 0;
-    }
-    .sidebar-hdr {
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .sidebar-title {
-      font-size: 11px;
-      font-weight: 600;
-      text-transform: uppercase;
-      letter-spacing: 1px;
-      color: var(--muted);
-    }
-    #layer-list { flex: 1; overflow-y: auto; padding: 8px; }
+    .sidebar { width: var(--sw); background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+    .sidebar-hdr { padding: 9px 10px; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+    .sidebar-title { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
+    #layer-list { flex: 1; overflow-y: auto; padding: 6px; }
 
-    .layer-card {
-      background: var(--item);
-      border: 1px solid transparent;
-      border-radius: 7px;
-      padding: 9px 10px;
-      margin-bottom: 5px;
-      cursor: pointer;
-      transition: border-color .15s;
-    }
-    .layer-card:hover { border-color: var(--accent); }
-    .layer-row { display: flex; align-items: center; gap: 7px; }
-    .layer-dot {
-      width: 9px; height: 9px;
-      border-radius: 50%;
-      flex-shrink: 0;
-    }
-    .layer-name {
-      font-size: 13px;
-      font-weight: 500;
-      flex: 1;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .layer-badge {
-      font-size: 9px;
-      padding: 2px 5px;
-      border-radius: 4px;
-      background: var(--bg);
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: .5px;
-    }
-    .toggle {
-      width: 30px; height: 16px;
-      background: var(--border);
-      border-radius: 8px;
-      position: relative;
-      cursor: pointer;
-      transition: background .15s;
-      flex-shrink: 0;
-    }
+    .layer-card { background: var(--item); border: 1px solid transparent; border-radius: 7px; margin-bottom: 5px; overflow: hidden; transition: border-color .15s; }
+    .layer-card.active-draw { border-color: var(--warn); }
+    .layer-main { display: flex; align-items: center; gap: 6px; padding: 9px 10px; cursor: pointer; }
+    .layer-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+    .layer-name { font-size: 13px; font-weight: 500; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .badge { font-size: 9px; padding: 2px 5px; border-radius: 4px; background: var(--bg); color: var(--muted); text-transform: uppercase; letter-spacing: .4px; }
+    .chevron { color: var(--muted); font-size: 10px; transition: transform .2s; flex-shrink: 0; }
+    .chevron.open { transform: rotate(180deg); }
+    .toggle { width: 30px; height: 16px; background: var(--border); border-radius: 8px; position: relative; cursor: pointer; transition: background .15s; flex-shrink: 0; }
     .toggle.on { background: var(--accent); }
-    .toggle::after {
-      content: '';
-      width: 12px; height: 12px;
-      background: #fff;
-      border-radius: 50%;
-      position: absolute;
-      top: 2px; left: 2px;
-      transition: left .15s;
-    }
+    .toggle::after { content: ''; width: 12px; height: 12px; background: #fff; border-radius: 50%; position: absolute; top: 2px; left: 2px; transition: left .15s; }
     .toggle.on::after { left: 16px; }
-    .layer-meta {
-      font-size: 11px;
-      color: var(--muted);
-      margin-top: 4px;
-      padding-left: 16px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-    .empty-msg {
-      padding: 20px 12px;
-      color: var(--muted);
-      font-size: 12px;
-      text-align: center;
-      line-height: 1.6;
-    }
 
-    /* ── Map wrapper ─────────────────────────────────────────────────────── */
+    .layer-actions { padding: 4px 8px 8px; display: none; }
+    .layer-actions.open { display: block; }
+    .layer-desc { font-size: 11px; color: var(--muted); padding: 0 2px 6px; line-height: 1.4; }
+    .act-row { display: flex; flex-wrap: wrap; gap: 4px; }
+    .act-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px; border: 1px solid var(--border); background: none; color: var(--muted); border-radius: 5px; font-size: 11px; cursor: pointer; transition: all .15s; white-space: nowrap; }
+    .act-btn:hover { border-color: var(--accent); color: var(--text); }
+    .act-btn.draw-active { border-color: var(--warn); color: var(--warn); }
+    .act-btn.del { border-color: transparent; }
+    .act-btn.del:hover { border-color: var(--danger); color: var(--danger); }
+
+    .empty-msg { padding: 20px 12px; color: var(--muted); font-size: 12px; text-align: center; line-height: 1.7; }
+
+    /* ── Map ─────────────────────────────────────────────────────────────── */
     .map-wrap { position: relative; flex: 1; }
     #map { position: absolute; inset: 0; }
 
+    /* ── Floating measure toolbar ────────────────────────────────────────── */
+    #measure-bar { position: absolute; top: 12px; right: 52px; z-index: 1000; display: flex; gap: 4px; }
+    .mbar-btn { height: 30px; padding: 0 10px; background: var(--panel); border: 1px solid var(--border); color: var(--text); border-radius: 6px; cursor: pointer; font-size: 11px; font-weight: 600; display: flex; align-items: center; gap: 5px; transition: all .15s; white-space: nowrap; }
+    .mbar-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .mbar-btn.active { background: var(--warn); border-color: var(--warn); color: #000; }
+    .mbar-btn.clear { color: var(--muted); }
+    .mbar-btn.clear:hover { border-color: var(--danger); color: var(--danger); }
+
     /* ── Status bar ──────────────────────────────────────────────────────── */
-    .statusbar {
-      height: 26px;
-      background: var(--panel);
-      border-top: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      gap: 20px;
-      padding: 0 12px;
-      font-size: 11px;
-      color: var(--muted);
-      flex-shrink: 0;
-    }
+    .statusbar { height: 24px; background: var(--panel); border-top: 1px solid var(--border); display: flex; align-items: center; gap: 20px; padding: 0 12px; font-size: 11px; color: var(--muted); flex-shrink: 0; }
 
     /* ── Buttons ─────────────────────────────────────────────────────────── */
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 7px 14px;
-      background: var(--accent);
-      color: #fff;
-      border: none;
-      border-radius: 6px;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background .15s;
-      white-space: nowrap;
-    }
+    .btn { display: inline-flex; align-items: center; gap: 5px; padding: 7px 13px; background: var(--accent); color: #fff; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: background .15s; white-space: nowrap; }
     .btn:hover { background: var(--accent2); }
     .btn-sm { padding: 5px 10px; font-size: 12px; }
-    .btn-ghost {
-      background: none;
-      border: 1px solid var(--border);
-      color: var(--muted);
-    }
-    .btn-ghost:hover { border-color: var(--accent); color: var(--accent); background: none; }
+    .btn-ghost { background: none; border: 1px solid var(--border); color: var(--muted); }
+    .btn-ghost:hover { border-color: var(--accent); color: var(--text); background: none; }
     .btn-danger { background: var(--danger); }
     .btn-danger:hover { background: #dc2626; }
 
-    /* ── Auth header area ────────────────────────────────────────────────── */
+    /* ── Auth area ───────────────────────────────────────────────────────── */
     .user-badge { display: flex; align-items: center; gap: 8px; }
-    .avatar {
-      width: 26px; height: 26px;
-      border-radius: 50%;
-      background: var(--accent);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 10px; font-weight: 700;
-    }
-    .username { font-size: 13px; }
-    .btn-logout {
-      background: none;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      padding: 4px 9px;
-      border-radius: 5px;
-      font-size: 11px;
-      cursor: pointer;
-      transition: all .15s;
-    }
+    .avatar { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; }
+    .uname { font-size: 12px; }
+    .btn-logout { background: none; border: 1px solid var(--border); color: var(--muted); padding: 4px 9px; border-radius: 5px; font-size: 11px; cursor: pointer; transition: all .15s; }
     .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
 
-    /* ── Modal ───────────────────────────────────────────────────────────── */
-    .overlay {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,.65);
-      z-index: 2000;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .modal {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 28px;
-      width: 340px;
-      max-width: calc(100vw - 32px);
-    }
-    .modal h2 { font-size: 18px; margin-bottom: 20px; }
-    .tabs { display: flex; gap: 6px; margin-bottom: 20px; }
-    .tab {
-      flex: 1;
-      padding: 7px;
-      background: var(--item);
-      border: none;
-      color: var(--muted);
-      border-radius: 6px;
-      cursor: pointer;
-      font-size: 13px;
-      transition: all .15s;
-    }
+    /* ── Modals ──────────────────────────────────────────────────────────── */
+    .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.65); z-index: 2000; display: flex; align-items: center; justify-content: center; padding: 16px; }
+    .modal { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 26px; width: 340px; max-width: 100%; }
+    .modal-lg { width: 420px; }
+    .modal h2 { font-size: 17px; margin-bottom: 18px; }
+    .tabs { display: flex; gap: 6px; margin-bottom: 18px; }
+    .tab { flex: 1; padding: 7px; background: var(--item); border: none; color: var(--muted); border-radius: 6px; cursor: pointer; font-size: 13px; transition: all .15s; }
     .tab.active { background: var(--accent); color: #fff; }
-    .field { margin-bottom: 14px; }
+    .field { margin-bottom: 13px; }
     label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 5px; }
-    input, select {
-      width: 100%;
-      background: var(--item);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 9px 11px;
-      color: var(--text);
-      font-size: 13px;
-      outline: none;
-      transition: border-color .15s;
-      font-family: inherit;
+    input[type=text], input[type=email], input[type=password], select, textarea {
+      width: 100%; background: var(--item); border: 1px solid var(--border); border-radius: 6px; padding: 8px 11px; color: var(--text); font-size: 13px; outline: none; transition: border-color .15s; font-family: inherit;
     }
-    input:focus, select:focus { border-color: var(--accent); }
-    .err {
-      color: #f87171;
-      font-size: 11px;
-      margin-top: 6px;
-      display: none;
-    }
-    .modal-footer { display: flex; gap: 8px; margin-top: 6px; }
-    .modal-footer .btn { flex: 1; justify-content: center; }
+    input[type=text]:focus, input[type=email]:focus, input[type=password]:focus, select:focus, textarea:focus { border-color: var(--accent); }
+    input[type=range] { width: 100%; accent-color: var(--accent); }
+    input[type=color] { width: 48px; height: 32px; border: none; background: none; cursor: pointer; padding: 0; }
+    .err { color: #f87171; font-size: 11px; margin-top: 5px; display: none; }
+    .mfooter { display: flex; gap: 8px; margin-top: 8px; }
+    .mfooter .btn { flex: 1; justify-content: center; }
 
-    /* ── Leaflet popup overrides ─────────────────────────────────────────── */
-    .leaflet-popup-content-wrapper {
-      background: var(--panel);
-      color: var(--text);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      box-shadow: 0 6px 24px rgba(0,0,0,.5);
-    }
+    /* ── Drop zone ───────────────────────────────────────────────────────── */
+    .dropzone { border: 2px dashed var(--border); border-radius: 8px; padding: 28px; text-align: center; cursor: pointer; transition: all .2s; }
+    .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: rgba(59,130,246,.05); }
+    .dropzone p { font-size: 13px; color: var(--muted); margin-top: 8px; }
+    .dropzone span { font-size: 24px; }
+    #file-input { display: none; }
+    .file-name { font-size: 12px; color: var(--success); margin-top: 8px; }
+
+    /* ── Style panel ─────────────────────────────────────────────────────── */
+    .color-row { display: flex; align-items: center; gap: 10px; }
+    .swatch { width: 32px; height: 32px; border-radius: 6px; border: 2px solid var(--border); flex-shrink: 0; }
+    .preset-colors { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+    .preset { width: 22px; height: 22px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: border-color .15s; }
+    .preset:hover, .preset.sel { border-color: #fff; }
+
+    /* ── Popup ───────────────────────────────────────────────────────────── */
+    .leaflet-popup-content-wrapper { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.5); }
     .leaflet-popup-tip { background: var(--panel); }
     .leaflet-popup-close-button { color: var(--muted) !important; }
-    .fpop h4 { font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 8px; }
+    .fpop h4 { font-size: 11px; font-weight: 700; color: var(--accent); margin-bottom: 7px; text-transform: uppercase; letter-spacing: .5px; }
     .fpop table { width: 100%; border-collapse: collapse; font-size: 11px; }
     .fpop td { padding: 3px 5px; border-bottom: 1px solid var(--border); }
     .fpop td:first-child { color: var(--muted); width: 45%; }
-    .fpop .meta-row td { color: var(--border) !important; font-style: italic; font-size: 10px; }
+    .fpop .sep td { color: var(--border); font-style: italic; font-size: 10px; padding-top: 6px; }
+
+    /* ── Leaflet draw dark theme ─────────────────────────────────────────── */
+    .leaflet-draw-toolbar a { background-color: var(--panel) !important; border-color: var(--border) !important; }
+    .leaflet-draw-toolbar a:hover { background-color: var(--item) !important; }
+    .leaflet-draw-section { border-color: var(--border) !important; }
+    .leaflet-draw-actions a { background-color: var(--item) !important; color: var(--text) !important; }
+    .leaflet-draw-actions a:hover { background-color: var(--accent) !important; }
+    .leaflet-draw-guide-dash { background: var(--accent) !important; }
 
     /* ── Toast ───────────────────────────────────────────────────────────── */
-    #toast {
-      position: fixed;
-      bottom: 36px; right: 16px;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 10px 14px;
-      font-size: 12px;
-      z-index: 3000;
-      transform: translateX(130%);
-      transition: transform .25s;
-      max-width: 260px;
-    }
+    #toast { position: fixed; bottom: 34px; right: 14px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 9px 13px; font-size: 12px; z-index: 3000; transform: translateX(130%); transition: transform .25s; max-width: 260px; }
     #toast.show { transform: translateX(0); }
     #toast.ok  { border-color: var(--success); }
     #toast.err { border-color: var(--danger); }
+    #toast.warn{ border-color: var(--warn); }
 
     /* ── Scrollbar ───────────────────────────────────────────────────────── */
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
-    /* ── Leaflet attribution fix ─────────────────────────────────────────── */
-    .leaflet-control-attribution {
-      background: rgba(15,23,42,.8) !important;
-      color: var(--muted) !important;
-    }
+    .leaflet-control-attribution { background: rgba(15,23,42,.8) !important; color: var(--muted) !important; }
     .leaflet-control-attribution a { color: var(--accent) !important; }
   </style>
 </head>
@@ -328,13 +181,22 @@
 <!-- ── Header ─────────────────────────────────────────────────────────────── -->
 <header>
   <div class="logo">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
       <polygon points="12 2 2 7 12 12 22 7 12 2"/>
       <polyline points="2 17 12 22 22 17"/>
       <polyline points="2 12 12 17 22 12"/>
     </svg>
     Enterprise GIS
   </div>
+
+  <div id="search-wrap">
+    <svg class="search-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+    <input id="search-input" type="text" placeholder="Search address or place…" autocomplete="off" />
+    <div id="search-dd"></div>
+  </div>
+
   <div id="auth-area">
     <button class="btn btn-sm" onclick="UI.showAuth()">Login</button>
   </div>
@@ -347,7 +209,7 @@
   <aside class="sidebar">
     <div class="sidebar-hdr">
       <span class="sidebar-title">Layers</span>
-      <button id="add-btn" class="btn btn-sm" style="display:none" onclick="UI.showAddLayer()">+ Add</button>
+      <button id="add-btn" class="btn btn-sm" style="display:none" onclick="UI.showAddLayer()">+ New</button>
     </div>
     <div id="layer-list">
       <div class="empty-msg">Login to manage<br>your layers</div>
@@ -357,6 +219,12 @@
   <!-- Map -->
   <div class="map-wrap">
     <div id="map"></div>
+    <!-- Measure toolbar -->
+    <div id="measure-bar">
+      <button class="mbar-btn" id="btn-dist"  onclick="Measure.start('distance')">📏 Distance</button>
+      <button class="mbar-btn" id="btn-area"  onclick="Measure.start('area')">⬡ Area</button>
+      <button class="mbar-btn clear"           onclick="Measure.clearAll()">✕ Clear</button>
+    </div>
   </div>
 </div>
 
@@ -365,6 +233,7 @@
   <span id="s-coord">Lat: —  Lng: —</span>
   <span id="s-layers">Layers: 0</span>
   <span id="s-zoom">Zoom: —</span>
+  <span id="s-draw" style="color:var(--warn);display:none">✏ Draw mode active — double-click to finish</span>
 </div>
 
 <!-- ── Auth modal ─────────────────────────────────────────────────────────── -->
@@ -375,23 +244,16 @@
       <button class="tab active" onclick="UI.tab('login')">Login</button>
       <button class="tab"        onclick="UI.tab('register')">Register</button>
     </div>
-
     <div id="login-pane">
-      <div class="field"><label>Username</label>
-        <input id="l-user" type="text" placeholder="Username" autocomplete="username" /></div>
-      <div class="field"><label>Password</label>
-        <input id="l-pass" type="password" placeholder="Password" autocomplete="current-password" /></div>
+      <div class="field"><label>Username</label><input id="l-user" type="text" placeholder="Username" autocomplete="username" /></div>
+      <div class="field"><label>Password</label><input id="l-pass" type="password" placeholder="Password" autocomplete="current-password" /></div>
       <div id="l-err" class="err"></div>
       <button class="btn" style="width:100%;justify-content:center;margin-top:4px" onclick="Auth.login()">Login</button>
     </div>
-
     <div id="reg-pane" style="display:none">
-      <div class="field"><label>Username</label>
-        <input id="r-user" type="text" placeholder="Choose a username" autocomplete="username" /></div>
-      <div class="field"><label>Email</label>
-        <input id="r-email" type="email" placeholder="Email address" autocomplete="email" /></div>
-      <div class="field"><label>Password (min 8 chars)</label>
-        <input id="r-pass" type="password" placeholder="Password" autocomplete="new-password" /></div>
+      <div class="field"><label>Username</label><input id="r-user" type="text" placeholder="Username" autocomplete="username" /></div>
+      <div class="field"><label>Email</label><input id="r-email" type="email" placeholder="Email" autocomplete="email" /></div>
+      <div class="field"><label>Password (min 8 chars)</label><input id="r-pass" type="password" placeholder="Password" autocomplete="new-password" /></div>
       <div id="r-err" class="err"></div>
       <button class="btn" style="width:100%;justify-content:center;margin-top:4px" onclick="Auth.register()">Create Account</button>
     </div>
@@ -402,31 +264,70 @@
 <div id="add-modal" class="overlay" style="display:none">
   <div class="modal">
     <h2>New Layer</h2>
-    <div class="field"><label>Name *</label>
-      <input id="n-name" type="text" placeholder="e.g. Buildings" /></div>
-    <div class="field"><label>Description</label>
-      <input id="n-desc" type="text" placeholder="Optional" /></div>
+    <div class="field"><label>Name *</label><input id="n-name" type="text" placeholder="e.g. Buildings" /></div>
+    <div class="field"><label>Description</label><input id="n-desc" type="text" placeholder="Optional" /></div>
     <div class="field"><label>Geometry Type</label>
       <select id="n-geom">
         <option value="">Any</option>
         <option value="Point">Point</option>
         <option value="LineString">LineString</option>
         <option value="Polygon">Polygon</option>
-        <option value="MultiPoint">MultiPoint</option>
-        <option value="MultiLineString">MultiLineString</option>
         <option value="MultiPolygon">MultiPolygon</option>
       </select>
     </div>
     <div class="field">
       <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-        <input id="n-pub" type="checkbox" style="width:auto" />
-        Public (visible to all users)
+        <input id="n-pub" type="checkbox" style="width:auto" /> Public layer
       </label>
     </div>
     <div id="n-err" class="err"></div>
-    <div class="modal-footer">
+    <div class="mfooter">
       <button class="btn" onclick="Layers.create()">Create</button>
-      <button class="btn btn-ghost" onclick="UI.hideAddLayer()">Cancel</button>
+      <button class="btn btn-ghost" onclick="UI.hide('add-modal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Style modal ────────────────────────────────────────────────────────── -->
+<div id="style-modal" class="overlay" style="display:none">
+  <div class="modal">
+    <h2>Layer Style</h2>
+    <input type="hidden" id="style-layer-id" />
+    <div class="field">
+      <label>Color</label>
+      <div class="color-row">
+        <div class="swatch" id="style-swatch"></div>
+        <input type="color" id="style-color" oninput="Style.preview()" />
+      </div>
+      <div class="preset-colors" id="style-presets"></div>
+    </div>
+    <div class="field">
+      <label>Opacity — <span id="opacity-val">80%</span></label>
+      <input type="range" id="style-opacity" min="10" max="100" value="80" oninput="Style.previewOpacity()" />
+    </div>
+    <div class="mfooter">
+      <button class="btn" onclick="Style.apply()">Apply</button>
+      <button class="btn btn-ghost" onclick="UI.hide('style-modal')">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Upload modal ───────────────────────────────────────────────────────── -->
+<div id="upload-modal" class="overlay" style="display:none">
+  <div class="modal modal-lg">
+    <h2>Upload GeoJSON</h2>
+    <input type="hidden" id="upload-layer-id" />
+    <div class="dropzone" id="dropzone" onclick="document.getElementById('file-input').click()"
+         ondragover="Upload.dragOver(event)" ondragleave="Upload.dragLeave(event)" ondrop="Upload.drop(event)">
+      <span>📂</span>
+      <p>Drop a <strong>.geojson</strong> file here<br>or click to browse</p>
+      <div class="file-name" id="file-name"></div>
+    </div>
+    <input type="file" id="file-input" accept=".geojson,application/geo+json" onchange="Upload.fileSelected(event)" />
+    <div id="upload-err" class="err"></div>
+    <div class="mfooter" style="margin-top:14px">
+      <button class="btn" onclick="Upload.submit()">Upload</button>
+      <button class="btn btn-ghost" onclick="UI.hide('upload-modal')">Cancel</button>
     </div>
   </div>
 </div>
@@ -435,37 +336,37 @@
 <div id="toast"></div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
 <script>
 'use strict';
 
 // ─── Palette ──────────────────────────────────────────────────────────────────
-const COLORS = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6',
-                '#ec4899','#06b6d4','#84cc16','#f97316','#a78bfa'];
-const color = (i) => COLORS[i % COLORS.length];
+const PALETTE = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6',
+                 '#ec4899','#06b6d4','#84cc16','#f97316','#a78bfa'];
+const col = (i) => PALETTE[i % PALETTE.length];
 
 // ─── State ────────────────────────────────────────────────────────────────────
-const state = {
-  token:    localStorage.getItem('gis_token'),
-  user:     null,
-  layers:   [],
-  lgroups:  {},   // layerId -> L.LayerGroup
-  visible:  {},   // layerId -> bool
+const S = {
+  token:   localStorage.getItem('gis_token'),
+  user:    null,
+  layers:  [],
+  fgroups: {},   // layerId → L.FeatureGroup
+  visible: {},   // layerId → bool
+  colors:  {},   // layerId → hex string
+  opacity: {},   // layerId → 0-1
+  activeDrawLayerId: null,
 };
 
 // ─── API ──────────────────────────────────────────────────────────────────────
 const API = {
   base: '/api/v1',
-  hdrs() {
+  h() {
     const h = { 'Content-Type': 'application/json' };
-    if (state.token) h['Authorization'] = `Bearer ${state.token}`;
+    if (S.token) h['Authorization'] = `Bearer ${S.token}`;
     return h;
   },
   async req(method, path, body) {
-    const r = await fetch(this.base + path, {
-      method,
-      headers: this.hdrs(),
-      body: body != null ? JSON.stringify(body) : undefined,
-    });
+    const r = await fetch(this.base + path, { method, headers: this.h(), body: body != null ? JSON.stringify(body) : undefined });
     const d = await r.json();
     if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
     return d;
@@ -478,12 +379,9 @@ const API = {
 
 // ─── Map ──────────────────────────────────────────────────────────────────────
 const map = L.map('map', { zoomControl: false }).setView([6.297, 5.593], 13);
-
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 19,
-  attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
+  maxZoom: 19, attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
 }).addTo(map);
-
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.control.scale({ position: 'bottomleft', imperial: false }).addTo(map);
 
@@ -497,41 +395,41 @@ map.on('zoomend', () => {
 document.getElementById('s-zoom').textContent = `Zoom: ${map.getZoom()}`;
 
 // ─── Toast ────────────────────────────────────────────────────────────────────
-let _toastTimer;
+let _toastT;
 function toast(msg, type = 'ok') {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.className = `toast ${type} show`;
-  clearTimeout(_toastTimer);
-  _toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+  clearTimeout(_toastT);
+  _toastT = setTimeout(() => el.classList.remove('show'), 3500);
 }
 
 // ─── UI helpers ───────────────────────────────────────────────────────────────
 const UI = {
-  showAuth()    { document.getElementById('auth-modal').style.display = 'flex'; },
-  hideAuth()    { document.getElementById('auth-modal').style.display = 'none'; },
-  showAddLayer(){ document.getElementById('add-modal').style.display = 'flex'; },
-  hideAddLayer(){ document.getElementById('add-modal').style.display = 'none'; },
+  show(id) { document.getElementById(id).style.display = 'flex'; },
+  hide(id) { document.getElementById(id).style.display = 'none'; },
+  showAuth()    { this.show('auth-modal'); },
+  hideAuth()    { this.hide('auth-modal'); },
+  showAddLayer(){ this.show('add-modal'); },
 
   tab(name) {
-    document.getElementById('login-pane').style.display = name === 'login' ? '' : 'none';
+    document.getElementById('login-pane').style.display = name === 'login'    ? '' : 'none';
     document.getElementById('reg-pane').style.display   = name === 'register' ? '' : 'none';
     document.querySelectorAll('.tab').forEach((t, i) => {
-      t.classList.toggle('active', (i === 0 && name === 'login') || (i === 1 && name === 'register'));
+      t.classList.toggle('active', (i === 0) === (name === 'login'));
     });
   },
 
   setAuthArea() {
     const area = document.getElementById('auth-area');
     const btn  = document.getElementById('add-btn');
-    if (state.user) {
-      const init = state.user.username.slice(0, 2).toUpperCase();
-      area.innerHTML = `
-        <div class="user-badge">
-          <div class="avatar">${init}</div>
-          <span class="username">${state.user.username}</span>
-          <button class="btn-logout" onclick="Auth.logout()">Logout</button>
-        </div>`;
+    if (S.user) {
+      const init = S.user.username.slice(0, 2).toUpperCase();
+      area.innerHTML = `<div class="user-badge">
+        <div class="avatar">${init}</div>
+        <span class="uname">${S.user.username}</span>
+        <button class="btn-logout" onclick="Auth.logout()">Logout</button>
+      </div>`;
       btn.style.display = '';
     } else {
       area.innerHTML = `<button class="btn btn-sm" onclick="UI.showAuth()">Login</button>`;
@@ -541,74 +439,79 @@ const UI = {
 
   renderLayers() {
     const list = document.getElementById('layer-list');
-    document.getElementById('s-layers').textContent = `Layers: ${state.layers.length}`;
-    if (!state.layers.length) {
-      list.innerHTML = `<div class="empty-msg">No layers yet.<br>Click "+ Add" to create one.</div>`;
+    document.getElementById('s-layers').textContent = `Layers: ${S.layers.length}`;
+    if (!S.layers.length) {
+      list.innerHTML = `<div class="empty-msg">No layers yet.<br>Click "+ New" to create one.</div>`;
       return;
     }
-    list.innerHTML = state.layers.map((l, i) => `
-      <div class="layer-card" data-id="${l.id}">
-        <div class="layer-row">
-          <div class="layer-dot" style="background:${color(i)}"></div>
+    list.innerHTML = S.layers.map((l, i) => {
+      const c = S.colors[l.id] || col(i);
+      return `
+      <div class="layer-card" id="card-${l.id}">
+        <div class="layer-main" onclick="UI.toggleExpand('${l.id}')">
+          <div class="layer-dot" id="dot-${l.id}" style="background:${c}"></div>
           <span class="layer-name" title="${l.name}">${l.name}</span>
-          ${l.geometry_type ? `<span class="layer-badge">${l.geometry_type}</span>` : ''}
-          <div class="toggle on" onclick="Layers.toggle(event,'${l.id}')"></div>
+          ${l.geometry_type ? `<span class="badge">${l.geometry_type}</span>` : ''}
+          <span class="chevron" id="chev-${l.id}">▾</span>
+          <div class="toggle on" id="tog-${l.id}" onclick="Layers.toggle(event,'${l.id}')"></div>
         </div>
-        ${l.description ? `<div class="layer-meta">${l.description}</div>` : ''}
-      </div>
-    `).join('');
+        <div class="layer-actions" id="act-${l.id}">
+          ${l.description ? `<div class="layer-desc">${l.description}</div>` : ''}
+          <div class="act-row">
+            <button class="act-btn" id="draw-btn-${l.id}" onclick="Draw.activate('${l.id}')">✏ Draw</button>
+            <button class="act-btn" onclick="Style.open('${l.id}')">🎨 Style</button>
+            <button class="act-btn" onclick="Upload.open('${l.id}')">↑ Upload</button>
+            <button class="act-btn" onclick="Layers.exportLayer('${l.id}','${l.name}')">↓ Export</button>
+            <button class="act-btn del" onclick="Layers.deleteLayer('${l.id}','${l.name}')">✕</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  },
+
+  toggleExpand(layerId) {
+    const act  = document.getElementById(`act-${layerId}`);
+    const chev = document.getElementById(`chev-${layerId}`);
+    act.classList.toggle('open');
+    chev.classList.toggle('open');
   },
 };
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 const Auth = {
   async login() {
-    const username = document.getElementById('l-user').value.trim();
-    const password = document.getElementById('l-pass').value;
-    const errEl = document.getElementById('l-err');
-    errEl.style.display = 'none';
+    const u = document.getElementById('l-user').value.trim();
+    const p = document.getElementById('l-pass').value;
+    const e = document.getElementById('l-err');
+    e.style.display = 'none';
     try {
-      const d = await API.post('/auth/login', { username, password });
-      state.token = d.access_token;
-      state.user  = d.user;
-      localStorage.setItem('gis_token', state.token);
-      UI.hideAuth();
-      UI.setAuthArea();
-      Layers.loadAll();
+      const d = await API.post('/auth/login', { username: u, password: p });
+      S.token = d.access_token; S.user = d.user;
+      localStorage.setItem('gis_token', S.token);
+      UI.hideAuth(); UI.setAuthArea(); Layers.loadAll();
       toast(`Welcome back, ${d.user.username}!`);
-    } catch (e) {
-      errEl.textContent = e.message;
-      errEl.style.display = 'block';
-    }
+    } catch (ex) { e.textContent = ex.message; e.style.display = 'block'; }
   },
 
   async register() {
-    const username = document.getElementById('r-user').value.trim();
-    const email    = document.getElementById('r-email').value.trim();
-    const password = document.getElementById('r-pass').value;
-    const errEl = document.getElementById('r-err');
-    errEl.style.display = 'none';
+    const u = document.getElementById('r-user').value.trim();
+    const em = document.getElementById('r-email').value.trim();
+    const p = document.getElementById('r-pass').value;
+    const e = document.getElementById('r-err');
+    e.style.display = 'none';
     try {
-      const d = await API.post('/auth/register', { username, email, password });
-      state.token = d.access_token;
-      state.user  = d.user;
-      localStorage.setItem('gis_token', state.token);
-      UI.hideAuth();
-      UI.setAuthArea();
-      Layers.loadAll();
-      toast(`Account created! Welcome, ${d.user.username}!`);
-    } catch (e) {
-      errEl.textContent = e.message;
-      errEl.style.display = 'block';
-    }
+      const d = await API.post('/auth/register', { username: u, email: em, password: p });
+      S.token = d.access_token; S.user = d.user;
+      localStorage.setItem('gis_token', S.token);
+      UI.hideAuth(); UI.setAuthArea(); Layers.loadAll();
+      toast(`Welcome, ${d.user.username}!`);
+    } catch (ex) { e.textContent = ex.message; e.style.display = 'block'; }
   },
 
   logout() {
-    state.token = null;
-    state.user  = null;
+    S.token = null; S.user = null;
     localStorage.removeItem('gis_token');
-    Layers.clearAll();
-    UI.setAuthArea();
+    Layers.clearAll(); UI.setAuthArea();
     document.getElementById('layer-list').innerHTML =
       '<div class="empty-msg">Login to manage<br>your layers</div>';
     toast('Logged out');
@@ -619,133 +522,574 @@ const Auth = {
 const Layers = {
   async loadAll() {
     try {
-      state.layers = await API.get('/layers');
+      S.layers = await API.get('/layers');
       UI.renderLayers();
-      state.layers.forEach((l, i) => this.loadFeatures(l, i));
-    } catch (e) {
-      toast('Failed to load layers: ' + e.message, 'err');
-    }
+      S.layers.forEach((l, i) => this.loadFeatures(l, i));
+    } catch (ex) { toast('Failed to load layers: ' + ex.message, 'err'); }
   },
 
   async loadFeatures(layer, idx) {
     try {
       const fc = await API.get(`/layers/${layer.id}/features`);
-      const c  = color(idx);
-      const lg = L.geoJSON(fc, {
-        style: () => ({ color: c, weight: 2, opacity: .9, fillColor: c, fillOpacity: .2 }),
-        pointToLayer: (f, ll) => L.circleMarker(ll, {
-          radius: 6, fillColor: c, color: '#fff', weight: 1.5, opacity: 1, fillOpacity: .9,
-        }),
-        onEachFeature: (feature, lyr) => {
-          lyr.on('click', (e) => {
-            L.DomEvent.stopPropagation(e);
-            this.showPopup(feature, layer.name, lyr);
-          });
-        },
-      }).addTo(map);
-      state.lgroups[layer.id] = lg;
-      state.visible[layer.id] = true;
-    } catch (e) {
-      console.warn(`Features for "${layer.name}" failed:`, e.message);
+      const c  = S.colors[layer.id] || col(idx);
+      S.colors[layer.id] = c;
+      const op = S.opacity[layer.id] ?? 0.8;
+      S.opacity[layer.id] = op;
+
+      // Remove old group if reloading
+      if (S.fgroups[layer.id]) {
+        map.removeLayer(S.fgroups[layer.id]);
+      }
+
+      const fg = L.featureGroup().addTo(map);
+      fc.features.forEach((feature) => {
+        const gl = L.geoJSON(feature, {
+          style: () => ({ color: c, weight: 2, opacity: .9, fillColor: c, fillOpacity: op * .25 }),
+          pointToLayer: (f, ll) => L.circleMarker(ll, {
+            radius: 6, fillColor: c, color: '#fff', weight: 1.5, opacity: 1, fillOpacity: op,
+          }),
+        });
+        gl.eachLayer((lyr) => {
+          lyr._featureId  = feature.id;
+          lyr._layerId    = layer.id;
+          lyr._featureData = feature;
+          lyr.on('click', (e) => { L.DomEvent.stopPropagation(e); this.showPopup(feature, layer.name, lyr); });
+          fg.addLayer(lyr);
+        });
+      });
+
+      S.fgroups[layer.id] = fg;
+      S.visible[layer.id] = true;
+    } catch (ex) {
+      console.warn(`Features for "${layer.name}":`, ex.message);
     }
   },
 
   toggle(event, layerId) {
     event.stopPropagation();
-    const toggle = event.currentTarget;
-    const lg = state.lgroups[layerId];
-    if (!lg) return;
-    state.visible[layerId] = !state.visible[layerId];
-    toggle.classList.toggle('on', state.visible[layerId]);
-    state.visible[layerId] ? map.addLayer(lg) : map.removeLayer(lg);
+    const tog = document.getElementById(`tog-${layerId}`);
+    const fg  = S.fgroups[layerId];
+    if (!fg) return;
+    S.visible[layerId] = !S.visible[layerId];
+    tog.classList.toggle('on', S.visible[layerId]);
+    S.visible[layerId] ? map.addLayer(fg) : map.removeLayer(fg);
   },
 
   clearAll() {
-    Object.values(state.lgroups).forEach((lg) => map.removeLayer(lg));
-    state.lgroups  = {};
-    state.layers   = [];
-    state.visible  = {};
+    Object.values(S.fgroups).forEach((fg) => map.removeLayer(fg));
+    S.fgroups = {}; S.layers = []; S.visible = {}; S.colors = {}; S.opacity = {};
+    Draw.deactivate();
     UI.renderLayers();
   },
 
   showPopup(feature, layerName, lyr) {
-    const props   = feature.properties || {};
-    const keys    = Object.keys(props).filter((k) => !k.startsWith('_'));
-    const metaK   = Object.keys(props).filter((k) => k.startsWith('_'));
-
-    const rows = keys.length
+    const props = feature.properties || {};
+    const keys  = Object.keys(props).filter((k) => !k.startsWith('_'));
+    const meta  = Object.keys(props).filter((k) => k.startsWith('_'));
+    const rows  = keys.length
       ? keys.map((k) => `<tr><td>${k}</td><td>${props[k] ?? '—'}</td></tr>`).join('')
       : '<tr><td colspan="2" style="color:var(--muted)">No properties</td></tr>';
-
-    const meta = metaK.length
-      ? `<tr class="meta-row"><td colspan="2">metadata</td></tr>` +
-        metaK.map((k) => `<tr><td>${k}</td><td>${props[k] ?? '—'}</td></tr>`).join('')
+    const metaRows = meta.length
+      ? `<tr class="sep"><td colspan="2">metadata</td></tr>` +
+        meta.map((k) => `<tr><td>${k}</td><td>${props[k] ?? '—'}</td></tr>`).join('')
       : '';
-
-    const html = `<div class="fpop"><h4>${layerName}</h4>
-      <table>${rows}${meta}</table></div>`;
-
+    const html = `<div class="fpop"><h4>${layerName}</h4><table>${rows}${metaRows}</table></div>`;
     let center;
     try { center = lyr.getBounds().getCenter(); } catch (_) {
       center = lyr.getLatLng ? lyr.getLatLng() : map.getCenter();
     }
-    L.popup({ maxWidth: 280, className: 'dark-popup' })
-      .setLatLng(center).setContent(html).openOn(map);
+    L.popup({ maxWidth: 280 }).setLatLng(center).setContent(html).openOn(map);
   },
 
   async create() {
-    const name   = document.getElementById('n-name').value.trim();
-    const desc   = document.getElementById('n-desc').value.trim();
-    const geom   = document.getElementById('n-geom').value;
-    const pub    = document.getElementById('n-pub').checked;
-    const errEl  = document.getElementById('n-err');
+    const name = document.getElementById('n-name').value.trim();
+    const desc = document.getElementById('n-desc').value.trim();
+    const geom = document.getElementById('n-geom').value;
+    const pub  = document.getElementById('n-pub').checked;
+    const errEl = document.getElementById('n-err');
     errEl.style.display = 'none';
     if (!name) { errEl.textContent = 'Name is required'; errEl.style.display = 'block'; return; }
     try {
-      const layer = await API.post('/layers', {
-        name, description: desc, geometry_type: geom, is_public: pub,
-      });
-      state.layers.unshift(layer);
-      state.lgroups[layer.id] = L.layerGroup().addTo(map);
-      state.visible[layer.id] = true;
+      const layer = await API.post('/layers', { name, description: desc, geometry_type: geom, is_public: pub });
+      S.layers.unshift(layer);
+      const idx = 0;
+      S.colors[layer.id]  = col(idx);
+      S.opacity[layer.id] = 0.8;
+      S.fgroups[layer.id] = L.featureGroup().addTo(map);
+      S.visible[layer.id] = true;
       UI.renderLayers();
-      UI.hideAddLayer();
+      UI.hide('add-modal');
       document.getElementById('n-name').value = '';
       document.getElementById('n-desc').value = '';
       toast(`Layer "${name}" created`);
-    } catch (e) {
-      errEl.textContent = e.message;
-      errEl.style.display = 'block';
+    } catch (ex) { errEl.textContent = ex.message; errEl.style.display = 'block'; }
+  },
+
+  exportLayer(layerId, name) {
+    const token = S.token ? `?t=${encodeURIComponent(S.token)}` : '';
+    const a = document.createElement('a');
+    a.href = `/api/v1/layers/${layerId}/export`;
+    a.setAttribute('download', `${name}.geojson`);
+    // Use fetch to pass Authorization header
+    fetch(`/api/v1/layers/${layerId}/export`, { headers: { Authorization: `Bearer ${S.token}` } })
+      .then((r) => r.blob())
+      .then((blob) => {
+        a.href = URL.createObjectURL(blob);
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        toast(`Exported "${name}"`);
+      })
+      .catch(() => toast('Export failed', 'err'));
+  },
+
+  async deleteLayer(layerId, name) {
+    if (!confirm(`Delete layer "${name}" and all its features? This cannot be undone.`)) return;
+    try {
+      await API.delete(`/layers/${layerId}`);
+      if (S.fgroups[layerId]) map.removeLayer(S.fgroups[layerId]);
+      delete S.fgroups[layerId];
+      delete S.colors[layerId];
+      delete S.opacity[layerId];
+      S.layers = S.layers.filter((l) => l.id !== layerId);
+      if (S.activeDrawLayerId === layerId) Draw.deactivate();
+      UI.renderLayers();
+      toast(`Layer "${name}" deleted`);
+    } catch (ex) { toast('Delete failed: ' + ex.message, 'err'); }
+  },
+};
+
+// ─── Draw ─────────────────────────────────────────────────────────────────────
+const Draw = {
+  control: null,
+
+  activate(layerId) {
+    // Toggle off if same layer clicked again
+    if (S.activeDrawLayerId === layerId) { this.deactivate(); return; }
+    this.deactivate();
+
+    const fg = S.fgroups[layerId];
+    if (!fg) { toast('Load features first', 'warn'); return; }
+
+    S.activeDrawLayerId = layerId;
+    const c = S.colors[layerId] || '#3b82f6';
+
+    this.control = new L.Control.Draw({
+      position: 'topleft',
+      edit: { featureGroup: fg, remove: true },
+      draw: {
+        polygon:     { shapeOptions: { color: c, fillColor: c } },
+        polyline:    { shapeOptions: { color: c } },
+        marker:      true,
+        rectangle:   { shapeOptions: { color: c, fillColor: c } },
+        circle:      false,
+        circlemarker: false,
+      },
+    });
+    map.addControl(this.control);
+
+    // Update UI
+    document.getElementById(`card-${layerId}`)?.classList.add('active-draw');
+    const btn = document.getElementById(`draw-btn-${layerId}`);
+    if (btn) btn.classList.add('draw-active');
+    document.getElementById('s-draw').style.display = '';
+    toast(`Draw mode: "${S.layers.find(l => l.id === layerId)?.name}"`, 'warn');
+  },
+
+  deactivate() {
+    if (this.control) { map.removeControl(this.control); this.control = null; }
+    if (S.activeDrawLayerId) {
+      document.getElementById(`card-${S.activeDrawLayerId}`)?.classList.remove('active-draw');
+      const btn = document.getElementById(`draw-btn-${S.activeDrawLayerId}`);
+      if (btn) btn.classList.remove('draw-active');
     }
+    S.activeDrawLayerId = null;
+    document.getElementById('s-draw').style.display = 'none';
+  },
+
+  async handleCreated(e) {
+    const layerId = S.activeDrawLayerId;
+    if (!layerId) return;
+    const geojson = e.layer.toGeoJSON();
+    try {
+      const feature = await API.post(`/layers/${layerId}/features`, geojson);
+      // Add the returned feature (with ID) to the group
+      const c  = S.colors[layerId] || '#3b82f6';
+      const op = S.opacity[layerId] ?? 0.8;
+      const gl = L.geoJSON(feature, {
+        style: () => ({ color: c, weight: 2, opacity: .9, fillColor: c, fillOpacity: op * .25 }),
+        pointToLayer: (f, ll) => L.circleMarker(ll, { radius: 6, fillColor: c, color: '#fff', weight: 1.5, opacity: 1, fillOpacity: op }),
+      });
+      const layerName = S.layers.find(l => l.id === layerId)?.name || '';
+      gl.eachLayer((lyr) => {
+        lyr._featureId   = feature.id;
+        lyr._layerId     = layerId;
+        lyr._featureData = feature;
+        lyr.on('click', (ev) => { L.DomEvent.stopPropagation(ev); Layers.showPopup(feature, layerName, lyr); });
+        S.fgroups[layerId].addLayer(lyr);
+      });
+      toast('Feature created');
+    } catch (ex) { toast('Create failed: ' + ex.message, 'err'); }
+  },
+
+  async handleEdited(e) {
+    const layerId = S.activeDrawLayerId;
+    if (!layerId) return;
+    const updates = [];
+    e.layers.eachLayer((lyr) => {
+      if (lyr._featureId) {
+        updates.push(API.put(`/layers/${layerId}/features/${lyr._featureId}`, { geometry: lyr.toGeoJSON().geometry }));
+      }
+    });
+    try {
+      await Promise.all(updates);
+      toast(`${updates.length} feature(s) updated`);
+    } catch (ex) { toast('Update failed: ' + ex.message, 'err'); }
+  },
+
+  async handleDeleted(e) {
+    const layerId = S.activeDrawLayerId;
+    if (!layerId) return;
+    const dels = [];
+    e.layers.eachLayer((lyr) => {
+      if (lyr._featureId) dels.push(API.delete(`/layers/${layerId}/features/${lyr._featureId}`));
+    });
+    try {
+      await Promise.all(dels);
+      toast(`${dels.length} feature(s) deleted`);
+    } catch (ex) { toast('Delete failed: ' + ex.message, 'err'); }
+  },
+};
+
+map.on(L.Draw.Event.CREATED, (e) => Draw.handleCreated(e));
+map.on(L.Draw.Event.EDITED,  (e) => Draw.handleEdited(e));
+map.on(L.Draw.Event.DELETED, (e) => Draw.handleDeleted(e));
+
+// ─── Measure ──────────────────────────────────────────────────────────────────
+const Measure = {
+  active: null, points: [], _lyr: null, _label: null, _saved: [],
+
+  start(type) {
+    if (this.active === type) { this.stop(); return; }
+    this.stop();
+    this.active = type;
+    this.points = [];
+    map.on('click',    this._onClick.bind(this));
+    map.on('dblclick', this._onDbl.bind(this));
+    map.getContainer().style.cursor = 'crosshair';
+    document.getElementById(`btn-${type === 'distance' ? 'dist' : 'area'}`).classList.add('active');
+    toast(type === 'distance' ? 'Click to add points. Double-click to finish.' : 'Click to add vertices. Double-click to finish.', 'warn');
+  },
+
+  stop() {
+    if (!this.active) return;
+    map.off('click',    this._onClick.bind(this));
+    map.off('dblclick', this._onDbl.bind(this));
+    map.getContainer().style.cursor = '';
+    if (this._lyr)   { map.removeLayer(this._lyr);   this._lyr   = null; }
+    if (this._label) { map.removeLayer(this._label); this._label = null; }
+    document.querySelectorAll('.mbar-btn').forEach((b) => b.classList.remove('active'));
+    this.active = null; this.points = [];
+  },
+
+  clearAll() {
+    this.stop();
+    this._saved.forEach((l) => map.removeLayer(l));
+    this._saved = [];
+    toast('Measurements cleared');
+  },
+
+  _onClick(e) {
+    this.points.push(e.latlng);
+    this._draw();
+  },
+
+  _onDbl(e) {
+    L.DomEvent.stopPropagation(e);
+    if (this.points.length < 2) { this.stop(); return; }
+    const result = this._finish();
+    toast(result, 'ok');
+    this.stop();
+  },
+
+  _draw() {
+    if (this._lyr)   { map.removeLayer(this._lyr);   this._lyr   = null; }
+    if (this._label) { map.removeLayer(this._label); this._label = null; }
+    if (this.points.length < 2) return;
+
+    if (this.active === 'distance') {
+      this._lyr = L.polyline(this.points, { color: '#f59e0b', weight: 2, dashArray: '6,4' }).addTo(map);
+      const txt = this._fmtDist(this._totalDist());
+      this._label = this._mkLabel(this.points[this.points.length - 1], txt);
+    } else if (this.points.length >= 3) {
+      this._lyr = L.polygon(this.points, { color: '#f59e0b', weight: 2, fillOpacity: .08 }).addTo(map);
+      const txt = this._fmtArea(this._polyArea(this.points));
+      this._label = this._mkLabel(this.points[this.points.length - 1], txt);
+    }
+  },
+
+  _finish() {
+    let msg = '';
+    if (this.active === 'distance') {
+      const d = this._totalDist();
+      msg = `Distance: ${this._fmtDist(d)}`;
+      const saved = L.polyline(this.points, { color: '#f59e0b', weight: 2, dashArray: '6,4' }).addTo(map);
+      this._saved.push(saved, this._mkLabel(this.points[this.points.length - 1], this._fmtDist(d)));
+    } else if (this.points.length >= 3) {
+      const a = this._polyArea(this.points);
+      msg = `Area: ${this._fmtArea(a)}`;
+      const saved = L.polygon(this.points, { color: '#f59e0b', weight: 2, fillOpacity: .08 }).addTo(map);
+      this._saved.push(saved, this._mkLabel(this._centroid(this.points), this._fmtArea(a)));
+    }
+    return msg;
+  },
+
+  _mkLabel(latlng, txt) {
+    return L.marker(latlng, {
+      icon: L.divIcon({
+        className: '',
+        html: `<div style="background:#f59e0b;color:#000;padding:2px 7px;border-radius:4px;font-size:11px;font-weight:700;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,.4)">${txt}</div>`,
+        iconAnchor: [0, 0],
+      }),
+      interactive: false,
+    }).addTo(map);
+  },
+
+  _totalDist() {
+    let d = 0;
+    for (let i = 1; i < this.points.length; i++) d += this.points[i - 1].distanceTo(this.points[i]);
+    return d;
+  },
+
+  _polyArea(pts) {
+    const R = 6371000, n = pts.length;
+    let area = 0;
+    for (let i = 0; i < n; i++) {
+      const j = (i + 1) % n;
+      const φ1 = pts[i].lat * Math.PI / 180, φ2 = pts[j].lat * Math.PI / 180;
+      const dλ = (pts[j].lng - pts[i].lng) * Math.PI / 180;
+      area += (2 + Math.sin(φ1) + Math.sin(φ2)) * dλ;
+    }
+    return Math.abs(area * R * R / 2);
+  },
+
+  _centroid(pts) {
+    const lat = pts.reduce((s, p) => s + p.lat, 0) / pts.length;
+    const lng = pts.reduce((s, p) => s + p.lng, 0) / pts.length;
+    return L.latLng(lat, lng);
+  },
+
+  _fmtDist(m) { return m >= 1000 ? `${(m / 1000).toFixed(2)} km` : `${m.toFixed(0)} m`; },
+  _fmtArea(m) { return m >= 1e6 ? `${(m / 1e6).toFixed(3)} km²` : `${m.toFixed(0)} m²`; },
+};
+
+// ─── Search ───────────────────────────────────────────────────────────────────
+const Search = {
+  _timer: null, _results: [],
+
+  init() {
+    const inp = document.getElementById('search-input');
+    inp.addEventListener('input', () => {
+      clearTimeout(this._timer);
+      const q = inp.value.trim();
+      if (q.length < 3) { this.hide(); return; }
+      this._timer = setTimeout(() => this._query(q), 500);
+    });
+    inp.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { this.hide(); inp.blur(); }
+    });
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#search-wrap')) this.hide();
+    });
+  },
+
+  async _query(q) {
+    try {
+      const r = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=5`,
+        { headers: { 'Accept-Language': 'en' } }
+      );
+      this._results = await r.json();
+      this._show();
+    } catch (_) {}
+  },
+
+  _show() {
+    const dd = document.getElementById('search-dd');
+    if (!this._results.length) { dd.style.display = 'none'; return; }
+    dd.innerHTML = this._results.map((r, i) => {
+      const parts = r.display_name.split(',');
+      return `<div class="sr" onclick="Search.goto(${i})">
+        <div class="sr-name">${parts.slice(0, 2).join(',')}</div>
+        <div class="sr-type">${r.type} · ${parts.slice(-1)[0].trim()}</div>
+      </div>`;
+    }).join('');
+    dd.style.display = 'block';
+  },
+
+  hide() { document.getElementById('search-dd').style.display = 'none'; },
+
+  goto(idx) {
+    const r = this._results[idx];
+    if (!r) return;
+    const lat = parseFloat(r.lat), lng = parseFloat(r.lon);
+    map.setView([lat, lng], 14);
+    const parts = r.display_name.split(',');
+    L.popup().setLatLng([lat, lng])
+      .setContent(`<div style="font-size:12px">${parts.slice(0, 3).join(',')}</div>`)
+      .openOn(map);
+    this.hide();
+    document.getElementById('search-input').value = parts.slice(0, 2).join(',');
+  },
+};
+
+// ─── Style ────────────────────────────────────────────────────────────────────
+const Style = {
+  open(layerId) {
+    document.getElementById('style-layer-id').value = layerId;
+    const c  = S.colors[layerId]  || '#3b82f6';
+    const op = S.opacity[layerId] ?? 0.8;
+    document.getElementById('style-color').value = c;
+    document.getElementById('style-swatch').style.background = c;
+    document.getElementById('style-opacity').value = Math.round(op * 100);
+    document.getElementById('opacity-val').textContent = `${Math.round(op * 100)}%`;
+
+    // Preset swatches
+    const presets = document.getElementById('style-presets');
+    presets.innerHTML = PALETTE.map((p) =>
+      `<div class="preset${p === c ? ' sel' : ''}" style="background:${p}" onclick="Style.setPreset('${p}')"></div>`
+    ).join('');
+    UI.show('style-modal');
+  },
+
+  preview() {
+    const c = document.getElementById('style-color').value;
+    document.getElementById('style-swatch').style.background = c;
+    document.querySelectorAll('#style-presets .preset').forEach((el) => {
+      el.classList.toggle('sel', el.style.background === c || el.style.backgroundColor === c);
+    });
+  },
+
+  previewOpacity() {
+    const v = document.getElementById('style-opacity').value;
+    document.getElementById('opacity-val').textContent = `${v}%`;
+  },
+
+  setPreset(c) {
+    document.getElementById('style-color').value = c;
+    this.preview();
+  },
+
+  apply() {
+    const layerId = document.getElementById('style-layer-id').value;
+    const c  = document.getElementById('style-color').value;
+    const op = parseInt(document.getElementById('style-opacity').value) / 100;
+    S.colors[layerId]  = c;
+    S.opacity[layerId] = op;
+
+    const fg = S.fgroups[layerId];
+    if (fg) {
+      fg.eachLayer((lyr) => {
+        if (lyr.setStyle) {
+          if (lyr instanceof L.CircleMarker) {
+            lyr.setStyle({ fillColor: c, fillOpacity: op });
+          } else {
+            lyr.setStyle({ color: c, fillColor: c, fillOpacity: op * .25 });
+          }
+        }
+      });
+    }
+    // Update sidebar dot
+    const dot = document.getElementById(`dot-${layerId}`);
+    if (dot) dot.style.background = c;
+    UI.hide('style-modal');
+    toast('Style updated');
+  },
+};
+
+// ─── Upload ───────────────────────────────────────────────────────────────────
+const Upload = {
+  _file: null,
+
+  open(layerId) {
+    this._file = null;
+    document.getElementById('upload-layer-id').value = layerId;
+    document.getElementById('file-name').textContent = '';
+    document.getElementById('upload-err').style.display = 'none';
+    document.getElementById('file-input').value = '';
+    UI.show('upload-modal');
+  },
+
+  fileSelected(e) {
+    const f = e.target.files[0];
+    if (!f) return;
+    this._file = f;
+    document.getElementById('file-name').textContent = `Selected: ${f.name}`;
+  },
+
+  dragOver(e) { e.preventDefault(); document.getElementById('dropzone').classList.add('drag'); },
+  dragLeave()  { document.getElementById('dropzone').classList.remove('drag'); },
+  drop(e) {
+    e.preventDefault();
+    document.getElementById('dropzone').classList.remove('drag');
+    const f = e.dataTransfer.files[0];
+    if (f) { this._file = f; document.getElementById('file-name').textContent = `Selected: ${f.name}`; }
+  },
+
+  async submit() {
+    const layerId = document.getElementById('upload-layer-id').value;
+    const errEl   = document.getElementById('upload-err');
+    errEl.style.display = 'none';
+    if (!this._file) { errEl.textContent = 'Please select a file'; errEl.style.display = 'block'; return; }
+
+    const fd = new FormData();
+    fd.append('file', this._file);
+    try {
+      const r = await fetch(`/api/v1/layers/${layerId}/upload`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${S.token}` },
+        body: fd,
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error);
+      UI.hide('upload-modal');
+      // Reload the layer features
+      const layer = S.layers.find((l) => l.id === layerId);
+      const idx   = S.layers.findIndex((l) => l.id === layerId);
+      if (layer) await Layers.loadFeatures(layer, idx);
+      toast(`Uploaded: ${d.inserted} features${d.errors ? `, ${d.errors} skipped` : ''}`);
+    } catch (ex) { errEl.textContent = ex.message; errEl.style.display = 'block'; }
   },
 };
 
 // ─── Keyboard shortcuts ───────────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
-    UI.hideAuth();
-    UI.hideAddLayer();
-    map.closePopup();
+    UI.hide('auth-modal'); UI.hide('add-modal');
+    UI.hide('style-modal'); UI.hide('upload-modal');
+    Search.hide(); map.closePopup();
+    Measure.stop(); Draw.deactivate();
   }
   if (e.key === 'Enter') {
     const am = document.getElementById('auth-modal');
     if (am.style.display !== 'none') {
-      const isLogin = document.getElementById('login-pane').style.display !== 'none';
-      isLogin ? Auth.login() : Auth.register();
+      document.getElementById('login-pane').style.display !== 'none' ? Auth.login() : Auth.register();
     }
   }
 });
 
 // ─── Boot ─────────────────────────────────────────────────────────────────────
+Search.init();
+
 (async function boot() {
-  if (state.token) {
+  if (S.token) {
     try {
-      state.user = await API.get('/auth/me');
+      S.user = await API.get('/auth/me');
       UI.setAuthArea();
       Layers.loadAll();
     } catch (_) {
       localStorage.removeItem('gis_token');
-      state.token = null;
+      S.token = null;
       UI.showAuth();
     }
   } else {

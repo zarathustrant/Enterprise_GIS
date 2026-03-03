@@ -7,6 +7,7 @@ from db import close_db
 from auth import auth_bp
 from layers import layers_bp
 from features import features_bp
+from ingestion import ingestion_bp
 
 
 def create_app(config=Config):
@@ -16,9 +17,10 @@ def create_app(config=Config):
     CORS(app)
     JWTManager(app)
 
-    app.register_blueprint(auth_bp,     url_prefix='/api/v1/auth')
-    app.register_blueprint(layers_bp,   url_prefix='/api/v1/layers')
-    app.register_blueprint(features_bp, url_prefix='/api/v1/layers')
+    app.register_blueprint(auth_bp,       url_prefix='/api/v1/auth')
+    app.register_blueprint(layers_bp,     url_prefix='/api/v1/layers')
+    app.register_blueprint(features_bp,   url_prefix='/api/v1/layers')
+    app.register_blueprint(ingestion_bp,  url_prefix='/api/v1/layers')
 
     app.teardown_appcontext(close_db)
 
