@@ -1,48 +1,108 @@
-# Flask GIS Application
+# Enterprise GIS
 
-A Flask-based web GIS application for real-time location tracking and GeoJSON layer management, backed by MongoDB Atlas.
+A production-grade web GIS application built with Flask + PostGIS.
+Supports real-time mapping, spatial querying, JWT authentication, and layer management.
 
-## Features
+## Stack
 
-- Real-time GPS location tracking (iOS app integration)
-- GeoJSON layer upload and management
-- Interactive Leaflet map viewer
-- Persistent map view state (center + zoom)
-- Layer styling via MongoDB
+| Layer | Technology |
+|---|---|
+| Frontend | Leaflet.js, vanilla JS (SPA) |
+| Backend | Flask, Flask-JWT-Extended |
+| Database | PostgreSQL + PostGIS |
+| Auth | OAuth2-ready JWT (access + refresh tokens) |
+| Deployment | Gunicorn, Docker-ready |
 
 ## Quick Start
 
+**1. Set up environment**
+```bash
+cp .env.example .env
+# edit .env with your DB credentials and secret keys
+```
+
+**2. Create the database**
+```bash
+createdb enterprise_gis
+psql enterprise_gis < database/migrations/001_initial.sql
+```
+
+**3. Install dependencies and run**
 ```bash
 pip install -r requirements.txt
 python app.py
 ```
 
-Open `http://localhost:5000` in your browser.
+Open `http://localhost:5000` — you'll see the map viewer with a login prompt.
 
-## API Endpoints
+## API Reference
 
+### Auth  (`/api/v1/auth`)
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/` | Serve the map viewer |
-| `POST` | `/api/location` | Receive GPS location from iOS app |
-| `GET` | `/api/location` | Get the latest tracked location |
-| `POST` | `/upload_geojson` | Upload a GeoJSON layer with styles |
-| `GET` | `/layers` | List all layers with their styles |
-| `PUT` | `/update_styles` | Update styles for an existing layer |
-| `POST` | `/update_map_view` | Persist the current map center and zoom |
-| `GET` | `/get_map_view` | Retrieve the last saved map view |
+| `POST` | `/register` | Create account → returns JWT pair |
+| `POST` | `/login` | Login → returns JWT pair |
+| `POST` | `/refresh` | Exchange refresh token for new access token |
+| `GET`  | `/me` | Get current user + roles |
 
-## Documentation
+### Layers  (`/api/v1/layers`)
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET`    | `/`          | Optional | List accessible layers |
+| `POST`   | `/`          | Required | Create a layer |
+| `GET`    | `/{id}`      | Optional | Get layer metadata |
+| `PUT`    | `/{id}`      | Required | Update layer |
+| `DELETE` | `/{id}`      | Required | Delete layer |
 
-For comprehensive architecture and implementation guidance, see:
+### Features  (`/api/v1/layers/{layer_id}/features`)
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET`    | `/`      | Optional | Get features (GeoJSON FeatureCollection) |
+| `POST`   | `/`      | Required | Create a feature |
+| `PUT`    | `/{fid}` | Required | Update feature (supports optimistic locking via `version`) |
+| `DELETE` | `/{fid}` | Required | Delete feature |
 
-- [Enterprise Web GIS — Full Documentation](docs/enterprise-gis.md)
+**Spatial filters on `GET /features`:**
+```
+?bbox=minX,minY,maxX,maxY          bounding box pre-filter (uses spatial index)
+?intersects=<GeoJSON geometry>     exact spatial intersection
+?limit=1000&offset=0               pagination
+```
 
-This covers system architecture, technology stack decisions, spatial querying, data ingestion, security, performance, OGC standards, advanced capabilities (3D, real-time, ML), API design, DevOps, testing strategy, and a phased implementation roadmap.
+### Health
+```
+GET /health     → { status, postgis version }
+```
 
-## Dependencies
+## Architecture
 
-- Flask + Flask-CORS
-- PyMongo (MongoDB Atlas)
-- psycopg2 / postgis (PostGIS support)
-- Gunicorn (production server)
+```
+app.py              Flask app factory + route registration
+config.py           Environment-driven configuration
+db.py               Per-request psycopg2 connection (Flask g)
+auth.py             /api/v1/auth blueprint
+layers.py           /api/v1/layers blueprint
+features.py         /api/v1/layers/<id>/features blueprint
+templates/
+  index.html        Map viewer SPA (Leaflet)
+database/
+  migrations/
+    001_initial.sql PostGIS schema (users, roles, layers, features)
+docs/
+  enterprise-gis.md Full architecture & roadmap documentation
+```
+
+## Security
+- JWT access tokens expire in 15 minutes; refresh tokens in 30 days
+- Passwords hashed with Werkzeug (PBKDF2-SHA256)
+- Spatial RBAC schema ready (`user_regions` table) for geographic access control
+- Row-level security and audit logging designed for Phase 2
+
+## Roadmap
+
+See [docs/enterprise-gis.md](docs/enterprise-gis.md) for the full blueprint.
+
+- **Phase 1 (current):** Map viewer, JWT auth, layer CRUD, spatial queries
+- **Phase 2:** Feature editing UI, GeoJSON upload, geocoding, measurement tools
+- **Phase 3:** Buffer/overlay analysis, routing, dashboards, time slider
+- **Phase 4:** Real-time tracking, 3D visualization, workflow engine, offline PWA

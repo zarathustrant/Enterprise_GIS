@@ -1,0 +1,757 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Enterprise GIS</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg:        #0f172a;
+      --panel:     #1e293b;
+      --item:      #2d3f55;
+      --border:    #334155;
+      --text:      #f1f5f9;
+      --muted:     #94a3b8;
+      --accent:    #3b82f6;
+      --accent2:   #2563eb;
+      --danger:    #ef4444;
+      --success:   #22c55e;
+      --warn:      #f59e0b;
+      --sidebar-w: 270px;
+    }
+
+    body {
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────────── */
+    header {
+      height: 48px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 16px;
+      flex-shrink: 0;
+      z-index: 500;
+    }
+    .logo {
+      font-size: 15px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: .4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .logo svg { flex-shrink: 0; }
+
+    /* ── Body layout ─────────────────────────────────────────────────────── */
+    .body { display: flex; flex: 1; overflow: hidden; }
+
+    /* ── Sidebar ─────────────────────────────────────────────────────────── */
+    .sidebar {
+      width: var(--sidebar-w);
+      background: var(--panel);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      flex-shrink: 0;
+    }
+    .sidebar-hdr {
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .sidebar-title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+      color: var(--muted);
+    }
+    #layer-list { flex: 1; overflow-y: auto; padding: 8px; }
+
+    .layer-card {
+      background: var(--item);
+      border: 1px solid transparent;
+      border-radius: 7px;
+      padding: 9px 10px;
+      margin-bottom: 5px;
+      cursor: pointer;
+      transition: border-color .15s;
+    }
+    .layer-card:hover { border-color: var(--accent); }
+    .layer-row { display: flex; align-items: center; gap: 7px; }
+    .layer-dot {
+      width: 9px; height: 9px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .layer-name {
+      font-size: 13px;
+      font-weight: 500;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .layer-badge {
+      font-size: 9px;
+      padding: 2px 5px;
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: .5px;
+    }
+    .toggle {
+      width: 30px; height: 16px;
+      background: var(--border);
+      border-radius: 8px;
+      position: relative;
+      cursor: pointer;
+      transition: background .15s;
+      flex-shrink: 0;
+    }
+    .toggle.on { background: var(--accent); }
+    .toggle::after {
+      content: '';
+      width: 12px; height: 12px;
+      background: #fff;
+      border-radius: 50%;
+      position: absolute;
+      top: 2px; left: 2px;
+      transition: left .15s;
+    }
+    .toggle.on::after { left: 16px; }
+    .layer-meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 4px;
+      padding-left: 16px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .empty-msg {
+      padding: 20px 12px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+      line-height: 1.6;
+    }
+
+    /* ── Map wrapper ─────────────────────────────────────────────────────── */
+    .map-wrap { position: relative; flex: 1; }
+    #map { position: absolute; inset: 0; }
+
+    /* ── Status bar ──────────────────────────────────────────────────────── */
+    .statusbar {
+      height: 26px;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      padding: 0 12px;
+      font-size: 11px;
+      color: var(--muted);
+      flex-shrink: 0;
+    }
+
+    /* ── Buttons ─────────────────────────────────────────────────────────── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 7px 14px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s;
+      white-space: nowrap;
+    }
+    .btn:hover { background: var(--accent2); }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+    .btn-ghost {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+    .btn-ghost:hover { border-color: var(--accent); color: var(--accent); background: none; }
+    .btn-danger { background: var(--danger); }
+    .btn-danger:hover { background: #dc2626; }
+
+    /* ── Auth header area ────────────────────────────────────────────────── */
+    .user-badge { display: flex; align-items: center; gap: 8px; }
+    .avatar {
+      width: 26px; height: 26px;
+      border-radius: 50%;
+      background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 10px; font-weight: 700;
+    }
+    .username { font-size: 13px; }
+    .btn-logout {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 4px 9px;
+      border-radius: 5px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .btn-logout:hover { border-color: var(--danger); color: var(--danger); }
+
+    /* ── Modal ───────────────────────────────────────────────────────────── */
+    .overlay {
+      position: fixed; inset: 0;
+      background: rgba(0,0,0,.65);
+      z-index: 2000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .modal {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px;
+      width: 340px;
+      max-width: calc(100vw - 32px);
+    }
+    .modal h2 { font-size: 18px; margin-bottom: 20px; }
+    .tabs { display: flex; gap: 6px; margin-bottom: 20px; }
+    .tab {
+      flex: 1;
+      padding: 7px;
+      background: var(--item);
+      border: none;
+      color: var(--muted);
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: all .15s;
+    }
+    .tab.active { background: var(--accent); color: #fff; }
+    .field { margin-bottom: 14px; }
+    label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 5px; }
+    input, select {
+      width: 100%;
+      background: var(--item);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 9px 11px;
+      color: var(--text);
+      font-size: 13px;
+      outline: none;
+      transition: border-color .15s;
+      font-family: inherit;
+    }
+    input:focus, select:focus { border-color: var(--accent); }
+    .err {
+      color: #f87171;
+      font-size: 11px;
+      margin-top: 6px;
+      display: none;
+    }
+    .modal-footer { display: flex; gap: 8px; margin-top: 6px; }
+    .modal-footer .btn { flex: 1; justify-content: center; }
+
+    /* ── Leaflet popup overrides ─────────────────────────────────────────── */
+    .leaflet-popup-content-wrapper {
+      background: var(--panel);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      box-shadow: 0 6px 24px rgba(0,0,0,.5);
+    }
+    .leaflet-popup-tip { background: var(--panel); }
+    .leaflet-popup-close-button { color: var(--muted) !important; }
+    .fpop h4 { font-size: 12px; font-weight: 700; color: var(--accent); margin-bottom: 8px; }
+    .fpop table { width: 100%; border-collapse: collapse; font-size: 11px; }
+    .fpop td { padding: 3px 5px; border-bottom: 1px solid var(--border); }
+    .fpop td:first-child { color: var(--muted); width: 45%; }
+    .fpop .meta-row td { color: var(--border) !important; font-style: italic; font-size: 10px; }
+
+    /* ── Toast ───────────────────────────────────────────────────────────── */
+    #toast {
+      position: fixed;
+      bottom: 36px; right: 16px;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      z-index: 3000;
+      transform: translateX(130%);
+      transition: transform .25s;
+      max-width: 260px;
+    }
+    #toast.show { transform: translateX(0); }
+    #toast.ok  { border-color: var(--success); }
+    #toast.err { border-color: var(--danger); }
+
+    /* ── Scrollbar ───────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── Leaflet attribution fix ─────────────────────────────────────────── */
+    .leaflet-control-attribution {
+      background: rgba(15,23,42,.8) !important;
+      color: var(--muted) !important;
+    }
+    .leaflet-control-attribution a { color: var(--accent) !important; }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ─────────────────────────────────────────────────────────────── -->
+<header>
+  <div class="logo">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+      <polyline points="2 17 12 22 22 17"/>
+      <polyline points="2 12 12 17 22 12"/>
+    </svg>
+    Enterprise GIS
+  </div>
+  <div id="auth-area">
+    <button class="btn btn-sm" onclick="UI.showAuth()">Login</button>
+  </div>
+</header>
+
+<!-- ── Body ──────────────────────────────────────────────────────────────── -->
+<div class="body">
+
+  <!-- Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-hdr">
+      <span class="sidebar-title">Layers</span>
+      <button id="add-btn" class="btn btn-sm" style="display:none" onclick="UI.showAddLayer()">+ Add</button>
+    </div>
+    <div id="layer-list">
+      <div class="empty-msg">Login to manage<br>your layers</div>
+    </div>
+  </aside>
+
+  <!-- Map -->
+  <div class="map-wrap">
+    <div id="map"></div>
+  </div>
+</div>
+
+<!-- ── Status bar ─────────────────────────────────────────────────────────── -->
+<div class="statusbar">
+  <span id="s-coord">Lat: —  Lng: —</span>
+  <span id="s-layers">Layers: 0</span>
+  <span id="s-zoom">Zoom: —</span>
+</div>
+
+<!-- ── Auth modal ─────────────────────────────────────────────────────────── -->
+<div id="auth-modal" class="overlay" style="display:none">
+  <div class="modal">
+    <h2>Welcome</h2>
+    <div class="tabs">
+      <button class="tab active" onclick="UI.tab('login')">Login</button>
+      <button class="tab"        onclick="UI.tab('register')">Register</button>
+    </div>
+
+    <div id="login-pane">
+      <div class="field"><label>Username</label>
+        <input id="l-user" type="text" placeholder="Username" autocomplete="username" /></div>
+      <div class="field"><label>Password</label>
+        <input id="l-pass" type="password" placeholder="Password" autocomplete="current-password" /></div>
+      <div id="l-err" class="err"></div>
+      <button class="btn" style="width:100%;justify-content:center;margin-top:4px" onclick="Auth.login()">Login</button>
+    </div>
+
+    <div id="reg-pane" style="display:none">
+      <div class="field"><label>Username</label>
+        <input id="r-user" type="text" placeholder="Choose a username" autocomplete="username" /></div>
+      <div class="field"><label>Email</label>
+        <input id="r-email" type="email" placeholder="Email address" autocomplete="email" /></div>
+      <div class="field"><label>Password (min 8 chars)</label>
+        <input id="r-pass" type="password" placeholder="Password" autocomplete="new-password" /></div>
+      <div id="r-err" class="err"></div>
+      <button class="btn" style="width:100%;justify-content:center;margin-top:4px" onclick="Auth.register()">Create Account</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Add layer modal ────────────────────────────────────────────────────── -->
+<div id="add-modal" class="overlay" style="display:none">
+  <div class="modal">
+    <h2>New Layer</h2>
+    <div class="field"><label>Name *</label>
+      <input id="n-name" type="text" placeholder="e.g. Buildings" /></div>
+    <div class="field"><label>Description</label>
+      <input id="n-desc" type="text" placeholder="Optional" /></div>
+    <div class="field"><label>Geometry Type</label>
+      <select id="n-geom">
+        <option value="">Any</option>
+        <option value="Point">Point</option>
+        <option value="LineString">LineString</option>
+        <option value="Polygon">Polygon</option>
+        <option value="MultiPoint">MultiPoint</option>
+        <option value="MultiLineString">MultiLineString</option>
+        <option value="MultiPolygon">MultiPolygon</option>
+      </select>
+    </div>
+    <div class="field">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input id="n-pub" type="checkbox" style="width:auto" />
+        Public (visible to all users)
+      </label>
+    </div>
+    <div id="n-err" class="err"></div>
+    <div class="modal-footer">
+      <button class="btn" onclick="Layers.create()">Create</button>
+      <button class="btn btn-ghost" onclick="UI.hideAddLayer()">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Toast ──────────────────────────────────────────────────────────────── -->
+<div id="toast"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+'use strict';
+
+// ─── Palette ──────────────────────────────────────────────────────────────────
+const COLORS = ['#3b82f6','#10b981','#f59e0b','#ef4444','#8b5cf6',
+                '#ec4899','#06b6d4','#84cc16','#f97316','#a78bfa'];
+const color = (i) => COLORS[i % COLORS.length];
+
+// ─── State ────────────────────────────────────────────────────────────────────
+const state = {
+  token:    localStorage.getItem('gis_token'),
+  user:     null,
+  layers:   [],
+  lgroups:  {},   // layerId -> L.LayerGroup
+  visible:  {},   // layerId -> bool
+};
+
+// ─── API ──────────────────────────────────────────────────────────────────────
+const API = {
+  base: '/api/v1',
+  hdrs() {
+    const h = { 'Content-Type': 'application/json' };
+    if (state.token) h['Authorization'] = `Bearer ${state.token}`;
+    return h;
+  },
+  async req(method, path, body) {
+    const r = await fetch(this.base + path, {
+      method,
+      headers: this.hdrs(),
+      body: body != null ? JSON.stringify(body) : undefined,
+    });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  },
+  get:    (p)    => API.req('GET',    p),
+  post:   (p, b) => API.req('POST',   p, b),
+  put:    (p, b) => API.req('PUT',    p, b),
+  delete: (p)    => API.req('DELETE', p),
+};
+
+// ─── Map ──────────────────────────────────────────────────────────────────────
+const map = L.map('map', { zoomControl: false }).setView([6.297, 5.593], 13);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 19,
+  attribution: '© <a href="https://openstreetmap.org">OpenStreetMap</a>',
+}).addTo(map);
+
+L.control.zoom({ position: 'bottomright' }).addTo(map);
+L.control.scale({ position: 'bottomleft', imperial: false }).addTo(map);
+
+map.on('mousemove', (e) => {
+  document.getElementById('s-coord').textContent =
+    `Lat: ${e.latlng.lat.toFixed(5)}  Lng: ${e.latlng.lng.toFixed(5)}`;
+});
+map.on('zoomend', () => {
+  document.getElementById('s-zoom').textContent = `Zoom: ${map.getZoom()}`;
+});
+document.getElementById('s-zoom').textContent = `Zoom: ${map.getZoom()}`;
+
+// ─── Toast ────────────────────────────────────────────────────────────────────
+let _toastTimer;
+function toast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = `toast ${type} show`;
+  clearTimeout(_toastTimer);
+  _toastTimer = setTimeout(() => el.classList.remove('show'), 3000);
+}
+
+// ─── UI helpers ───────────────────────────────────────────────────────────────
+const UI = {
+  showAuth()    { document.getElementById('auth-modal').style.display = 'flex'; },
+  hideAuth()    { document.getElementById('auth-modal').style.display = 'none'; },
+  showAddLayer(){ document.getElementById('add-modal').style.display = 'flex'; },
+  hideAddLayer(){ document.getElementById('add-modal').style.display = 'none'; },
+
+  tab(name) {
+    document.getElementById('login-pane').style.display = name === 'login' ? '' : 'none';
+    document.getElementById('reg-pane').style.display   = name === 'register' ? '' : 'none';
+    document.querySelectorAll('.tab').forEach((t, i) => {
+      t.classList.toggle('active', (i === 0 && name === 'login') || (i === 1 && name === 'register'));
+    });
+  },
+
+  setAuthArea() {
+    const area = document.getElementById('auth-area');
+    const btn  = document.getElementById('add-btn');
+    if (state.user) {
+      const init = state.user.username.slice(0, 2).toUpperCase();
+      area.innerHTML = `
+        <div class="user-badge">
+          <div class="avatar">${init}</div>
+          <span class="username">${state.user.username}</span>
+          <button class="btn-logout" onclick="Auth.logout()">Logout</button>
+        </div>`;
+      btn.style.display = '';
+    } else {
+      area.innerHTML = `<button class="btn btn-sm" onclick="UI.showAuth()">Login</button>`;
+      btn.style.display = 'none';
+    }
+  },
+
+  renderLayers() {
+    const list = document.getElementById('layer-list');
+    document.getElementById('s-layers').textContent = `Layers: ${state.layers.length}`;
+    if (!state.layers.length) {
+      list.innerHTML = `<div class="empty-msg">No layers yet.<br>Click "+ Add" to create one.</div>`;
+      return;
+    }
+    list.innerHTML = state.layers.map((l, i) => `
+      <div class="layer-card" data-id="${l.id}">
+        <div class="layer-row">
+          <div class="layer-dot" style="background:${color(i)}"></div>
+          <span class="layer-name" title="${l.name}">${l.name}</span>
+          ${l.geometry_type ? `<span class="layer-badge">${l.geometry_type}</span>` : ''}
+          <div class="toggle on" onclick="Layers.toggle(event,'${l.id}')"></div>
+        </div>
+        ${l.description ? `<div class="layer-meta">${l.description}</div>` : ''}
+      </div>
+    `).join('');
+  },
+};
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+const Auth = {
+  async login() {
+    const username = document.getElementById('l-user').value.trim();
+    const password = document.getElementById('l-pass').value;
+    const errEl = document.getElementById('l-err');
+    errEl.style.display = 'none';
+    try {
+      const d = await API.post('/auth/login', { username, password });
+      state.token = d.access_token;
+      state.user  = d.user;
+      localStorage.setItem('gis_token', state.token);
+      UI.hideAuth();
+      UI.setAuthArea();
+      Layers.loadAll();
+      toast(`Welcome back, ${d.user.username}!`);
+    } catch (e) {
+      errEl.textContent = e.message;
+      errEl.style.display = 'block';
+    }
+  },
+
+  async register() {
+    const username = document.getElementById('r-user').value.trim();
+    const email    = document.getElementById('r-email').value.trim();
+    const password = document.getElementById('r-pass').value;
+    const errEl = document.getElementById('r-err');
+    errEl.style.display = 'none';
+    try {
+      const d = await API.post('/auth/register', { username, email, password });
+      state.token = d.access_token;
+      state.user  = d.user;
+      localStorage.setItem('gis_token', state.token);
+      UI.hideAuth();
+      UI.setAuthArea();
+      Layers.loadAll();
+      toast(`Account created! Welcome, ${d.user.username}!`);
+    } catch (e) {
+      errEl.textContent = e.message;
+      errEl.style.display = 'block';
+    }
+  },
+
+  logout() {
+    state.token = null;
+    state.user  = null;
+    localStorage.removeItem('gis_token');
+    Layers.clearAll();
+    UI.setAuthArea();
+    document.getElementById('layer-list').innerHTML =
+      '<div class="empty-msg">Login to manage<br>your layers</div>';
+    toast('Logged out');
+  },
+};
+
+// ─── Layers ───────────────────────────────────────────────────────────────────
+const Layers = {
+  async loadAll() {
+    try {
+      state.layers = await API.get('/layers');
+      UI.renderLayers();
+      state.layers.forEach((l, i) => this.loadFeatures(l, i));
+    } catch (e) {
+      toast('Failed to load layers: ' + e.message, 'err');
+    }
+  },
+
+  async loadFeatures(layer, idx) {
+    try {
+      const fc = await API.get(`/layers/${layer.id}/features`);
+      const c  = color(idx);
+      const lg = L.geoJSON(fc, {
+        style: () => ({ color: c, weight: 2, opacity: .9, fillColor: c, fillOpacity: .2 }),
+        pointToLayer: (f, ll) => L.circleMarker(ll, {
+          radius: 6, fillColor: c, color: '#fff', weight: 1.5, opacity: 1, fillOpacity: .9,
+        }),
+        onEachFeature: (feature, lyr) => {
+          lyr.on('click', (e) => {
+            L.DomEvent.stopPropagation(e);
+            this.showPopup(feature, layer.name, lyr);
+          });
+        },
+      }).addTo(map);
+      state.lgroups[layer.id] = lg;
+      state.visible[layer.id] = true;
+    } catch (e) {
+      console.warn(`Features for "${layer.name}" failed:`, e.message);
+    }
+  },
+
+  toggle(event, layerId) {
+    event.stopPropagation();
+    const toggle = event.currentTarget;
+    const lg = state.lgroups[layerId];
+    if (!lg) return;
+    state.visible[layerId] = !state.visible[layerId];
+    toggle.classList.toggle('on', state.visible[layerId]);
+    state.visible[layerId] ? map.addLayer(lg) : map.removeLayer(lg);
+  },
+
+  clearAll() {
+    Object.values(state.lgroups).forEach((lg) => map.removeLayer(lg));
+    state.lgroups  = {};
+    state.layers   = [];
+    state.visible  = {};
+    UI.renderLayers();
+  },
+
+  showPopup(feature, layerName, lyr) {
+    const props   = feature.properties || {};
+    const keys    = Object.keys(props).filter((k) => !k.startsWith('_'));
+    const metaK   = Object.keys(props).filter((k) => k.startsWith('_'));
+
+    const rows = keys.length
+      ? keys.map((k) => `<tr><td>${k}</td><td>${props[k] ?? '—'}</td></tr>`).join('')
+      : '<tr><td colspan="2" style="color:var(--muted)">No properties</td></tr>';
+
+    const meta = metaK.length
+      ? `<tr class="meta-row"><td colspan="2">metadata</td></tr>` +
+        metaK.map((k) => `<tr><td>${k}</td><td>${props[k] ?? '—'}</td></tr>`).join('')
+      : '';
+
+    const html = `<div class="fpop"><h4>${layerName}</h4>
+      <table>${rows}${meta}</table></div>`;
+
+    let center;
+    try { center = lyr.getBounds().getCenter(); } catch (_) {
+      center = lyr.getLatLng ? lyr.getLatLng() : map.getCenter();
+    }
+    L.popup({ maxWidth: 280, className: 'dark-popup' })
+      .setLatLng(center).setContent(html).openOn(map);
+  },
+
+  async create() {
+    const name   = document.getElementById('n-name').value.trim();
+    const desc   = document.getElementById('n-desc').value.trim();
+    const geom   = document.getElementById('n-geom').value;
+    const pub    = document.getElementById('n-pub').checked;
+    const errEl  = document.getElementById('n-err');
+    errEl.style.display = 'none';
+    if (!name) { errEl.textContent = 'Name is required'; errEl.style.display = 'block'; return; }
+    try {
+      const layer = await API.post('/layers', {
+        name, description: desc, geometry_type: geom, is_public: pub,
+      });
+      state.layers.unshift(layer);
+      state.lgroups[layer.id] = L.layerGroup().addTo(map);
+      state.visible[layer.id] = true;
+      UI.renderLayers();
+      UI.hideAddLayer();
+      document.getElementById('n-name').value = '';
+      document.getElementById('n-desc').value = '';
+      toast(`Layer "${name}" created`);
+    } catch (e) {
+      errEl.textContent = e.message;
+      errEl.style.display = 'block';
+    }
+  },
+};
+
+// ─── Keyboard shortcuts ───────────────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') {
+    UI.hideAuth();
+    UI.hideAddLayer();
+    map.closePopup();
+  }
+  if (e.key === 'Enter') {
+    const am = document.getElementById('auth-modal');
+    if (am.style.display !== 'none') {
+      const isLogin = document.getElementById('login-pane').style.display !== 'none';
+      isLogin ? Auth.login() : Auth.register();
+    }
+  }
+});
+
+// ─── Boot ─────────────────────────────────────────────────────────────────────
+(async function boot() {
+  if (state.token) {
+    try {
+      state.user = await API.get('/auth/me');
+      UI.setAuthArea();
+      Layers.loadAll();
+    } catch (_) {
+      localStorage.removeItem('gis_token');
+      state.token = null;
+      UI.showAuth();
+    }
+  } else {
+    UI.showAuth();
+  }
+})();
+</script>
+</body>
+</html>
