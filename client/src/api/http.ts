@@ -26,16 +26,29 @@ function headers(token?: string | null, init?: HeadersInit): Headers {
 }
 
 function errorMessage(status: number, body: unknown): string {
+  let resolvedMessage: string | null = null
+
   if (typeof body === 'object' && body) {
     if ('error' in body) {
-      return String((body as { error: unknown }).error)
+      resolvedMessage = String((body as { error: unknown }).error)
     }
-    if ('msg' in body) {
-      return String((body as { msg: unknown }).msg)
+    if (!resolvedMessage && 'msg' in body) {
+      resolvedMessage = String((body as { msg: unknown }).msg)
     }
-    if ('message' in body) {
-      return String((body as { message: unknown }).message)
+    if (!resolvedMessage && 'message' in body) {
+      resolvedMessage = String((body as { message: unknown }).message)
     }
+  }
+
+  if (status === 401) {
+    const tokenRelated = /token|authorization|jwt|expired|signature/i.test(resolvedMessage ?? '')
+    if (!resolvedMessage || tokenRelated) {
+      return 'Session expired. Refresh the page. If it still fails, sign out and sign back in.'
+    }
+  }
+
+  if (resolvedMessage) {
+    return resolvedMessage
   }
 
   return `Request failed with status ${status}`

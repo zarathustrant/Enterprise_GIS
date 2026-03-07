@@ -28,6 +28,25 @@ describe('apiRequest', () => {
     expect(headers.get('Authorization')).toBe('Bearer token-123')
   })
 
+  it('shows actionable guidance for expired session 401 errors', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      headers: {
+        get: () => 'application/json',
+      },
+      json: async () => ({ msg: 'Token has expired' }),
+      text: async () => '',
+    })
+
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(apiRequest('/layers', {}, 'stale-access-token')).rejects.toMatchObject({
+      status: 401,
+      message: 'Session expired. Refresh the page. If it still fails, sign out and sign back in.',
+    })
+  })
+
   it('refreshes expired token and retries once', async () => {
     useAuthStore.getState().setAuthTokens('expired-token', 'refresh-token-1')
 
