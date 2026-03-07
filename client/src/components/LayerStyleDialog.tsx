@@ -19,10 +19,12 @@ import AddIcon from '@mui/icons-material/Add'
 import type { LayerField, LayerStyleDraft } from '../types/gis'
 import { IconPickerDialog } from './IconPickerDialog'
 import { ICON_LIBRARY_DEFINITIONS } from '../utils/iconLibrary'
+import { geometryFamilyFromType } from '../utils/geometry'
 
 interface LayerStyleDialogProps {
   open: boolean
   layerName: string | null
+  layerGeometryType?: string | null
   fields: LayerField[]
   style: LayerStyleDraft
   submitting: boolean
@@ -82,6 +84,7 @@ function iconNamePlaceholder(library: LayerStyleDraft['iconLibrary']): string {
 export function LayerStyleDialog({
   open,
   layerName,
+  layerGeometryType = null,
   fields,
   style,
   submitting,
@@ -100,6 +103,10 @@ export function LayerStyleDialog({
 
   const numericFields = fields.filter((field) => field.field_type === 'integer' || field.field_type === 'double')
   const allFields = fields
+  const geometryFamily = geometryFamilyFromType(layerGeometryType)
+  const showPointControls = geometryFamily === 'point' || geometryFamily === 'mixed'
+  const showLineControls = geometryFamily === 'line' || geometryFamily === 'polygon' || geometryFamily === 'mixed'
+  const showPolygonControls = geometryFamily === 'polygon' || geometryFamily === 'mixed'
 
   const applyPreset = (patch: Partial<LayerStyleDraft>) => {
     onStyleChange({
@@ -119,6 +126,9 @@ export function LayerStyleDialog({
               Layer: <strong>{layerName}</strong>
             </Typography>
           )}
+          <Typography variant="caption" color="text.secondary">
+            Geometry: <strong>{geometryFamily}</strong>
+          </Typography>
 
           {error && <Alert severity="error">{error}</Alert>}
 
@@ -171,35 +181,44 @@ export function LayerStyleDialog({
               InputLabelProps={{ shrink: true }}
             />
 
-            <TextField
-              label="Point Radius"
-              value={style.pointRadius}
-              onChange={(event) => onStyleChange({ ...style, pointRadius: Math.max(1, Number(event.target.value) || 1) })}
-              size="small"
-              type="number"
-              fullWidth
-            />
+            {showPointControls ? (
+              <>
+                <TextField
+                  label="Point Radius"
+                  value={style.pointRadius}
+                  onChange={(event) => onStyleChange({ ...style, pointRadius: Math.max(1, Number(event.target.value) || 1) })}
+                  size="small"
+                  type="number"
+                  fullWidth
+                />
 
-            <TextField
-              label="Point Shape"
-              value={style.pointShape}
-              onChange={(event) =>
-                onStyleChange({
-                  ...style,
-                  pointShape: event.target.value as LayerStyleDraft['pointShape'],
-                })
-              }
-              size="small"
-              select
-              fullWidth
-            >
-              <MenuItem value="circle">circle</MenuItem>
-              <MenuItem value="square">square</MenuItem>
-              <MenuItem value="icon">icon</MenuItem>
-            </TextField>
+                <TextField
+                  label="Point Shape"
+                  value={style.pointShape}
+                  onChange={(event) =>
+                    onStyleChange({
+                      ...style,
+                      pointShape: event.target.value as LayerStyleDraft['pointShape'],
+                    })
+                  }
+                  size="small"
+                  select
+                  fullWidth
+                >
+                  <MenuItem value="circle">circle</MenuItem>
+                  <MenuItem value="square">square</MenuItem>
+                  <MenuItem value="icon">icon</MenuItem>
+                </TextField>
+              </>
+            ) : (
+              <>
+                <Box />
+                <Box />
+              </>
+            )}
           </Box>
 
-          {style.pointShape === 'icon' && (
+          {showPointControls && style.pointShape === 'icon' && (
             <Box display="grid" gap={1.5}>
               <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
                 Icon Symbols
@@ -325,76 +344,84 @@ export function LayerStyleDialog({
             />
           </Box>
 
-          <TextField
-            label="Stroke Width"
-            value={style.strokeWidth}
-            onChange={(event) => onStyleChange({ ...style, strokeWidth: Math.max(1, Number(event.target.value) || 1) })}
-            size="small"
-            type="number"
-            fullWidth
-          />
+          {showLineControls && (
+            <>
+              <TextField
+                label="Stroke Width"
+                value={style.strokeWidth}
+                onChange={(event) => onStyleChange({ ...style, strokeWidth: Math.max(1, Number(event.target.value) || 1) })}
+                size="small"
+                type="number"
+                fullWidth
+              />
 
-          <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }} gap={1.5}>
-            <TextField
-              label="Line dash on"
-              value={style.lineDashArray[0]}
-              onChange={(event) => {
-                onStyleChange({
-                  ...style,
-                  lineDashArray: [Math.max(0, Number(event.target.value) || 0), style.lineDashArray[1]],
-                })
-              }}
-              size="small"
-              type="number"
-              fullWidth
-            />
-            <TextField
-              label="Line dash off"
-              value={style.lineDashArray[1]}
-              onChange={(event) => {
-                onStyleChange({
-                  ...style,
-                  lineDashArray: [style.lineDashArray[0], Math.max(0, Number(event.target.value) || 0)],
-                })
-              }}
-              size="small"
-              type="number"
-              fullWidth
-            />
-          </Box>
+              <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }} gap={1.5}>
+                <TextField
+                  label="Line dash on"
+                  value={style.lineDashArray[0]}
+                  onChange={(event) => {
+                    onStyleChange({
+                      ...style,
+                      lineDashArray: [Math.max(0, Number(event.target.value) || 0), style.lineDashArray[1]],
+                    })
+                  }}
+                  size="small"
+                  type="number"
+                  fullWidth
+                />
+                <TextField
+                  label="Line dash off"
+                  value={style.lineDashArray[1]}
+                  onChange={(event) => {
+                    onStyleChange({
+                      ...style,
+                      lineDashArray: [style.lineDashArray[0], Math.max(0, Number(event.target.value) || 0)],
+                    })
+                  }}
+                  size="small"
+                  type="number"
+                  fullWidth
+                />
+              </Box>
+            </>
+          )}
 
           <Box display="grid" gap={1.5}>
             <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
               Visual Variables
             </Typography>
             <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }} gap={1.5}>
-              <TextField
-                label="Size field (0..1)"
-                value={style.sizeField}
-                onChange={(event) => onStyleChange({ ...style, sizeField: event.target.value })}
-                size="small"
-                select
-                fullWidth
-              >
-                <MenuItem value="">None</MenuItem>
-                {numericFields.map((field) => (
-                  <MenuItem key={`size-${field.id}`} value={field.name}>{field.alias || field.name}</MenuItem>
-                ))}
-              </TextField>
-              <TextField
-                label="Size Min"
-                value={style.sizeMin}
-                onChange={(event) => onStyleChange({ ...style, sizeMin: Math.max(1, Number(event.target.value) || 1) })}
-                size="small"
-                type="number"
-              />
-              <TextField
-                label="Size Max"
-                value={style.sizeMax}
-                onChange={(event) => onStyleChange({ ...style, sizeMax: Math.max(style.sizeMin, Number(event.target.value) || style.sizeMin) })}
-                size="small"
-                type="number"
-              />
+              {showPointControls && (
+                <>
+                  <TextField
+                    label="Size field (0..1)"
+                    value={style.sizeField}
+                    onChange={(event) => onStyleChange({ ...style, sizeField: event.target.value })}
+                    size="small"
+                    select
+                    fullWidth
+                  >
+                    <MenuItem value="">None</MenuItem>
+                    {numericFields.map((field) => (
+                      <MenuItem key={`size-${field.id}`} value={field.name}>{field.alias || field.name}</MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    label="Size Min"
+                    value={style.sizeMin}
+                    onChange={(event) => onStyleChange({ ...style, sizeMin: Math.max(1, Number(event.target.value) || 1) })}
+                    size="small"
+                    type="number"
+                  />
+                  <TextField
+                    label="Size Max"
+                    value={style.sizeMax}
+                    onChange={(event) => onStyleChange({ ...style, sizeMax: Math.max(style.sizeMin, Number(event.target.value) || style.sizeMin) })}
+                    size="small"
+                    type="number"
+                  />
+                </>
+              )}
               <TextField
                 label="Opacity field (0..1)"
                 value={style.opacityField}
@@ -556,33 +583,39 @@ export function LayerStyleDialog({
               Use MapLibre-style JSON expressions. Leave blank to use standard renderer settings.
             </Typography>
             <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }} gap={1.5}>
-              <TextField
-                label='Fill color expression e.g. ["match",["get","status"],"open","#2a9d8f","#e63946"]'
-                value={style.fillColorExpression}
-                onChange={(event) => onStyleChange({ ...style, fillColorExpression: event.target.value })}
-                size="small"
-                fullWidth
-                multiline
-                minRows={2}
-              />
-              <TextField
-                label='Line color expression'
-                value={style.lineColorExpression}
-                onChange={(event) => onStyleChange({ ...style, lineColorExpression: event.target.value })}
-                size="small"
-                fullWidth
-                multiline
-                minRows={2}
-              />
-              <TextField
-                label='Point radius expression e.g. ["interpolate",["linear"],["get","score"],0,3,100,16]'
-                value={style.pointRadiusExpression}
-                onChange={(event) => onStyleChange({ ...style, pointRadiusExpression: event.target.value })}
-                size="small"
-                fullWidth
-                multiline
-                minRows={2}
-              />
+              {(showPointControls || showPolygonControls) && (
+                <TextField
+                  label='Fill color expression e.g. ["match",["get","status"],"open","#2a9d8f","#e63946"]'
+                  value={style.fillColorExpression}
+                  onChange={(event) => onStyleChange({ ...style, fillColorExpression: event.target.value })}
+                  size="small"
+                  fullWidth
+                  multiline
+                  minRows={2}
+                />
+              )}
+              {showLineControls && (
+                <TextField
+                  label='Line color expression'
+                  value={style.lineColorExpression}
+                  onChange={(event) => onStyleChange({ ...style, lineColorExpression: event.target.value })}
+                  size="small"
+                  fullWidth
+                  multiline
+                  minRows={2}
+                />
+              )}
+              {showPointControls && (
+                <TextField
+                  label='Point radius expression e.g. ["interpolate",["linear"],["get","score"],0,3,100,16]'
+                  value={style.pointRadiusExpression}
+                  onChange={(event) => onStyleChange({ ...style, pointRadiusExpression: event.target.value })}
+                  size="small"
+                  fullWidth
+                  multiline
+                  minRows={2}
+                />
+              )}
               <TextField
                 label='Opacity expression e.g. ["interpolate",["linear"],["get","confidence"],0,0.25,1,1]'
                 value={style.opacityExpression}
@@ -600,34 +633,45 @@ export function LayerStyleDialog({
               Edit Rules
             </Typography>
             <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }} gap={1.5}>
-              <TextField
-                label="Snap enabled"
-                value={style.snapEnabled ? 'true' : 'false'}
-                onChange={(event) => onStyleChange({ ...style, snapEnabled: event.target.value === 'true' })}
-                size="small"
-                select
-              >
-                <MenuItem value="false">false</MenuItem>
-                <MenuItem value="true">true</MenuItem>
-              </TextField>
-              <TextField
-                label="Snap tolerance (m)"
-                value={style.snapToleranceMeters}
-                onChange={(event) => onStyleChange({ ...style, snapToleranceMeters: Math.max(1, Number(event.target.value) || 1) })}
-                size="small"
-                type="number"
-              />
-              <TextField
-                label="No polygon overlap"
-                value={style.topologyNoOverlap ? 'true' : 'false'}
-                onChange={(event) => onStyleChange({ ...style, topologyNoOverlap: event.target.value === 'true' })}
-                size="small"
-                select
-              >
-                <MenuItem value="false">false</MenuItem>
-                <MenuItem value="true">true</MenuItem>
-              </TextField>
+              {showPointControls && (
+                <>
+                  <TextField
+                    label="Snap enabled"
+                    value={style.snapEnabled ? 'true' : 'false'}
+                    onChange={(event) => onStyleChange({ ...style, snapEnabled: event.target.value === 'true' })}
+                    size="small"
+                    select
+                  >
+                    <MenuItem value="false">false</MenuItem>
+                    <MenuItem value="true">true</MenuItem>
+                  </TextField>
+                  <TextField
+                    label="Snap tolerance (m)"
+                    value={style.snapToleranceMeters}
+                    onChange={(event) => onStyleChange({ ...style, snapToleranceMeters: Math.max(1, Number(event.target.value) || 1) })}
+                    size="small"
+                    type="number"
+                  />
+                </>
+              )}
+              {showPolygonControls && (
+                <TextField
+                  label="No polygon overlap"
+                  value={style.topologyNoOverlap ? 'true' : 'false'}
+                  onChange={(event) => onStyleChange({ ...style, topologyNoOverlap: event.target.value === 'true' })}
+                  size="small"
+                  select
+                >
+                  <MenuItem value="false">false</MenuItem>
+                  <MenuItem value="true">true</MenuItem>
+                </TextField>
+              )}
             </Box>
+            {!showPointControls && !showPolygonControls && (
+              <Typography variant="caption" color="text.secondary">
+                No edit topology rules are available for pure line layers.
+              </Typography>
+            )}
           </Box>
 
           {style.rendererType === 'uniqueValue' && (

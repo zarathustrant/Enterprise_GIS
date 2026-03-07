@@ -1,6 +1,7 @@
 import type { Feature as GeoJsonFeature } from 'geojson'
 import type { FeatureCollection, Layer, LayerIconLibrary } from '../types/gis'
 import { resolveIconId } from './iconLibrary'
+import { geometryFamilyFromType, type GeometryFamily } from './geometry'
 
 export type LegendMode = 'professional' | 'minimal' | 'analyst' | 'interactive' | 'presentation'
 
@@ -18,6 +19,7 @@ export interface LegendItemModel {
 export interface LayerLegendModel {
   layerId: string
   layerName: string
+  geometryFamily: GeometryFamily
   renderer: LayerRendererType
   field?: string
   pointShape: 'circle' | 'square' | 'icon'
@@ -226,17 +228,28 @@ export function filterFeatureCollectionByLegend(
 export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollection): LayerLegendModel {
   const style = parseStyle(layer)
   const features = collection?.features ?? []
+  const geometryFamily = geometryFamilyFromType(layer.geometry_type)
   const iconId = resolveIconId(style.iconName, style.iconLibrary, style.iconifyPrefix)
 
   const itemsByKey = new Map<string, LegendItemModel>()
 
   if (style.renderer === 'simple') {
+    const simpleLabel =
+      geometryFamily === 'point'
+        ? style.pointShape === 'icon'
+          ? `Icon (${style.iconLibrary})`
+          : 'Point symbol'
+        : geometryFamily === 'line'
+          ? 'Line symbol'
+          : geometryFamily === 'polygon'
+            ? 'Fill symbol'
+            : 'Default symbol'
     itemsByKey.set('simple', {
       key: 'simple',
-      label: style.pointShape === 'icon' ? `Icon (${style.iconLibrary})` : 'Default symbol',
+      label: simpleLabel,
       color: style.baseColor,
       count: 0,
-      iconId: style.pointShape === 'icon' ? iconId : undefined,
+      iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
     })
   } else if (style.renderer === 'uniqueValue') {
     for (const stop of style.uniqueStops) {
@@ -245,7 +258,7 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
         label: stop.value,
         color: stop.color,
         count: 0,
-        iconId: style.pointShape === 'icon' ? iconId : undefined,
+        iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
       })
     }
 
@@ -255,7 +268,7 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
       color: style.uniqueDefaultColor,
       count: 0,
       isDefault: true,
-      iconId: style.pointShape === 'icon' ? iconId : undefined,
+      iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
     })
   } else {
     for (const stop of style.classBreakStops) {
@@ -264,7 +277,7 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
         label: `${stop.min} - ${stop.max}`,
         color: stop.color,
         count: 0,
-        iconId: style.pointShape === 'icon' ? iconId : undefined,
+        iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
       })
     }
 
@@ -274,7 +287,7 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
       color: style.classBreakDefaultColor,
       count: 0,
       isDefault: true,
-      iconId: style.pointShape === 'icon' ? iconId : undefined,
+      iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
     })
   }
 
@@ -354,6 +367,7 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
   return {
     layerId: layer.id,
     layerName: layer.name,
+    geometryFamily,
     renderer: style.renderer,
     field: style.renderer === 'uniqueValue' ? style.uniqueField : style.renderer === 'classBreaks' ? style.classBreakField : undefined,
     pointShape: style.pointShape,

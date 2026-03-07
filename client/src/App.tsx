@@ -2808,6 +2808,7 @@ export default function App() {
         <LayerStyleDialog
           open={styleOpen}
           layerName={styleLayer?.name ?? null}
+          layerGeometryType={styleLayer?.geometry_type ?? null}
           fields={schemaFields}
           style={styleDraft}
           submitting={styleMutation.isPending}

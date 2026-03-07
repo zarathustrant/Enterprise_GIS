@@ -76,7 +76,7 @@ function paperStyle(mode: LegendMode) {
 }
 
 function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: string) {
-  if (model.pointShape === 'icon' && iconId) {
+  if (model.geometryFamily === 'point' && model.pointShape === 'icon' && iconId) {
     return (
       <Box
         component="img"
@@ -87,12 +87,27 @@ function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: str
     )
   }
 
+  if (model.geometryFamily === 'line') {
+    return (
+      <Box
+        sx={{
+          width: 18,
+          height: 3,
+          borderRadius: 999,
+          bgcolor: color,
+          border: '1px solid #111827',
+          flexShrink: 0,
+        }}
+      />
+    )
+  }
+
   return (
     <Box
       sx={{
         width: 16,
         height: 16,
-        borderRadius: model.pointShape === 'circle' ? '50%' : '4px',
+        borderRadius: model.geometryFamily === 'point' && model.pointShape === 'circle' ? '50%' : '4px',
         bgcolor: color,
         border: '1px solid #111827',
         flexShrink: 0,
