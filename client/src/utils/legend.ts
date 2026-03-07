@@ -1,7 +1,8 @@
 import type { Feature as GeoJsonFeature } from 'geojson'
-import type { FeatureCollection, Layer, LayerIconLibrary } from '../types/gis'
+import type { FeatureCollection, Layer, LayerIconLibrary, PolygonPatternStyle } from '../types/gis'
 import { resolveIconId } from './iconLibrary'
 import { geometryFamilyFromType, type GeometryFamily } from './geometry'
+import { normalizePolygonPattern, polygonPatternLabel } from './polygonPatterns'
 
 export type LegendMode = 'professional' | 'minimal' | 'analyst' | 'interactive' | 'presentation'
 
@@ -26,6 +27,9 @@ export interface LayerLegendModel {
   iconLibrary: LayerIconLibrary
   iconName: string
   iconId: string
+  polygonPattern: PolygonPatternStyle
+  polygonPatternColor: string
+  polygonPatternOpacity: number
   totalCount: number
   items: LegendItemModel[]
 }
@@ -56,6 +60,9 @@ interface ParsedStyle {
   iconLibrary: LayerIconLibrary
   iconName: string
   iconifyPrefix: string
+  polygonPattern: PolygonPatternStyle
+  polygonPatternColor: string
+  polygonPatternOpacity: number
 }
 
 function asStyle(layer: Layer): Record<string, unknown> {
@@ -97,6 +104,13 @@ function normalizeIconLibrary(value: unknown): LayerIconLibrary {
     return value
   }
   return 'maki'
+}
+
+function clamp01(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || Number.isNaN(value)) {
+    return fallback
+  }
+  return Math.max(0, Math.min(1, value))
 }
 
 function parseStyle(layer: Layer): ParsedStyle {
@@ -151,6 +165,9 @@ function parseStyle(layer: Layer): ParsedStyle {
     iconLibrary: normalizeIconLibrary(style.iconLibrary),
     iconName: typeof style.iconName === 'string' ? style.iconName : 'marker',
     iconifyPrefix: typeof style.iconifyPrefix === 'string' ? style.iconifyPrefix : 'maki',
+    polygonPattern: normalizePolygonPattern(style.polygonPattern),
+    polygonPatternColor: normalizeColor(style.polygonPatternColor, '#0f4c5c'),
+    polygonPatternOpacity: clamp01(style.polygonPatternOpacity, 0.65),
   }
 }
 
@@ -242,7 +259,9 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
         : geometryFamily === 'line'
           ? 'Line symbol'
           : geometryFamily === 'polygon'
-            ? 'Fill symbol'
+            ? style.polygonPattern === 'solid'
+              ? 'Fill symbol'
+              : `Fill (${polygonPatternLabel(style.polygonPattern)})`
             : 'Default symbol'
     itemsByKey.set('simple', {
       key: 'simple',
@@ -301,7 +320,7 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
           label: valueLabel || 'Other / empty',
           color: style.uniqueDefaultColor,
           count: 0,
-          iconId: style.pointShape === 'icon' ? iconId : undefined,
+          iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
         })
       } else {
         continue
@@ -374,6 +393,9 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
     iconLibrary: style.iconLibrary,
     iconName: style.iconName,
     iconId,
+    polygonPattern: style.polygonPattern,
+    polygonPatternColor: style.polygonPatternColor,
+    polygonPatternOpacity: style.polygonPatternOpacity,
     totalCount: features.length,
     items,
   }

@@ -113,6 +113,7 @@ import { ActivityFeed } from './components/ActivityFeed'
 import type { ActivityEvent, ActivityLevel } from './components/ActivityFeed'
 import { useAuthStore } from './store/auth'
 import type { LegendMode } from './utils/legend'
+import { normalizePolygonPattern } from './utils/polygonPatterns'
 import type {
   AsyncJob,
   AuthResponse,
@@ -271,6 +272,10 @@ const DEFAULT_STYLE_DRAFT: LayerStyleDraft = {
   opacityField: '',
   opacityMin: 0.2,
   opacityMax: 1,
+  polygonPattern: 'solid',
+  polygonPatternColor: '#0f4c5c',
+  polygonPatternOpacity: 0.65,
+  polygonPatternScale: 1,
   fillColorExpression: '',
   lineColorExpression: '',
   pointRadiusExpression: '',
@@ -413,6 +418,19 @@ function readStyle(layer: Layer): LayerStyleDraft {
     opacityField: typeof style?.opacityField === 'string' ? style.opacityField : '',
     opacityMin: typeof style?.opacityMin === 'number' ? style.opacityMin : DEFAULT_STYLE_DRAFT.opacityMin,
     opacityMax: typeof style?.opacityMax === 'number' ? style.opacityMax : DEFAULT_STYLE_DRAFT.opacityMax,
+    polygonPattern: normalizePolygonPattern(style?.polygonPattern),
+    polygonPatternColor:
+      typeof style?.polygonPatternColor === 'string'
+        ? style.polygonPatternColor
+        : DEFAULT_STYLE_DRAFT.polygonPatternColor,
+    polygonPatternOpacity:
+      typeof style?.polygonPatternOpacity === 'number'
+        ? Math.max(0, Math.min(1, style.polygonPatternOpacity))
+        : DEFAULT_STYLE_DRAFT.polygonPatternOpacity,
+    polygonPatternScale:
+      typeof style?.polygonPatternScale === 'number'
+        ? Math.max(0.25, Math.min(6, style.polygonPatternScale))
+        : DEFAULT_STYLE_DRAFT.polygonPatternScale,
     fillColorExpression: expressionToString(style?.fillColorExpression),
     lineColorExpression: expressionToString(style?.lineColorExpression),
     pointRadiusExpression: expressionToString(style?.pointRadiusExpression),
@@ -483,6 +501,10 @@ function toStylePayload(style: LayerStyleDraft): Record<string, unknown> {
     opacityField: style.opacityField,
     opacityMin: style.opacityMin,
     opacityMax: style.opacityMax,
+    polygonPattern: style.polygonPattern,
+    polygonPatternColor: style.polygonPatternColor,
+    polygonPatternOpacity: style.polygonPatternOpacity,
+    polygonPatternScale: style.polygonPatternScale,
     fillColorExpression: style.fillColorExpression,
     lineColorExpression: style.lineColorExpression,
     pointRadiusExpression: style.pointRadiusExpression,

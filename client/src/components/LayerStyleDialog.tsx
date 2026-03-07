@@ -20,6 +20,7 @@ import type { LayerField, LayerStyleDraft } from '../types/gis'
 import { IconPickerDialog } from './IconPickerDialog'
 import { ICON_LIBRARY_DEFINITIONS } from '../utils/iconLibrary'
 import { geometryFamilyFromType } from '../utils/geometry'
+import { POLYGON_PATTERN_OPTIONS } from '../utils/polygonPatterns'
 
 interface LayerStyleDialogProps {
   open: boolean
@@ -384,6 +385,78 @@ export function LayerStyleDialog({
                 />
               </Box>
             </>
+          )}
+
+          {showPolygonControls && (
+            <Box display="grid" gap={1.5}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                Polygon Fill Patterns
+              </Typography>
+              <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(4, minmax(0, 1fr))' }} gap={1.5}>
+                <TextField
+                  label="Fill pattern"
+                  value={style.polygonPattern}
+                  onChange={(event) =>
+                    onStyleChange({
+                      ...style,
+                      polygonPattern: event.target.value as LayerStyleDraft['polygonPattern'],
+                    })
+                  }
+                  size="small"
+                  select
+                  fullWidth
+                >
+                  {POLYGON_PATTERN_OPTIONS.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {option.label}
+                    </MenuItem>
+                  ))}
+                </TextField>
+                <TextField
+                  type="color"
+                  label="Pattern color"
+                  value={style.polygonPatternColor}
+                  onChange={(event) => onStyleChange({ ...style, polygonPatternColor: event.target.value })}
+                  size="small"
+                  fullWidth
+                  disabled={style.polygonPattern === 'solid'}
+                  InputLabelProps={{ shrink: true }}
+                />
+                <TextField
+                  label="Pattern opacity"
+                  value={style.polygonPatternOpacity}
+                  onChange={(event) =>
+                    onStyleChange({
+                      ...style,
+                      polygonPatternOpacity: clamp01(Number(event.target.value) || 0),
+                    })
+                  }
+                  size="small"
+                  type="number"
+                  fullWidth
+                  disabled={style.polygonPattern === 'solid'}
+                  inputProps={{ min: 0, max: 1, step: 0.05 }}
+                />
+                <TextField
+                  label="Pattern scale"
+                  value={style.polygonPatternScale}
+                  onChange={(event) =>
+                    onStyleChange({
+                      ...style,
+                      polygonPatternScale: Math.max(0.25, Math.min(6, Number(event.target.value) || 0.25)),
+                    })
+                  }
+                  size="small"
+                  type="number"
+                  fullWidth
+                  disabled={style.polygonPattern === 'solid'}
+                  inputProps={{ min: 0.25, max: 6, step: 0.25 }}
+                />
+              </Box>
+              <Typography variant="caption" color="text.secondary">
+                Includes free built-in styles: hatch, crosshatch, diagonal, dots, and grid.
+              </Typography>
+            </Box>
           )}
 
           <Box display="grid" gap={1.5}>

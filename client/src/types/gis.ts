@@ -63,6 +63,7 @@ export interface LayerField {
 
 export type LayerRendererType = 'simple' | 'uniqueValue' | 'classBreaks'
 export type LayerPointSymbol = 'circle' | 'square' | 'icon'
+export type PolygonPatternStyle = 'solid' | 'hatch' | 'crosshatch' | 'diagonal' | 'diagonalCross' | 'dots' | 'grid'
 export type LayerIconLibrary =
   | 'maki'
   | 'tabler'
@@ -119,6 +120,10 @@ export interface LayerStyleDraft {
   opacityField: string
   opacityMin: number
   opacityMax: number
+  polygonPattern: PolygonPatternStyle
+  polygonPatternColor: string
+  polygonPatternOpacity: number
+  polygonPatternScale: number
   fillColorExpression: string
   lineColorExpression: string
   pointRadiusExpression: string

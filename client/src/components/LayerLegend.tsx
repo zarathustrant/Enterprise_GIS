@@ -16,6 +16,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 import type { FeatureCollection, Layer } from '../types/gis'
 import { iconifySvgUrl } from '../utils/iconLibrary'
 import { buildLayerLegendModel, type LegendMode, type LayerLegendModel } from '../utils/legend'
+import { polygonPatternCss } from '../utils/polygonPatterns'
 
 interface LayerLegendProps {
   layers: Layer[]
@@ -102,6 +103,11 @@ function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: str
     )
   }
 
+  const polygonPatternStyle =
+    model.geometryFamily === 'polygon'
+      ? polygonPatternCss(model.polygonPattern, model.polygonPatternColor, model.polygonPatternOpacity)
+      : {}
+
   return (
     <Box
       sx={{
@@ -109,6 +115,8 @@ function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: str
         height: 16,
         borderRadius: model.geometryFamily === 'point' && model.pointShape === 'circle' ? '50%' : '4px',
         bgcolor: color,
+        backgroundImage: polygonPatternStyle.backgroundImage,
+        backgroundSize: polygonPatternStyle.backgroundSize,
         border: '1px solid #111827',
         flexShrink: 0,
       }}

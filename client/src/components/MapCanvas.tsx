@@ -3,11 +3,12 @@ import maplibregl from 'maplibre-gl'
 import MapboxDraw from '@mapbox/mapbox-gl-draw'
 import { GeoJsonLayer, IconLayer, TextLayer } from '@deck.gl/layers'
 import { MapboxOverlay } from '@deck.gl/mapbox'
-import { PathStyleExtension } from '@deck.gl/extensions'
+import { FillStyleExtension, PathStyleExtension } from '@deck.gl/extensions'
 import type { Feature as GeoJsonFeature, FeatureCollection as GeoJsonFeatureCollection, Geometry } from 'geojson'
-import type { FeatureCollection, Layer, LayerIconLibrary } from '../types/gis'
+import type { FeatureCollection, Layer, LayerIconLibrary, PolygonPatternStyle } from '../types/gis'
 import { iconifySvgUrl, resolveIconId } from '../utils/iconLibrary'
 import { filterFeatureCollectionByLegend } from '../utils/legend'
+import { getPolygonPatternAtlas, normalizePolygonPattern } from '../utils/polygonPatterns'
 
 interface ZoomRequest {
   layerId: string
@@ -89,6 +90,9 @@ interface LayerStyleEvaluator {
   getLineWidth: (feature: unknown) => number
   getDashArray: () => [number, number]
   lineDashEnabled: boolean
+  polygonPattern: PolygonPatternStyle
+  polygonPatternScale: number
+  polygonPatternColor: RgbaColor
   getLabelText: (feature: GeoJsonFeature) => string | null
   getLabelPriority: (feature: GeoJsonFeature) => number
   labelColor: RgbaColor
@@ -138,6 +142,11 @@ function hexToRgb(hex: string): [number, number, number] {
 
 function withAlpha(rgb: RgbColor, opacity: number): RgbaColor {
   return [rgb[0], rgb[1], rgb[2], Math.round(clampOpacity(opacity) * 255)]
+}
+
+function withUnitAlpha(rgb: RgbColor, opacity: number): RgbaColor {
+  const alpha = Math.max(0, Math.min(1, opacity))
+  return [rgb[0], rgb[1], rgb[2], Math.round(alpha * 255)]
 }
 
 function toNormalizedNumber(value: unknown): number | null {
@@ -427,6 +436,10 @@ function isPointGeometryType(type: Geometry['type']): boolean {
   return type === 'Point' || type === 'MultiPoint'
 }
 
+function isPolygonGeometryType(type: Geometry['type']): boolean {
+  return type === 'Polygon' || type === 'MultiPolygon'
+}
+
 function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
   const fallbackColor = palette[index % palette.length]
   const style = (layer.style ?? {}) as Record<string, unknown>
@@ -474,6 +487,10 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
   const opacityField = typeof style.opacityField === 'string' ? style.opacityField : ''
   const opacityMin = clampOpacity(style.opacityMin, 0.2)
   const opacityMax = Math.max(opacityMin, clampOpacity(style.opacityMax, 1))
+  const polygonPattern = normalizePolygonPattern(style.polygonPattern)
+  const polygonPatternScale = Math.max(0.25, Math.min(6, asNumber(style.polygonPatternScale, 1)))
+  const polygonPatternColorHex = asHexColor(style.polygonPatternColor, strokeColorHex)
+  const polygonPatternOpacity = Math.max(0, Math.min(1, asNumber(style.polygonPatternOpacity, 0.65)))
   const fillColorExpression = parseExpression(style.fillColorExpression)
   const lineColorExpression = parseExpression(style.lineColorExpression)
   const pointRadiusExpression = parseExpression(style.pointRadiusExpression)
@@ -503,6 +520,7 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
 
   const baseRgb = hexToRgb(baseColorHex)
   const strokeRgb = hexToRgb(strokeColorHex)
+  const polygonPatternRgb = hexToRgb(polygonPatternColorHex)
 
   const resolvedOpacity = (feature: unknown, fallbackOpacity: number): number => {
     let opacity = fallbackOpacity
@@ -619,6 +637,9 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
     getLineWidth: () => lineWidth,
     getDashArray: () => lineDashArray,
     lineDashEnabled: lineDashArray[1] > 0,
+    polygonPattern,
+    polygonPatternScale,
+    polygonPatternColor: withUnitAlpha(polygonPatternRgb, polygonPatternOpacity),
     getLabelText,
     getLabelPriority,
     labelColor,
@@ -1027,6 +1048,8 @@ export function MapCanvas({
     }
   }, [measurementMode, measurementVertices])
 
+  const polygonPatternAtlas = useMemo(() => getPolygonPatternAtlas(), [])
+
   const deckLayers = useMemo(() => {
     const builtLayers: Array<GeoJsonLayer | IconLayer | TextLayer> = []
 
@@ -1176,6 +1199,38 @@ export function MapCanvas({
         )
       }
 
+      if (polygonPatternAtlas && evaluator.polygonPattern !== 'solid') {
+        const polygonFeatures = filteredData.features.filter((feature) => {
+          const geometry = feature.geometry
+          return geometry ? isPolygonGeometryType(geometry.type) : false
+        })
+
+        if (polygonFeatures.length) {
+          builtLayers.push(
+            new GeoJsonLayer({
+              id: `layer-${layer.id}-pattern`,
+              data: { ...filteredData, features: polygonFeatures },
+              pickable: false,
+              stroked: false,
+              filled: true,
+              pointRadiusMinPixels: 0,
+              lineWidthMinPixels: 0,
+              getLineColor: [0, 0, 0, 0],
+              getFillColor: evaluator.polygonPatternColor,
+              getPointRadius: () => 0,
+              extensions: [new FillStyleExtension({ pattern: true })],
+              fillPatternAtlas: polygonPatternAtlas.atlas,
+              fillPatternMapping: polygonPatternAtlas.mapping,
+              fillPatternMask: true,
+              getFillPattern: () => evaluator.polygonPattern,
+              getFillPatternScale: () => evaluator.polygonPatternScale,
+              getFillPatternOffset: () => [0, 0],
+              parameters: { depthTest: false },
+            }),
+          )
+        }
+      }
+
       if (mapZoom >= evaluator.labelMinZoom && mapZoom <= evaluator.labelMaxZoom) {
         const labelData = filteredData.features
           .map((feature) => {
@@ -1259,7 +1314,7 @@ export function MapCanvas({
     }
 
     return builtLayers
-  }, [layers, visibleByLayerId, featureCollections, legendFilters, analysisOverlay, activeEditLayerId, measurementOverlay, mapZoom])
+  }, [layers, visibleByLayerId, featureCollections, legendFilters, analysisOverlay, activeEditLayerId, measurementOverlay, mapZoom, polygonPatternAtlas])
 
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) {
