@@ -535,7 +535,7 @@ export default function App() {
 
   const token = useAuthStore((state) => state.token)
   const user = useAuthStore((state) => state.user)
-  const setToken = useAuthStore((state) => state.setToken)
+  const setAuthTokens = useAuthStore((state) => state.setAuthTokens)
   const setUser = useAuthStore((state) => state.setUser)
   const logout = useAuthStore((state) => state.logout)
 
@@ -1723,7 +1723,7 @@ export default function App() {
   const analysisRunning = bufferMutation.isPending || intersectMutation.isPending || withinMutation.isPending
 
   const handleAuthenticated = (response: AuthResponse) => {
-    setToken(response.access_token)
+    setAuthTokens(response.access_token, response.refresh_token ?? null)
     setUser(response.user)
     queryClient.invalidateQueries()
     setAuthOpen(false)

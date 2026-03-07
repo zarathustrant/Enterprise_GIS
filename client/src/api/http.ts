@@ -1,3 +1,5 @@
+import { useAuthStore } from '../store/auth'
+
 export class ApiError extends Error {
   status: number
   data: unknown
@@ -10,6 +12,7 @@ export class ApiError extends Error {
 }
 
 const API_BASE = '/api/v1'
+let refreshInFlight: Promise<string | null> | null = null
 
 function headers(token?: string | null, init?: HeadersInit): Headers {
   const base = new Headers(init)
@@ -22,13 +25,87 @@ function headers(token?: string | null, init?: HeadersInit): Headers {
   return base
 }
 
-export async function apiRequest<T>(
-  path: string,
-  options: RequestInit = {},
-  token?: string | null,
-): Promise<T> {
-  const isFormData = options.body instanceof FormData
+function errorMessage(status: number, body: unknown): string {
+  if (typeof body === 'object' && body) {
+    if ('error' in body) {
+      return String((body as { error: unknown }).error)
+    }
+    if ('msg' in body) {
+      return String((body as { msg: unknown }).msg)
+    }
+    if ('message' in body) {
+      return String((body as { message: unknown }).message)
+    }
+  }
 
+  return `Request failed with status ${status}`
+}
+
+async function readResponseBody(response: Response): Promise<unknown> {
+  const contentType = response.headers.get('content-type') ?? ''
+  if (contentType.includes('application/json')) {
+    try {
+      return await response.json()
+    } catch {
+      return null
+    }
+  }
+
+  try {
+    return await response.text()
+  } catch {
+    return null
+  }
+}
+
+function isAuthPath(path: string): boolean {
+  return path.startsWith('/auth/')
+}
+
+async function refreshAccessToken(): Promise<string | null> {
+  const store = useAuthStore.getState()
+  const refreshToken = store.refreshToken
+  if (!refreshToken) {
+    return null
+  }
+
+  if (refreshInFlight) {
+    return refreshInFlight
+  }
+
+  refreshInFlight = (async () => {
+    const response = await fetch(`${API_BASE}/auth/refresh`, {
+      method: 'POST',
+      headers: headers(refreshToken),
+    })
+    const body = await readResponseBody(response)
+
+    if (!response.ok || typeof body !== 'object' || !body || !('access_token' in body)) {
+      store.logout()
+      return null
+    }
+
+    const accessToken = String((body as { access_token: unknown }).access_token)
+    if (!accessToken) {
+      store.logout()
+      return null
+    }
+
+    store.setToken(accessToken)
+    return accessToken
+  })().finally(() => {
+    refreshInFlight = null
+  })
+
+  return refreshInFlight
+}
+
+async function fetchJsonWithAuth(
+  path: string,
+  options: RequestInit,
+  token?: string | null,
+): Promise<{ response: Response; body: unknown }> {
+  const isFormData = options.body instanceof FormData
   const requestHeaders = headers(token, options.headers)
 
   if (!isFormData && !requestHeaders.has('Content-Type')) {
@@ -39,22 +116,32 @@ export async function apiRequest<T>(
     ...options,
     headers: requestHeaders,
   })
+  const body = await readResponseBody(response)
 
-  const contentType = response.headers.get('content-type') ?? ''
-  const body = contentType.includes('application/json')
-    ? await response.json()
-    : await response.text()
+  return { response, body }
+}
 
-  if (!response.ok) {
-    const message =
-      typeof body === 'object' && body && 'error' in body
-        ? String((body as { error: unknown }).error)
-        : `Request failed with status ${response.status}`
+export async function apiRequest<T>(
+  path: string,
+  options: RequestInit = {},
+  token?: string | null,
+): Promise<T> {
+  const requestedToken = token ?? useAuthStore.getState().token
+  let result = await fetchJsonWithAuth(path, options, requestedToken)
 
-    throw new ApiError(message, response.status, body)
+  if (!result.response.ok && result.response.status === 401 && !isAuthPath(path) && requestedToken) {
+    const refreshedToken = await refreshAccessToken()
+    if (refreshedToken) {
+      result = await fetchJsonWithAuth(path, options, refreshedToken)
+    }
   }
 
-  return body as T
+  if (!result.response.ok) {
+    const message = errorMessage(result.response.status, result.body)
+    throw new ApiError(message, result.response.status, result.body)
+  }
+
+  return result.body as T
 }
 
 export async function apiBlobRequest(
@@ -62,21 +149,25 @@ export async function apiBlobRequest(
   options: RequestInit = {},
   token?: string | null,
 ): Promise<Blob> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const requestedToken = token ?? useAuthStore.getState().token
+  let response = await fetch(`${API_BASE}${path}`, {
     ...options,
-    headers: headers(token, options.headers),
+    headers: headers(requestedToken, options.headers),
   })
 
-  if (!response.ok) {
-    const contentType = response.headers.get('content-type') ?? ''
-    const body = contentType.includes('application/json')
-      ? await response.json()
-      : await response.text()
+  if (!response.ok && response.status === 401 && !isAuthPath(path) && requestedToken) {
+    const refreshedToken = await refreshAccessToken()
+    if (refreshedToken) {
+      response = await fetch(`${API_BASE}${path}`, {
+        ...options,
+        headers: headers(refreshedToken, options.headers),
+      })
+    }
+  }
 
-    const message =
-      typeof body === 'object' && body && 'error' in body
-        ? String((body as { error: unknown }).error)
-        : `Request failed with status ${response.status}`
+  if (!response.ok) {
+    const body = await readResponseBody(response)
+    const message = errorMessage(response.status, body)
 
     throw new ApiError(message, response.status, body)
   }
