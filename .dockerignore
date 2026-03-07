@@ -1,0 +1,10 @@
+.git
+.gitignore
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+client/node_modules/
+client/dist/
+node_modules/

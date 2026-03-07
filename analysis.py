@@ -1,7 +1,9 @@
 import json
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, current_app, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from db import get_db
+from enterprise_utils import create_async_job, log_audit, serialize_job
+from job_queue import enqueue_job
 
 analysis_bp = Blueprint('analysis', __name__)
 
@@ -26,8 +28,23 @@ def _serialize_layer(r):
 def _check_layer(cur, layer_id, user_id):
     """Return layer row if accessible, else None."""
     cur.execute(
-        "SELECT id, name FROM layers WHERE id = %s AND (is_public = TRUE OR created_by = %s::uuid)",
-        (layer_id, user_id)
+        """
+        SELECT l.id, l.name
+        FROM layers l
+        WHERE l.id = %s::uuid
+          AND (
+            l.is_public = TRUE
+            OR l.created_by = %s::uuid
+            OR EXISTS (
+              SELECT 1
+              FROM workspace_layers wl
+              JOIN workspace_members wm ON wm.workspace_id = wl.workspace_id
+              WHERE wl.layer_id = l.id
+                AND wm.user_id = %s::uuid
+            )
+          )
+        """,
+        (layer_id, user_id, user_id)
     )
     return cur.fetchone()
 
@@ -61,6 +78,7 @@ def buffer():
     distance  = data.get('distance')   # metres
     out_name  = (data.get('output_name') or 'Buffer').strip()
     user_id   = get_jwt_identity()
+    run_async = bool(data.get('async')) or request.args.get('async') == 'true'
 
     if not layer_id or distance is None:
         return jsonify({'error': 'layer_id and distance are required'}), 400
@@ -78,6 +96,33 @@ def buffer():
     if not src:
         return jsonify({'error': 'Source layer not found'}), 404
 
+    if run_async:
+        job = create_async_job(
+            cur,
+            job_type='analysis.buffer',
+            payload={
+                'layer_id': layer_id,
+                'distance': distance,
+                'output_name': out_name,
+            },
+            created_by=user_id,
+        )
+        queued = enqueue_job(
+            current_app.config.get('REDIS_URL', 'redis://localhost:6379/0'),
+            current_app.config.get('JOB_QUEUE_NAME', 'enterprise_gis_jobs'),
+            str(job['id']),
+        )
+        log_audit(
+            cur,
+            user_id=user_id,
+            action='analysis_buffer_queued',
+            entity_type='async_job',
+            entity_id=str(job['id']),
+            payload={'layer_id': layer_id, 'distance': distance, 'queued': queued},
+        )
+        db.commit()
+        return jsonify({**serialize_job(job), 'queued': queued}), 202
+
     out_id = _new_layer(
         cur, out_name,
         f'Buffer {distance} m of "{src["name"]}"', 'Polygon', user_id
@@ -94,6 +139,15 @@ def buffer():
         WHERE layer_id = %s
     """, (out_id, distance, user_id, layer_id))
     count = cur.rowcount
+    log_audit(
+        cur,
+        user_id=user_id,
+        action='analysis_buffer_completed',
+        entity_type='layer',
+        entity_id=str(out_id),
+        layer_id=str(out_id),
+        payload={'source_layer_id': layer_id, 'count': count, 'distance': distance},
+    )
     db.commit()
 
     return jsonify({'layer': _serialize_layer(_fetch_layer_full(cur, out_id)), 'count': count}), 201
@@ -109,6 +163,7 @@ def intersect():
     layer_b  = data.get('layer_b')
     out_name = (data.get('output_name') or 'Intersection').strip()
     user_id  = get_jwt_identity()
+    run_async = bool(data.get('async')) or request.args.get('async') == 'true'
 
     if not layer_a or not layer_b:
         return jsonify({'error': 'layer_a and layer_b are required'}), 400
@@ -119,6 +174,29 @@ def intersect():
     for lid in (layer_a, layer_b):
         if not _check_layer(cur, lid, user_id):
             return jsonify({'error': f'Layer {lid} not found'}), 404
+
+    if run_async:
+        job = create_async_job(
+            cur,
+            job_type='analysis.intersect',
+            payload={'layer_a': layer_a, 'layer_b': layer_b, 'output_name': out_name},
+            created_by=user_id,
+        )
+        queued = enqueue_job(
+            current_app.config.get('REDIS_URL', 'redis://localhost:6379/0'),
+            current_app.config.get('JOB_QUEUE_NAME', 'enterprise_gis_jobs'),
+            str(job['id']),
+        )
+        log_audit(
+            cur,
+            user_id=user_id,
+            action='analysis_intersect_queued',
+            entity_type='async_job',
+            entity_id=str(job['id']),
+            payload={'layer_a': layer_a, 'layer_b': layer_b, 'queued': queued},
+        )
+        db.commit()
+        return jsonify({**serialize_job(job), 'queued': queued}), 202
 
     out_id = _new_layer(cur, out_name, 'Spatial intersection', None, user_id)
 
@@ -135,6 +213,15 @@ def intersect():
           AND NOT ST_IsEmpty(ST_Intersection(a.geometry, b.geometry))
     """, (out_id, user_id, layer_a, layer_b))
     count = cur.rowcount
+    log_audit(
+        cur,
+        user_id=user_id,
+        action='analysis_intersect_completed',
+        entity_type='layer',
+        entity_id=str(out_id),
+        layer_id=str(out_id),
+        payload={'layer_a': layer_a, 'layer_b': layer_b, 'count': count},
+    )
     db.commit()
 
     return jsonify({'layer': _serialize_layer(_fetch_layer_full(cur, out_id)), 'count': count}), 201
@@ -150,6 +237,7 @@ def within():
     layer_id = data.get('layer_id')
     polygon  = data.get('polygon')   # GeoJSON geometry object
     user_id  = get_jwt_identity()
+    run_async = bool(data.get('async')) or request.args.get('async') == 'true'
 
     if not layer_id or not polygon:
         return jsonify({'error': 'layer_id and polygon are required'}), 400
@@ -159,6 +247,29 @@ def within():
 
     if not _check_layer(cur, layer_id, user_id):
         return jsonify({'error': 'Layer not found'}), 404
+
+    if run_async:
+        job = create_async_job(
+            cur,
+            job_type='analysis.within',
+            payload={'layer_id': layer_id, 'polygon': polygon},
+            created_by=user_id,
+        )
+        queued = enqueue_job(
+            current_app.config.get('REDIS_URL', 'redis://localhost:6379/0'),
+            current_app.config.get('JOB_QUEUE_NAME', 'enterprise_gis_jobs'),
+            str(job['id']),
+        )
+        log_audit(
+            cur,
+            user_id=user_id,
+            action='analysis_within_queued',
+            entity_type='async_job',
+            entity_id=str(job['id']),
+            payload={'layer_id': layer_id, 'queued': queued},
+        )
+        db.commit()
+        return jsonify({**serialize_job(job), 'queued': queued}), 202
 
     cur.execute("""
         SELECT id, ST_AsGeoJSON(geometry) AS geometry, properties
@@ -174,5 +285,17 @@ def within():
         'geometry':   json.loads(r['geometry']),
         'properties': r['properties'],
     } for r in cur.fetchall()]
+
+    if user_id:
+        log_audit(
+            cur,
+            user_id=user_id,
+            action='analysis_within_completed',
+            entity_type='layer',
+            entity_id=str(layer_id),
+            layer_id=str(layer_id),
+            payload={'count': len(features)},
+        )
+        db.commit()
 
     return jsonify({'type': 'FeatureCollection', 'features': features})

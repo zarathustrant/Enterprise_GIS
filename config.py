@@ -17,3 +17,6 @@ class Config:
         'DATABASE_URL',
         'postgresql://postgres:postgres@localhost:5432/enterprise_gis'
     )
+    FRONTEND_URL = os.environ.get('FRONTEND_URL')
+    REDIS_URL = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+    JOB_QUEUE_NAME = os.environ.get('JOB_QUEUE_NAME', 'enterprise_gis_jobs')

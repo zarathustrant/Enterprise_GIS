@@ -7,13 +7,39 @@ Supports real-time mapping, spatial querying, JWT authentication, and layer mana
 
 | Layer | Technology |
 |---|---|
-| Frontend | Leaflet.js, vanilla JS (SPA) |
+| Frontend | React + TypeScript + Vite, MapLibre GL JS, deck.gl, MUI |
 | Backend | Flask, Flask-JWT-Extended |
 | Database | PostgreSQL + PostGIS |
 | Auth | OAuth2-ready JWT (access + refresh tokens) |
-| Deployment | Gunicorn, Docker-ready |
+| State & Data | Zustand, TanStack Query |
+| Deployment | Gunicorn + Docker Compose |
 
 ## Quick Start
+
+### Docker (recommended)
+
+```bash
+docker compose up --build
+```
+
+- Frontend: `http://localhost:5173`
+- API health: `http://localhost:5001/health`
+- API root (`http://localhost:5001/`) redirects to frontend in Docker mode
+
+### Advanced GIS UI (now available)
+
+After sign-in, use these controls in the app:
+
+- `Palette` on a layer: advanced symbology (unique values, class breaks, labels, visual variables, line dash, edit rules).
+- `Table` on a layer: advanced attribute table (server query/sort/pagination, bulk update, feature history, rollback).
+- `Columns` on a layer: field and domain management (field types, defaults, coded/range domains).
+- `Settings` on a layer: advanced layer operations (group/z-order, share links, joins).
+- Top bar `Bookmark` icon: save and restore map bookmarks.
+- Top bar `History` icon: monitor async jobs.
+
+If you still see an old UI, make sure you opened `http://localhost:5173` and hard-refresh the browser.
+
+### Local Python only (legacy path)
 
 **1. Set up environment**
 ```bash
@@ -25,6 +51,7 @@ cp .env.example .env
 ```bash
 createdb enterprise_gis
 psql enterprise_gis < database/migrations/001_initial.sql
+psql enterprise_gis < database/migrations/002_layer_schema.sql
 ```
 
 **3. Install dependencies and run**
@@ -33,7 +60,7 @@ pip install -r requirements.txt
 python app.py
 ```
 
-Open `http://localhost:5000` — you'll see the map viewer with a login prompt.
+Open `http://localhost:5000`.
 
 ## API Reference
 
@@ -53,6 +80,18 @@ Open `http://localhost:5000` — you'll see the map viewer with a login prompt.
 | `GET`    | `/{id}`      | Optional | Get layer metadata |
 | `PUT`    | `/{id}`      | Required | Update layer |
 | `DELETE` | `/{id}`      | Required | Delete layer |
+
+### Layer Schema  (`/api/v1/layers/{layer_id}`)
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| `GET` | `/fields` | Optional | List layer fields |
+| `POST` | `/fields` | Required (owner) | Add field to layer schema |
+| `PUT` | `/fields/{field_id}` | Required (owner) | Update field definition |
+| `DELETE` | `/fields/{field_id}` | Required (owner) | Delete field definition |
+| `GET` | `/domains` | Optional | List layer domains |
+| `POST` | `/domains` | Required (owner) | Create coded/range domain |
+| `PUT` | `/domains/{domain_id}` | Required (owner) | Update domain |
+| `DELETE` | `/domains/{domain_id}` | Required (owner) | Delete domain |
 
 ### Features  (`/api/v1/layers/{layer_id}/features`)
 | Method | Path | Auth | Description |
@@ -83,11 +122,15 @@ db.py               Per-request psycopg2 connection (Flask g)
 auth.py             /api/v1/auth blueprint
 layers.py           /api/v1/layers blueprint
 features.py         /api/v1/layers/<id>/features blueprint
+analysis.py         /api/v1/analysis blueprint
+ingestion.py        /api/v1/layers/<id>/upload blueprint
+client/             React + Vite frontend (MapLibre + deck.gl)
 templates/
-  index.html        Map viewer SPA (Leaflet)
+  index.html        Legacy Flask template UI
 database/
   migrations/
     001_initial.sql PostGIS schema (users, roles, layers, features)
+docker-compose.yml  Docker orchestration (client + api + postgis)
 docs/
   enterprise-gis.md Full architecture & roadmap documentation
 ```

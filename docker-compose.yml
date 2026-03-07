@@ -1,0 +1,86 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    container_name: enterprise-gis-db
+    environment:
+      POSTGRES_DB: enterprise_gis
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - '5432:5432'
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./database/migrations/001_initial.sql:/docker-entrypoint-initdb.d/001_initial.sql:ro
+      - ./database/migrations/002_layer_schema.sql:/docker-entrypoint-initdb.d/002_layer_schema.sql:ro
+      - ./database/migrations/003_enterprise_capabilities.sql:/docker-entrypoint-initdb.d/003_enterprise_capabilities.sql:ro
+      - ./database/migrations/004_collaboration_workflows.sql:/docker-entrypoint-initdb.d/004_collaboration_workflows.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d enterprise_gis']
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: enterprise-gis-redis
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enterprise-gis-api
+    environment:
+      SECRET_KEY: change-this-to-a-random-secret
+      JWT_SECRET_KEY: change-this-to-another-random-secret
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/enterprise_gis
+      FRONTEND_URL: http://localhost:5173
+      REDIS_URL: redis://redis:6379/0
+      JOB_QUEUE_NAME: enterprise_gis_jobs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - '5001:5000'
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enterprise-gis-worker
+    command: ["python", "worker.py"]
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/enterprise_gis
+      REDIS_URL: redis://redis:6379/0
+      JOB_QUEUE_NAME: enterprise_gis_jobs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: enterprise-gis-client
+    environment:
+      VITE_API_PROXY_TARGET: http://api:5000
+    depends_on:
+      - api
+    ports:
+      - '5173:5173'
+    volumes:
+      - ./client:/app
+      - /app/node_modules
+
+volumes:
+  pg_data:

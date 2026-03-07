@@ -2,6 +2,13 @@ import json
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from db import get_db
+from field_schema import (
+    FieldSchemaError,
+    fetch_layer_fields,
+    parse_layer_access,
+    validate_properties_with_fields,
+)
+from enterprise_utils import add_feature_history, invalidate_layer_tile_cache, log_audit
 
 ingestion_bp = Blueprint('ingestion', __name__)
 
@@ -13,12 +20,24 @@ def upload_geojson(layer_id):
     db = get_db()
     cur = db.cursor()
 
-    cur.execute(
-        "SELECT id FROM layers WHERE id = %s AND (is_public = TRUE OR created_by = %s::uuid)",
-        (layer_id, user_id)
-    )
-    if not cur.fetchone():
+    access = parse_layer_access(cur, layer_id, user_id)
+    if not access.exists:
         return jsonify({'error': 'Layer not found'}), 404
+    if not access.is_owner:
+        cur.execute(
+            """
+            SELECT 1
+            FROM workspace_layers wl
+            JOIN workspace_members wm ON wm.workspace_id = wl.workspace_id
+            WHERE wl.layer_id = %s::uuid
+              AND wm.user_id = %s::uuid
+              AND wm.role IN ('owner', 'editor', 'admin')
+            LIMIT 1
+            """,
+            (layer_id, user_id),
+        )
+        if not cur.fetchone():
+            return jsonify({'error': 'Layer not found or permission denied'}), 404
 
     # Accept multipart file upload or raw JSON body
     if request.files.get('file'):
@@ -42,6 +61,7 @@ def upload_geojson(layer_id):
     else:
         return jsonify({'error': 'Root type must be Feature or FeatureCollection'}), 400
 
+    layer_fields = fetch_layer_fields(cur, layer_id)
     inserted = errors = 0
     for feature in features:
         geom = feature.get('geometry')
@@ -49,18 +69,47 @@ def upload_geojson(layer_id):
         if not geom:
             errors += 1
             continue
+
         try:
             cur.execute("SAVEPOINT sp")
+            prepared_props = validate_properties_with_fields(layer_fields, props)
             cur.execute("""
                 INSERT INTO features (layer_id, geometry, properties, created_by)
                 VALUES (%s, ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), %s, %s::uuid)
-            """, (layer_id, json.dumps(geom), json.dumps(props), user_id))
+                RETURNING id, version, ST_AsGeoJSON(geometry) AS geometry, properties
+            """, (layer_id, json.dumps(geom), json.dumps(prepared_props), user_id))
+            inserted_row = cur.fetchone()
+            add_feature_history(
+                cur,
+                feature_id=str(inserted_row['id']),
+                layer_id=layer_id,
+                version=int(inserted_row['version']),
+                geometry_geojson=inserted_row['geometry'],
+                properties=inserted_row['properties'],
+                change_type='create',
+                changed_by=user_id,
+            )
             cur.execute("RELEASE SAVEPOINT sp")
             inserted += 1
+        except FieldSchemaError:
+            cur.execute("ROLLBACK TO SAVEPOINT sp")
+            cur.execute("RELEASE SAVEPOINT sp")
+            errors += 1
         except Exception:
             cur.execute("ROLLBACK TO SAVEPOINT sp")
             cur.execute("RELEASE SAVEPOINT sp")
             errors += 1
 
+    if inserted:
+        invalidate_layer_tile_cache(cur, layer_id)
+    log_audit(
+        cur,
+        user_id=user_id,
+        action='layer_upload_geojson',
+        entity_type='layer',
+        entity_id=layer_id,
+        layer_id=layer_id,
+        payload={'inserted': inserted, 'errors': errors},
+    )
     db.commit()
     return jsonify({'inserted': inserted, 'errors': errors})
