@@ -18,9 +18,15 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import AddIcon from '@mui/icons-material/Add'
 import type { LayerField, LayerStyleDraft } from '../types/gis'
 import { IconPickerDialog } from './IconPickerDialog'
+import { PatternPickerDialog } from './PatternPickerDialog'
+import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 import { ICON_LIBRARY_DEFINITIONS } from '../utils/iconLibrary'
 import { geometryFamilyFromType } from '../utils/geometry'
-import { POLYGON_PATTERN_OPTIONS } from '../utils/polygonPatterns'
+import {
+  polygonPatternLabel,
+  POLYGON_PATTERN_LIBRARY_OPTIONS,
+  resolvePolygonPatternName,
+} from '../utils/polygonPatterns'
 
 interface LayerStyleDialogProps {
   open: boolean
@@ -30,6 +36,7 @@ interface LayerStyleDialogProps {
   style: LayerStyleDraft
   submitting: boolean
   error: string | null
+  workMode?: boolean
   onStyleChange: (next: LayerStyleDraft) => void
   onClose: () => void
   onSubmit: () => void
@@ -90,11 +97,13 @@ export function LayerStyleDialog({
   style,
   submitting,
   error,
+  workMode = false,
   onStyleChange,
   onClose,
   onSubmit,
 }: LayerStyleDialogProps) {
   const [iconPickerOpen, setIconPickerOpen] = useState(false)
+  const [patternPickerOpen, setPatternPickerOpen] = useState(false)
 
   const handleClose = () => {
     if (!submitting) {
@@ -118,7 +127,14 @@ export function LayerStyleDialog({
 
   return (
     <>
-      <Dialog open={open} onClose={handleClose} fullWidth maxWidth="md">
+      <Dialog
+        open={open}
+        onClose={handleClose}
+        fullWidth
+        maxWidth="md"
+        {...(workMode ? WORK_MODE_DIALOG_PROPS : {})}
+        sx={workMode ? workModeDialogSx('min(860px, 96vw)') : normalModeDialogSx('min(860px, 96vw)')}
+      >
       <DialogTitle>Layer Style</DialogTitle>
       <DialogContent>
         <Box display="grid" gap={2} pt={0.5}>
@@ -394,24 +410,40 @@ export function LayerStyleDialog({
               </Typography>
               <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(4, minmax(0, 1fr))' }} gap={1.5}>
                 <TextField
-                  label="Fill pattern"
-                  value={style.polygonPattern}
+                  label="Pattern library"
+                  value={style.polygonPatternLibrary}
                   onChange={(event) =>
                     onStyleChange({
                       ...style,
-                      polygonPattern: event.target.value as LayerStyleDraft['polygonPattern'],
+                      polygonPatternLibrary: event.target.value as LayerStyleDraft['polygonPatternLibrary'],
+                      polygonPattern: resolvePolygonPatternName(
+                        event.target.value as LayerStyleDraft['polygonPatternLibrary'],
+                        style.polygonPattern,
+                      ),
                     })
                   }
                   size="small"
                   select
                   fullWidth
                 >
-                  {POLYGON_PATTERN_OPTIONS.map((option) => (
+                  {POLYGON_PATTERN_LIBRARY_OPTIONS.map((option) => (
                     <MenuItem key={option.value} value={option.value}>
                       {option.label}
                     </MenuItem>
                   ))}
                 </TextField>
+                <Stack direction="row" spacing={1} alignItems="center" sx={{ gridColumn: { xs: 'span 1', md: 'span 2' } }}>
+                  <TextField
+                    label="Pattern"
+                    value={polygonPatternLabel(style.polygonPatternLibrary, style.polygonPattern)}
+                    size="small"
+                    fullWidth
+                    InputProps={{ readOnly: true }}
+                  />
+                  <Button variant="outlined" onClick={() => setPatternPickerOpen(true)}>
+                    Browse
+                  </Button>
+                </Stack>
                 <TextField
                   type="color"
                   label="Pattern color"
@@ -419,7 +451,7 @@ export function LayerStyleDialog({
                   onChange={(event) => onStyleChange({ ...style, polygonPatternColor: event.target.value })}
                   size="small"
                   fullWidth
-                  disabled={style.polygonPattern === 'solid'}
+                  disabled={style.polygonPatternLibrary === 'builtin' && style.polygonPattern === 'solid'}
                   InputLabelProps={{ shrink: true }}
                 />
                 <TextField
@@ -434,7 +466,7 @@ export function LayerStyleDialog({
                   size="small"
                   type="number"
                   fullWidth
-                  disabled={style.polygonPattern === 'solid'}
+                  disabled={style.polygonPatternLibrary === 'builtin' && style.polygonPattern === 'solid'}
                   inputProps={{ min: 0, max: 1, step: 0.05 }}
                 />
                 <TextField
@@ -449,12 +481,12 @@ export function LayerStyleDialog({
                   size="small"
                   type="number"
                   fullWidth
-                  disabled={style.polygonPattern === 'solid'}
+                  disabled={style.polygonPatternLibrary === 'builtin' && style.polygonPattern === 'solid'}
                   inputProps={{ min: 0.25, max: 6, step: 0.25 }}
                 />
               </Box>
               <Typography variant="caption" color="text.secondary">
-                Includes free built-in styles: hatch, crosshatch, diagonal, dots, and grid.
+                Choose from built-in hatch styles or Hero Patterns (free MIT library), with live visual browser.
               </Typography>
             </Box>
           )}
@@ -981,6 +1013,7 @@ export function LayerStyleDialog({
       </Dialog>
       <IconPickerDialog
         open={iconPickerOpen}
+        workMode={workMode}
         library={style.iconLibrary}
         iconifyPrefix={style.iconifyPrefix}
         selectedIcon={style.iconName}
@@ -992,6 +1025,25 @@ export function LayerStyleDialog({
         }}
         onIconifyPrefixChange={(prefix) => onStyleChange({ ...style, iconifyPrefix: prefix })}
       />
+      {patternPickerOpen && (
+        <PatternPickerDialog
+          open={patternPickerOpen}
+          workMode={workMode}
+          library={style.polygonPatternLibrary}
+          selectedPattern={style.polygonPattern}
+          color={style.polygonPatternColor}
+          opacity={style.polygonPatternOpacity}
+          onClose={() => setPatternPickerOpen(false)}
+          onSelect={(library, patternName) => {
+            onStyleChange({
+              ...style,
+              polygonPatternLibrary: library,
+              polygonPattern: patternName,
+            })
+            setPatternPickerOpen(false)
+          }}
+        />
+      )}
     </>
   )
 }

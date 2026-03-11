@@ -20,7 +20,7 @@ test('auth + layer + feature smoke flow', async ({ page, request }) => {
   await page.getByLabel('Layer name').fill('Smoke Layer')
   await page.getByRole('button', { name: 'Create' }).click()
 
-  await expect(page.getByText('Smoke Layer', { exact: true })).toBeVisible()
+  await expect(page.locator('nav').getByText('Smoke Layer', { exact: true }).first()).toBeVisible()
 
   const token = await page.evaluate(() => {
     const raw = localStorage.getItem('enterprise-gis-auth')

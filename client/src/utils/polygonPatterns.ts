@@ -1,27 +1,61 @@
-import type { PolygonPatternStyle } from '../types/gis'
+import * as heroPatterns from 'hero-patterns'
+import type { PolygonPatternLibrary, PolygonPatternStyle } from '../types/gis'
 
-export const POLYGON_PATTERN_OPTIONS: Array<{ value: PolygonPatternStyle; label: string }> = [
-  { value: 'solid', label: 'Solid fill' },
-  { value: 'hatch', label: 'Hatch' },
-  { value: 'crosshatch', label: 'Crosshatch' },
-  { value: 'diagonal', label: 'Diagonal hatch' },
-  { value: 'diagonalCross', label: 'Diagonal cross' },
-  { value: 'dots', label: 'Dotted' },
-  { value: 'grid', label: 'Grid' },
+export interface PatternOption {
+  name: string
+  label: string
+  keywords: string[]
+}
+
+export interface PatternAtlasSpec {
+  atlas: HTMLCanvasElement | string
+  mapping: Record<string, { x: number; y: number; width: number; height: number; mask: boolean }>
+}
+
+export const POLYGON_PATTERN_LIBRARY_OPTIONS: Array<{ value: PolygonPatternLibrary; label: string }> = [
+  { value: 'builtin', label: 'Built-in Hatch Library' },
+  { value: 'hero', label: 'Hero Patterns (MIT)' },
 ]
 
-const PATTERN_LOOKUP = new Set<PolygonPatternStyle>(POLYGON_PATTERN_OPTIONS.map((item) => item.value))
+export const BUILTIN_PATTERN_OPTIONS: Array<{ value: PolygonPatternStyle; label: string; keywords: string[] }> = [
+  { value: 'solid', label: 'Solid fill', keywords: ['solid', 'plain'] },
+  { value: 'hatch', label: 'Hatch', keywords: ['hatch', 'line', 'horizontal'] },
+  { value: 'crosshatch', label: 'Crosshatch', keywords: ['cross', 'grid', 'hatch'] },
+  { value: 'diagonal', label: 'Diagonal hatch', keywords: ['diagonal', 'slash'] },
+  { value: 'diagonalCross', label: 'Diagonal cross', keywords: ['diagonal', 'cross', 'x'] },
+  { value: 'dots', label: 'Dotted', keywords: ['dot', 'point', 'stipple'] },
+  { value: 'grid', label: 'Grid', keywords: ['grid', 'square', 'net'] },
+]
 
-export function normalizePolygonPattern(value: unknown): PolygonPatternStyle {
-  if (typeof value === 'string' && PATTERN_LOOKUP.has(value as PolygonPatternStyle)) {
-    return value as PolygonPatternStyle
-  }
-  return 'solid'
+const BUILTIN_PATTERN_LOOKUP = new Set<PolygonPatternStyle>(BUILTIN_PATTERN_OPTIONS.map((item) => item.value))
+
+function toTitleCase(token: string): string {
+  return token
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[-_]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^./, (char) => char.toUpperCase())
 }
 
-export function polygonPatternLabel(pattern: PolygonPatternStyle): string {
-  return POLYGON_PATTERN_OPTIONS.find((item) => item.value === pattern)?.label ?? 'Solid fill'
-}
+type HeroPatternFn = (color?: string, opacity?: number) => string
+
+const HERO_PATTERNS: Array<{ name: string; fn: HeroPatternFn; label: string; keywords: string[] }> = Object.entries(
+  heroPatterns as Record<string, unknown>,
+)
+  .filter((entry): entry is [string, HeroPatternFn] => typeof entry[1] === 'function')
+  .map(([name, fn]) => {
+    const normalized = name.trim()
+    const label = toTitleCase(normalized)
+    const keywords = label
+      .toLowerCase()
+      .split(/\s+/)
+      .filter(Boolean)
+    return { name: normalized, fn, label, keywords }
+  })
+  .sort((a, b) => a.label.localeCompare(b.label))
+
+const HERO_PATTERN_MAP = new Map(HERO_PATTERNS.map((item) => [item.name, item]))
 
 function asHexColor(value: string, fallback: string): string {
   const token = value.trim()
@@ -30,7 +64,7 @@ function asHexColor(value: string, fallback: string): string {
 
 function hexToRgb(hex: string): [number, number, number] {
   const cleaned = hex.replace('#', '')
-  const chunk = cleaned.length === 3 ? cleaned.split('').map((c) => `${c}${c}`).join('') : cleaned
+  const chunk = cleaned.length === 3 ? cleaned.split('').map((char) => `${char}${char}`).join('') : cleaned
   const value = Number.parseInt(chunk, 16)
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255]
 }
@@ -42,7 +76,58 @@ function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value))
 }
 
-export function polygonPatternCss(
+export function normalizePolygonPatternLibrary(value: unknown): PolygonPatternLibrary {
+  if (value === 'hero') {
+    return 'hero'
+  }
+  return 'builtin'
+}
+
+export function inferPolygonPatternLibraryFromName(name: string): PolygonPatternLibrary {
+  const trimmed = name.trim()
+  if (!trimmed) {
+    return 'builtin'
+  }
+  if (BUILTIN_PATTERN_LOOKUP.has(trimmed as PolygonPatternStyle)) {
+    return 'builtin'
+  }
+  if (HERO_PATTERN_MAP.has(trimmed)) {
+    return 'hero'
+  }
+  return 'builtin'
+}
+
+export function normalizePolygonPattern(value: unknown): PolygonPatternStyle {
+  if (typeof value === 'string' && BUILTIN_PATTERN_LOOKUP.has(value as PolygonPatternStyle)) {
+    return value as PolygonPatternStyle
+  }
+  return 'solid'
+}
+
+export function resolvePolygonPatternName(library: PolygonPatternLibrary, patternName: string): string {
+  const trimmed = patternName.trim()
+  if (!trimmed) {
+    return library === 'hero' ? HERO_PATTERNS[0]?.name ?? 'jigsaw' : 'solid'
+  }
+
+  if (library === 'hero') {
+    return HERO_PATTERN_MAP.has(trimmed) ? trimmed : HERO_PATTERNS[0]?.name ?? 'jigsaw'
+  }
+
+  return normalizePolygonPattern(trimmed)
+}
+
+export function polygonPatternLabel(library: PolygonPatternLibrary, patternName: string): string {
+  if (library === 'hero') {
+    const hero = HERO_PATTERN_MAP.get(patternName)
+    return hero?.label ?? toTitleCase(patternName || 'Hero pattern')
+  }
+
+  const builtin = BUILTIN_PATTERN_OPTIONS.find((item) => item.value === normalizePolygonPattern(patternName))
+  return builtin?.label ?? 'Solid fill'
+}
+
+function backgroundFromBuiltin(
   pattern: PolygonPatternStyle,
   patternColor: string,
   opacity = 0.65,
@@ -96,9 +181,105 @@ export function polygonPatternCss(
   }
 }
 
-export interface PolygonPatternAtlas {
-  atlas: HTMLCanvasElement
-  mapping: Record<PolygonPatternStyle, { x: number; y: number; width: number; height: number; mask: boolean }>
+export function polygonPatternCss(
+  library: PolygonPatternLibrary,
+  patternName: string,
+  patternColor: string,
+  opacity = 0.65,
+): { backgroundImage?: string; backgroundSize?: string } {
+  if (library === 'hero') {
+    const hero = HERO_PATTERN_MAP.get(patternName)
+    if (!hero) {
+      return {}
+    }
+    return {
+      backgroundImage: hero.fn(patternColor, clamp01(opacity)),
+      backgroundSize: 'auto',
+    }
+  }
+
+  return backgroundFromBuiltin(normalizePolygonPattern(patternName), patternColor, opacity)
+}
+
+export function listPatternOptions(library: PolygonPatternLibrary, search = ''): PatternOption[] {
+  const query = search.trim().toLowerCase()
+
+  if (library === 'hero') {
+    const options = HERO_PATTERNS.map((item) => ({
+      name: item.name,
+      label: item.label,
+      keywords: item.keywords,
+    }))
+
+    if (!query) {
+      return options
+    }
+
+    return options.filter((option) => {
+      const hay = `${option.name} ${option.label} ${option.keywords.join(' ')}`.toLowerCase()
+      return hay.includes(query)
+    })
+  }
+
+  const options = BUILTIN_PATTERN_OPTIONS.map((item) => ({
+    name: item.value,
+    label: item.label,
+    keywords: item.keywords,
+  }))
+
+  if (!query) {
+    return options
+  }
+
+  return options.filter((option) => {
+    const hay = `${option.name} ${option.label} ${option.keywords.join(' ')}`.toLowerCase()
+    return hay.includes(query)
+  })
+}
+
+function parseCssUrl(value: string): string | null {
+  const match = value.trim().match(/^url\((['"]?)(.+)\1\)$/)
+  if (!match) {
+    return null
+  }
+  return match[2] ?? null
+}
+
+function parseSvgSize(dataUrl: string): { width: number; height: number } {
+  const fallback = { width: 80, height: 80 }
+  const prefix = 'data:image/svg+xml,'
+  if (!dataUrl.startsWith(prefix)) {
+    return fallback
+  }
+
+  const encoded = dataUrl.slice(prefix.length)
+  let decoded = ''
+  try {
+    decoded = decodeURIComponent(encoded)
+  } catch {
+    return fallback
+  }
+
+  const widthToken = decoded.match(/\bwidth=["']([0-9.]+)["']/i)?.[1]
+  const heightToken = decoded.match(/\bheight=["']([0-9.]+)["']/i)?.[1]
+  const width = widthToken ? Number(widthToken) : NaN
+  const height = heightToken ? Number(heightToken) : NaN
+
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    const viewBoxToken = decoded.match(/\bviewBox=["']([0-9.\s-]+)["']/i)?.[1]
+    if (viewBoxToken) {
+      const parts = viewBoxToken
+        .trim()
+        .split(/\s+/)
+        .map((item) => Number(item))
+      if (parts.length === 4 && Number.isFinite(parts[2]) && Number.isFinite(parts[3]) && parts[2] > 0 && parts[3] > 0) {
+        return { width: parts[2], height: parts[3] }
+      }
+    }
+    return fallback
+  }
+
+  return { width, height }
 }
 
 function drawHorizontal(ctx: CanvasRenderingContext2D, size: number, step: number): void {
@@ -133,7 +314,7 @@ function drawDiagonal(ctx: CanvasRenderingContext2D, size: number, step: number,
   }
 }
 
-function drawPatternTile(
+function drawBuiltinPatternTile(
   ctx: CanvasRenderingContext2D,
   pattern: PolygonPatternStyle,
   offsetX: number,
@@ -196,14 +377,14 @@ function drawPatternTile(
   ctx.restore()
 }
 
-let atlasCache: PolygonPatternAtlas | null = null
+let builtinAtlasCache: PatternAtlasSpec | null = null
 
-export function getPolygonPatternAtlas(): PolygonPatternAtlas | null {
+function getBuiltinPatternAtlas(): PatternAtlasSpec | null {
   if (typeof document === 'undefined') {
     return null
   }
-  if (atlasCache) {
-    return atlasCache
+  if (builtinAtlasCache) {
+    return builtinAtlasCache
   }
 
   const patterns: PolygonPatternStyle[] = ['solid', 'hatch', 'crosshatch', 'diagonal', 'diagonalCross', 'dots', 'grid']
@@ -217,10 +398,10 @@ export function getPolygonPatternAtlas(): PolygonPatternAtlas | null {
     return null
   }
 
-  const mapping: Partial<Record<PolygonPatternStyle, { x: number; y: number; width: number; height: number; mask: boolean }>> = {}
+  const mapping: Record<string, { x: number; y: number; width: number; height: number; mask: boolean }> = {}
   patterns.forEach((pattern, index) => {
     const x = index * tileSize
-    drawPatternTile(ctx, pattern, x, tileSize)
+    drawBuiltinPatternTile(ctx, pattern, x, tileSize)
     mapping[pattern] = {
       x,
       y: 0,
@@ -230,9 +411,44 @@ export function getPolygonPatternAtlas(): PolygonPatternAtlas | null {
     }
   })
 
-  atlasCache = {
+  builtinAtlasCache = {
     atlas: canvas,
-    mapping: mapping as Record<PolygonPatternStyle, { x: number; y: number; width: number; height: number; mask: boolean }>,
+    mapping,
   }
-  return atlasCache
+
+  return builtinAtlasCache
+}
+
+export function getPatternAtlasSpec(
+  library: PolygonPatternLibrary,
+  patternName: string,
+): PatternAtlasSpec | null {
+  if (library === 'hero') {
+    const hero = HERO_PATTERN_MAP.get(patternName)
+    if (!hero) {
+      return null
+    }
+
+    const background = hero.fn('#ffffff', 1)
+    const dataUrl = parseCssUrl(background)
+    if (!dataUrl) {
+      return null
+    }
+
+    const size = parseSvgSize(dataUrl)
+    return {
+      atlas: dataUrl,
+      mapping: {
+        [hero.name]: {
+          x: 0,
+          y: 0,
+          width: Math.max(8, Math.round(size.width)),
+          height: Math.max(8, Math.round(size.height)),
+          mask: true,
+        },
+      },
+    }
+  }
+
+  return getBuiltinPatternAtlas()
 }

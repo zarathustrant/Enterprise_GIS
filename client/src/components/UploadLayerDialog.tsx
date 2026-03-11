@@ -8,6 +8,7 @@ import {
   DialogTitle,
   Typography,
 } from '@mui/material'
+import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 
 interface UploadLayerDialogProps {
   open: boolean
@@ -15,6 +16,7 @@ interface UploadLayerDialogProps {
   file: File | null
   submitting: boolean
   error: string | null
+  workMode?: boolean
   onFileChange: (file: File | null) => void
   onClose: () => void
   onSubmit: (file: File) => void
@@ -26,6 +28,7 @@ export function UploadLayerDialog({
   file,
   submitting,
   error,
+  workMode = false,
   onFileChange,
   onClose,
   onSubmit,
@@ -48,7 +51,14 @@ export function UploadLayerDialog({
   }
 
   return (
-    <Dialog open={open} onClose={handleClose} fullWidth maxWidth="sm">
+    <Dialog
+      open={open}
+      onClose={handleClose}
+      fullWidth
+      maxWidth="sm"
+      {...(workMode ? WORK_MODE_DIALOG_PROPS : {})}
+      sx={workMode ? workModeDialogSx('min(520px, 96vw)') : normalModeDialogSx('min(520px, 96vw)')}
+    >
       <DialogTitle>Upload GeoJSON</DialogTitle>
       <DialogContent>
         <Box display="grid" gap={1.5} pt={0.5}>

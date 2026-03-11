@@ -105,7 +105,12 @@ function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: str
 
   const polygonPatternStyle =
     model.geometryFamily === 'polygon'
-      ? polygonPatternCss(model.polygonPattern, model.polygonPatternColor, model.polygonPatternOpacity)
+      ? polygonPatternCss(
+        model.polygonPatternLibrary,
+        model.polygonPattern,
+        model.polygonPatternColor,
+        model.polygonPatternOpacity,
+      )
       : {}
 
   return (

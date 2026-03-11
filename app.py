@@ -12,6 +12,7 @@ from ingestion import ingestion_bp
 from analysis import analysis_bp
 from schema_api import schema_bp
 from enterprise_api import enterprise_bp
+from utility_api import utility_bp
 
 
 def create_app(config=Config):
@@ -34,6 +35,7 @@ def create_app(config=Config):
     app.register_blueprint(schema_bp,     url_prefix='/api/v1/layers')
     app.register_blueprint(analysis_bp,   url_prefix='/api/v1/analysis')
     app.register_blueprint(enterprise_bp, url_prefix='/api/v1')
+    app.register_blueprint(utility_bp,    url_prefix='/api/v1/utilities')
 
     app.teardown_appcontext(close_db)
 

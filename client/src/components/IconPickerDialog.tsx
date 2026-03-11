@@ -15,6 +15,7 @@ import {
 } from '@mui/material'
 import type { LayerIconLibrary } from '../types/gis'
 import { iconifySvgUrl, resolveIconId, resolveIconPrefix } from '../utils/iconLibrary'
+import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 
 type IconTypeKey = 'all' | 'places' | 'transport' | 'buildings' | 'utilities' | 'emergency' | 'nature'
 
@@ -30,6 +31,7 @@ const ICON_TYPE_OPTIONS: Array<{ key: IconTypeKey; label: string; keywords: stri
 
 interface IconPickerDialogProps {
   open: boolean
+  workMode?: boolean
   library: LayerIconLibrary
   iconifyPrefix: string
   selectedIcon: string
@@ -139,6 +141,7 @@ async function fetchSearchIcons(prefix: string, query: string, limit = 120): Pro
 
 export function IconPickerDialog({
   open,
+  workMode = false,
   library,
   iconifyPrefix,
   selectedIcon,
@@ -228,7 +231,14 @@ export function IconPickerDialog({
   const visibleIcons = useMemo(() => icons.slice(0, visibleCount), [icons, visibleCount])
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="lg">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      fullWidth
+      maxWidth="lg"
+      {...(workMode ? WORK_MODE_DIALOG_PROPS : {})}
+      sx={workMode ? workModeDialogSx('min(920px, 96vw)') : normalModeDialogSx('min(920px, 96vw)')}
+    >
       <DialogTitle>Icon Browser</DialogTitle>
       <DialogContent>
         <Box display="grid" gap={1.5} pt={0.5}>

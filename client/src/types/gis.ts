@@ -64,6 +64,7 @@ export interface LayerField {
 export type LayerRendererType = 'simple' | 'uniqueValue' | 'classBreaks'
 export type LayerPointSymbol = 'circle' | 'square' | 'icon'
 export type PolygonPatternStyle = 'solid' | 'hatch' | 'crosshatch' | 'diagonal' | 'diagonalCross' | 'dots' | 'grid'
+export type PolygonPatternLibrary = 'builtin' | 'hero'
 export type LayerIconLibrary =
   | 'maki'
   | 'tabler'
@@ -120,7 +121,8 @@ export interface LayerStyleDraft {
   opacityField: string
   opacityMin: number
   opacityMax: number
-  polygonPattern: PolygonPatternStyle
+  polygonPatternLibrary: PolygonPatternLibrary
+  polygonPattern: string
   polygonPatternColor: string
   polygonPatternOpacity: number
   polygonPatternScale: number
@@ -183,6 +185,39 @@ export interface MapView {
   pitch: number
   created_at: string
   updated_at: string
+}
+
+export type UtilityType =
+  | 'electric'
+  | 'water'
+  | 'wastewater'
+  | 'stormwater'
+  | 'gas'
+  | 'telecom'
+  | 'district_energy'
+  | 'other'
+
+export type UtilityNetworkStatus = 'planning' | 'active' | 'maintenance' | 'retired'
+
+export interface UtilityNetwork {
+  id: string
+  name: string
+  utility_type: UtilityType
+  description: string | null
+  status: UtilityNetworkStatus
+  is_public: boolean
+  workspace_id: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface UtilityNetworkSummary {
+  network_id: string
+  node_count: number
+  edge_count: number
+  service_point_count: number
+  total_length_m: number
 }
 
 export interface AsyncJob {

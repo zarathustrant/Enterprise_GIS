@@ -22,6 +22,7 @@ import {
 } from '@mui/material'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined'
+import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 import type {
   CreateLayerDomainPayload,
   CreateLayerFieldPayload,
@@ -38,6 +39,7 @@ interface FieldsManagerDialogProps {
   loading: boolean
   submitting: boolean
   error: string | null
+  workMode?: boolean
   onClose: () => void
   onCreateField: (payload: CreateLayerFieldPayload) => void
   onUpdateField: (fieldId: string, payload: UpdateLayerFieldPayload) => void
@@ -141,6 +143,7 @@ export function FieldsManagerDialog({
   loading,
   submitting,
   error,
+  workMode = false,
   onClose,
   onCreateField,
   onUpdateField,
@@ -335,7 +338,14 @@ export function FieldsManagerDialog({
   }
 
   return (
-    <Dialog open={open} onClose={handleClose} fullWidth maxWidth="lg">
+    <Dialog
+      open={open}
+      onClose={handleClose}
+      fullWidth
+      maxWidth="lg"
+      {...(workMode ? WORK_MODE_DIALOG_PROPS : {})}
+      sx={workMode ? workModeDialogSx('min(920px, 96vw)') : normalModeDialogSx('min(920px, 96vw)')}
+    >
       <DialogTitle>Field & Domain Manager</DialogTitle>
       <DialogContent>
         <Box display="grid" gap={2} pt={0.5}>

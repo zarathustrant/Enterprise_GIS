@@ -1,8 +1,13 @@
 import type { Feature as GeoJsonFeature } from 'geojson'
-import type { FeatureCollection, Layer, LayerIconLibrary, PolygonPatternStyle } from '../types/gis'
+import type { FeatureCollection, Layer, LayerIconLibrary, PolygonPatternLibrary } from '../types/gis'
 import { resolveIconId } from './iconLibrary'
 import { geometryFamilyFromType, type GeometryFamily } from './geometry'
-import { normalizePolygonPattern, polygonPatternLabel } from './polygonPatterns'
+import {
+  inferPolygonPatternLibraryFromName,
+  normalizePolygonPatternLibrary,
+  polygonPatternLabel,
+  resolvePolygonPatternName,
+} from './polygonPatterns'
 
 export type LegendMode = 'professional' | 'minimal' | 'analyst' | 'interactive' | 'presentation'
 
@@ -27,7 +32,8 @@ export interface LayerLegendModel {
   iconLibrary: LayerIconLibrary
   iconName: string
   iconId: string
-  polygonPattern: PolygonPatternStyle
+  polygonPatternLibrary: PolygonPatternLibrary
+  polygonPattern: string
   polygonPatternColor: string
   polygonPatternOpacity: number
   totalCount: number
@@ -60,7 +66,8 @@ interface ParsedStyle {
   iconLibrary: LayerIconLibrary
   iconName: string
   iconifyPrefix: string
-  polygonPattern: PolygonPatternStyle
+  polygonPatternLibrary: PolygonPatternLibrary
+  polygonPattern: string
   polygonPatternColor: string
   polygonPatternOpacity: number
 }
@@ -152,6 +159,15 @@ function parseStyle(layer: Layer): ParsedStyle {
     })
     .filter((item): item is ParsedClassBreakStop => Boolean(item))
 
+  const polygonPatternLibrary = normalizePolygonPatternLibrary(
+    style.polygonPatternLibrary ??
+    inferPolygonPatternLibraryFromName(typeof style.polygonPattern === 'string' ? style.polygonPattern : ''),
+  )
+  const polygonPattern = resolvePolygonPatternName(
+    polygonPatternLibrary,
+    typeof style.polygonPattern === 'string' ? style.polygonPattern : '',
+  )
+
   return {
     renderer: normalizeRenderer(style.rendererType),
     baseColor: normalizeColor(style.color, '#136f63'),
@@ -165,7 +181,8 @@ function parseStyle(layer: Layer): ParsedStyle {
     iconLibrary: normalizeIconLibrary(style.iconLibrary),
     iconName: typeof style.iconName === 'string' ? style.iconName : 'marker',
     iconifyPrefix: typeof style.iconifyPrefix === 'string' ? style.iconifyPrefix : 'maki',
-    polygonPattern: normalizePolygonPattern(style.polygonPattern),
+    polygonPatternLibrary,
+    polygonPattern,
     polygonPatternColor: normalizeColor(style.polygonPatternColor, '#0f4c5c'),
     polygonPatternOpacity: clamp01(style.polygonPatternOpacity, 0.65),
   }
@@ -259,9 +276,9 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
         : geometryFamily === 'line'
           ? 'Line symbol'
           : geometryFamily === 'polygon'
-            ? style.polygonPattern === 'solid'
+            ? style.polygonPatternLibrary === 'builtin' && style.polygonPattern === 'solid'
               ? 'Fill symbol'
-              : `Fill (${polygonPatternLabel(style.polygonPattern)})`
+              : `Fill (${polygonPatternLabel(style.polygonPatternLibrary, style.polygonPattern)})`
             : 'Default symbol'
     itemsByKey.set('simple', {
       key: 'simple',
@@ -393,6 +410,7 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
     iconLibrary: style.iconLibrary,
     iconName: style.iconName,
     iconId,
+    polygonPatternLibrary: style.polygonPatternLibrary,
     polygonPattern: style.polygonPattern,
     polygonPatternColor: style.polygonPatternColor,
     polygonPatternOpacity: style.polygonPatternOpacity,

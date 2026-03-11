@@ -22,6 +22,7 @@ import {
 } from '@mui/material'
 import ContentCopyIcon from '@mui/icons-material/ContentCopy'
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
+import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 import type {
   CreateEditSessionPayload,
   CreateLayerJoinPayload,
@@ -55,6 +56,7 @@ interface LayerOpsDialogProps {
   loading: boolean
   submitting: boolean
   error: string | null
+  workMode?: boolean
   onClose: () => void
   onUpdateOrdering: (payload: { group_name: string; z_index: number }) => void
   onCreateShareLink: (payload: CreateShareLinkPayload) => void
@@ -109,6 +111,7 @@ export function LayerOpsDialog({
   loading,
   submitting,
   error,
+  workMode = false,
   onClose,
   onUpdateOrdering,
   onCreateShareLink,
@@ -307,7 +310,14 @@ export function LayerOpsDialog({
   }
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="lg">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      fullWidth
+      maxWidth="lg"
+      {...(workMode ? WORK_MODE_DIALOG_PROPS : {})}
+      sx={workMode ? workModeDialogSx('min(980px, 98vw)') : normalModeDialogSx('min(980px, 98vw)')}
+    >
       <DialogTitle>Advanced Layer Operations</DialogTitle>
       <DialogContent>
         <Box display="grid" gap={2} pt={0.5}>

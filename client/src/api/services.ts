@@ -17,6 +17,8 @@ import type {
   QueryResultRow,
   AsyncJob,
   FeatureHistoryEntry,
+  UtilityNetwork,
+  UtilityNetworkSummary,
 } from '../types/gis'
 import type { Feature, Geometry } from 'geojson'
 
@@ -91,13 +93,14 @@ export interface BulkUpdatePayload {
   updates?: Record<string, unknown>
   session_id?: string
   calculator?: {
-    type: 'copy' | 'concat' | 'math'
+    type: 'copy' | 'concat' | 'math' | 'expression'
     field: string
     source_field?: string
     fields?: string[]
     separator?: string
     operator?: '+' | '-' | '*' | '/'
     value?: number
+    expression?: string
   }
 }
 
@@ -223,6 +226,76 @@ export interface CreateEditSessionPayload {
   assigned_reviewer?: string | null
 }
 
+export interface CreateUtilityNetworkPayload {
+  name: string
+  utility_type: UtilityNetwork['utility_type']
+  description?: string
+  status?: UtilityNetwork['status']
+  is_public?: boolean
+  workspace_id?: string | null
+}
+
+export interface CreateUtilityNodePayload {
+  asset_id?: string
+  name?: string
+  node_type:
+    | 'source'
+    | 'substation'
+    | 'transformer'
+    | 'switch'
+    | 'valve'
+    | 'pump'
+    | 'junction'
+    | 'meter'
+    | 'regulator'
+    | 'tank'
+    | 'manhole'
+    | 'service_point'
+    | 'other'
+  status?: 'planned' | 'in_service' | 'out_of_service' | 'maintenance' | 'retired'
+  elevation_m?: number
+  properties?: Record<string, unknown>
+  source_feature_id?: string | null
+  geometry: Geometry
+}
+
+export interface CreateUtilityEdgePayload {
+  asset_id?: string
+  name?: string
+  edge_type:
+    | 'feeder'
+    | 'main'
+    | 'lateral'
+    | 'transmission'
+    | 'distribution'
+    | 'service_line'
+    | 'fiber'
+    | 'coax'
+    | 'duct'
+    | 'pipe'
+    | 'conduit'
+    | 'other'
+  status?: 'planned' | 'in_service' | 'out_of_service' | 'maintenance' | 'retired'
+  from_node_id?: string | null
+  to_node_id?: string | null
+  length_m?: number
+  properties?: Record<string, unknown>
+  source_feature_id?: string | null
+  geometry: Geometry
+}
+
+export interface CreateUtilityServicePointPayload {
+  asset_id?: string
+  name?: string
+  status?: 'planned' | 'active' | 'inactive' | 'disconnected'
+  node_id?: string | null
+  connected_edge_id?: string | null
+  customer_count?: number
+  properties?: Record<string, unknown>
+  source_feature_id?: string | null
+  geometry: Geometry
+}
+
 export function login(payload: LoginPayload): Promise<AuthResponse> {
   return apiRequest<AuthResponse>('/auth/login', {
     method: 'POST',
@@ -247,6 +320,86 @@ export function fetchLayers(token?: string | null): Promise<Layer[]> {
 
 export function fetchLayerFeatures(layerId: string, token?: string | null): Promise<FeatureCollection> {
   return apiRequest<FeatureCollection>(`/layers/${layerId}/features`, {}, token)
+}
+
+export function fetchUtilityNetworks(token?: string | null): Promise<UtilityNetwork[]> {
+  return apiRequest<UtilityNetwork[]>('/utilities/networks', {}, token)
+}
+
+export function createUtilityNetwork(payload: CreateUtilityNetworkPayload, token: string): Promise<UtilityNetwork> {
+  return apiRequest<UtilityNetwork>(
+    '/utilities/networks',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token,
+  )
+}
+
+export function fetchUtilityNetworkSummary(networkId: string, token?: string | null): Promise<UtilityNetworkSummary> {
+  return apiRequest<UtilityNetworkSummary>(`/utilities/networks/${networkId}/summary`, {}, token)
+}
+
+export function fetchUtilityNetworkNodes(networkId: string, token?: string | null, limit = 50): Promise<FeatureCollection> {
+  return apiRequest<FeatureCollection>(`/utilities/networks/${networkId}/nodes?limit=${limit}`, {}, token)
+}
+
+export function fetchUtilityNetworkEdges(networkId: string, token?: string | null, limit = 50): Promise<FeatureCollection> {
+  return apiRequest<FeatureCollection>(`/utilities/networks/${networkId}/edges?limit=${limit}`, {}, token)
+}
+
+export function fetchUtilityNetworkServicePoints(
+  networkId: string,
+  token?: string | null,
+  limit = 50,
+): Promise<FeatureCollection> {
+  return apiRequest<FeatureCollection>(`/utilities/networks/${networkId}/service-points?limit=${limit}`, {}, token)
+}
+
+export function createUtilityNetworkNode(
+  networkId: string,
+  payload: CreateUtilityNodePayload,
+  token: string,
+): Promise<Feature> {
+  return apiRequest<Feature>(
+    `/utilities/networks/${networkId}/nodes`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token,
+  )
+}
+
+export function createUtilityNetworkEdge(
+  networkId: string,
+  payload: CreateUtilityEdgePayload,
+  token: string,
+): Promise<Feature> {
+  return apiRequest<Feature>(
+    `/utilities/networks/${networkId}/edges`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token,
+  )
+}
+
+export function createUtilityNetworkServicePoint(
+  networkId: string,
+  payload: CreateUtilityServicePointPayload,
+  token: string,
+): Promise<Feature> {
+  return apiRequest<Feature>(
+    `/utilities/networks/${networkId}/service-points`,
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token,
+  )
 }
 
 export function queryLayerFeatures(
@@ -678,6 +831,19 @@ export function deleteLayerRelationship(
     {
       method: 'DELETE',
     },
+    token,
+  )
+}
+
+export function fetchRelatedRecords(
+  layerId: string,
+  featureId: string,
+  relationshipId: string,
+  token?: string | null,
+): Promise<QueryResultRow[]> {
+  return apiRequest<QueryResultRow[]>(
+    `/layers/${layerId}/features/${featureId}/related/${relationshipId}`,
+    {},
     token,
   )
 }

@@ -16,6 +16,7 @@ import {
   Typography,
 } from '@mui/material'
 import type { Layer } from '../types/gis'
+import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 
 export type AnalysisTab = 'buffer' | 'intersect' | 'within'
 export type AnalysisJobStatus = 'queued' | 'running' | 'success' | 'error'
@@ -33,6 +34,7 @@ interface AnalysisDialogProps {
   error: string | null
   withinCount: number | null
   job: AnalysisJobState | null
+  workMode?: boolean
   onClose: () => void
   onRunBuffer: (payload: { layerId: string; distance: number; outputName: string }) => void
   onRunIntersect: (payload: { layerA: string; layerB: string; outputName: string }) => void
@@ -46,6 +48,7 @@ export function AnalysisDialog({
   error,
   withinCount,
   job,
+  workMode = false,
   onClose,
   onRunBuffer,
   onRunIntersect,
@@ -71,7 +74,14 @@ export function AnalysisDialog({
   )
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="sm">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      fullWidth
+      maxWidth="sm"
+      {...(workMode ? WORK_MODE_DIALOG_PROPS : {})}
+      sx={workMode ? workModeDialogSx('min(560px, 96vw)') : normalModeDialogSx('min(560px, 96vw)')}
+    >
       <DialogTitle>Spatial Analysis</DialogTitle>
       <DialogContent>
         <Tabs value={tab} onChange={(_, value) => setTab(value as AnalysisTab)} sx={{ mb: 2 }}>

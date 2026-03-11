@@ -23,6 +23,7 @@ import {
   TextField,
   Typography,
 } from '@mui/material'
+import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 
 interface AttributeTableDialogProps {
   open: boolean
@@ -31,6 +32,7 @@ interface AttributeTableDialogProps {
   fields: LayerField[]
   saving: boolean
   error: string | null
+  workMode?: boolean
   onClose: () => void
   onSaveProperties: (featureId: string, properties: Record<string, unknown>, version?: number) => void
   joins?: LayerJoin[]
@@ -144,6 +146,7 @@ export function AttributeTableDialog({
   fields,
   saving,
   error,
+  workMode = false,
   onClose,
   onSaveProperties,
   joins = [],
@@ -413,7 +416,14 @@ export function AttributeTableDialog({
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize))
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="xl">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      fullWidth
+      maxWidth="xl"
+      {...(workMode ? WORK_MODE_DIALOG_PROPS : {})}
+      sx={workMode ? workModeDialogSx('min(1020px, 98vw)') : normalModeDialogSx('min(1020px, 98vw)')}
+    >
       <DialogTitle>Attribute Table</DialogTitle>
       <DialogContent>
         <Box display="grid" gap={2} pt={0.5}>

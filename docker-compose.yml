@@ -14,6 +14,7 @@ services:
       - ./database/migrations/002_layer_schema.sql:/docker-entrypoint-initdb.d/002_layer_schema.sql:ro
       - ./database/migrations/003_enterprise_capabilities.sql:/docker-entrypoint-initdb.d/003_enterprise_capabilities.sql:ro
       - ./database/migrations/004_collaboration_workflows.sql:/docker-entrypoint-initdb.d/004_collaboration_workflows.sql:ro
+      - ./database/migrations/005_utility_network_v1.sql:/docker-entrypoint-initdb.d/005_utility_network_v1.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres -d enterprise_gis']
       interval: 5s
@@ -72,6 +73,7 @@ services:
       context: ./client
       dockerfile: Dockerfile
     container_name: enterprise-gis-client
+    command: ["sh", "-c", "npm install && npm run dev -- --host 0.0.0.0 --port 5173"]
     environment:
       VITE_API_PROXY_TARGET: http://api:5000
     depends_on:

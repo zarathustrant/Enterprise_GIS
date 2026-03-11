@@ -16,12 +16,14 @@ import {
   Typography,
 } from '@mui/material'
 import type { AsyncJob } from '../types/gis'
+import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 
 interface JobsDialogProps {
   open: boolean
   jobs: AsyncJob[]
   loading: boolean
   error: string | null
+  workMode?: boolean
   onClose: () => void
   onRefresh: () => void
 }
@@ -39,9 +41,16 @@ function statusColor(status: AsyncJob['status']): 'default' | 'warning' | 'info'
   return 'error'
 }
 
-export function JobsDialog({ open, jobs, loading, error, onClose, onRefresh }: JobsDialogProps) {
+export function JobsDialog({ open, jobs, loading, error, workMode = false, onClose, onRefresh }: JobsDialogProps) {
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="lg">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      fullWidth
+      maxWidth="lg"
+      {...(workMode ? WORK_MODE_DIALOG_PROPS : {})}
+      sx={workMode ? workModeDialogSx('min(920px, 96vw)') : normalModeDialogSx('min(920px, 96vw)')}
+    >
       <DialogTitle>Async Jobs</DialogTitle>
       <DialogContent>
         <Box display="grid" gap={2} pt={0.5}>

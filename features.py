@@ -191,6 +191,52 @@ def _fetch_layer_style(cur, layer_id: str) -> dict[str, Any]:
     return style if isinstance(style, dict) else {}
 
 
+def _fetch_layer_geometry_type(cur, layer_id: str) -> str | None:
+    cur.execute('SELECT geometry_type FROM layers WHERE id = %s::uuid', (layer_id,))
+    row = cur.fetchone()
+    value = row['geometry_type'] if row else None
+    return value if isinstance(value, str) else None
+
+
+def _geometry_family_from_layer_type(layer_geometry_type: str | None) -> str:
+    if not layer_geometry_type:
+        return 'mixed'
+
+    token = layer_geometry_type.lower()
+    if 'point' in token:
+        return 'point'
+    if 'line' in token:
+        return 'line'
+    if 'polygon' in token:
+        return 'polygon'
+    return 'mixed'
+
+
+def _geometry_family_from_geometry(geometry: Any) -> str:
+    if not isinstance(geometry, dict):
+        raise FieldSchemaError('geometry must be a valid GeoJSON geometry object')
+
+    geometry_type = geometry.get('type')
+    if geometry_type in {'Point', 'MultiPoint'}:
+        return 'point'
+    if geometry_type in {'LineString', 'MultiLineString'}:
+        return 'line'
+    if geometry_type in {'Polygon', 'MultiPolygon'}:
+        return 'polygon'
+
+    raise FieldSchemaError(f'Unsupported geometry type: {geometry_type}')
+
+
+def _enforce_layer_geometry_type(cur, layer_id: str, geometry: Any) -> None:
+    expected_family = _geometry_family_from_layer_type(_fetch_layer_geometry_type(cur, layer_id))
+    actual_family = _geometry_family_from_geometry(geometry)
+    if expected_family == 'mixed' or expected_family == actual_family:
+        return
+    raise FieldSchemaError(
+        f'Layer geometry type mismatch: expected {expected_family}, got {actual_family}'
+    )
+
+
 def _apply_snapping(cur, layer_id: str, geometry: dict[str, Any]) -> dict[str, Any]:
     if geometry.get('type') != 'Point':
         return geometry
@@ -502,7 +548,49 @@ def _apply_bulk_calculator(properties: dict[str, Any], calculator: dict[str, Any
             raise FieldSchemaError('calculator.operator must be one of +, -, *, /')
         return output
 
-    raise FieldSchemaError('calculator.type must be one of copy, concat, math')
+    if calc_type == 'expression':
+        expression = str(calculator.get('expression', '')).strip()
+        if not expression:
+            raise FieldSchemaError('calculator.expression is required for expression type')
+
+        # Create a safe namespace with properties as variables
+        safe_namespace = {
+            # Allow basic math operations
+            '__builtins__': {
+                'abs': abs,
+                'max': max,
+                'min': min,
+                'round': round,
+                'int': int,
+                'float': float,
+                'str': str,
+                'len': len,
+            }
+        }
+
+        # Add all property values to namespace
+        for key, value in properties.items():
+            # Convert to appropriate Python type
+            if isinstance(value, (int, float, str, bool, type(None))):
+                safe_namespace[key] = value
+            else:
+                safe_namespace[key] = str(value)
+
+        try:
+            # Evaluate the expression in the safe namespace
+            result = eval(expression, {"__builtins__": {}}, safe_namespace)
+            output[field] = result
+            return output
+        except NameError as exc:
+            raise FieldSchemaError(f'Field not found in expression: {exc}')
+        except SyntaxError as exc:
+            raise FieldSchemaError(f'Invalid expression syntax: {exc}')
+        except ZeroDivisionError:
+            raise FieldSchemaError('Division by zero in expression')
+        except Exception as exc:
+            raise FieldSchemaError(f'Expression evaluation failed: {exc}')
+
+    raise FieldSchemaError('calculator.type must be one of copy, concat, math, expression')
 
 
 @features_bp.route('/<layer_id>/features', methods=['GET'])
@@ -810,6 +898,7 @@ def create_feature(layer_id):
             user_id=user_id,
             payload=data,
         )
+        _enforce_layer_geometry_type(cur, layer_id, geometry)
         snapped_geometry = _apply_snapping(cur, layer_id, geometry)
         _enforce_topology_rules(cur, layer_id, snapped_geometry)
         prepared_properties = validate_properties_against_schema(cur, layer_id, data.get('properties', {}))
@@ -914,6 +1003,7 @@ def update_feature(layer_id, feature_id):
             payload=data,
         )
         if geometry is not None:
+            _enforce_layer_geometry_type(cur, layer_id, geometry)
             geometry = _apply_snapping(cur, layer_id, geometry)
             _enforce_topology_rules(cur, layer_id, geometry, feature_id=feature_id)
 

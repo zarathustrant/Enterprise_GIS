@@ -19,10 +19,17 @@ import {
   List,
   ListItem,
   ListItemText,
+  MenuItem,
+  InputAdornment,
+  Paper,
   Snackbar,
   Stack,
   Switch,
+  Tab,
+  Tabs,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Toolbar,
   Tooltip,
   Typography,
@@ -50,6 +57,19 @@ import ClearIcon from '@mui/icons-material/Clear'
 import BookmarkAddedIcon from '@mui/icons-material/BookmarkAdded'
 import WorkHistoryIcon from '@mui/icons-material/WorkHistory'
 import SettingsSuggestIcon from '@mui/icons-material/SettingsSuggest'
+import ViewSidebarIcon from '@mui/icons-material/ViewSidebar'
+import AccountTreeIcon from '@mui/icons-material/AccountTree'
+import UndoIcon from '@mui/icons-material/Undo'
+import RedoIcon from '@mui/icons-material/Redo'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import ExpandLessIcon from '@mui/icons-material/ExpandLess'
+import CircleOutlinedIcon from '@mui/icons-material/CircleOutlined'
+import RectangleOutlinedIcon from '@mui/icons-material/RectangleOutlined'
+import CropSquareIcon from '@mui/icons-material/CropSquare'
+import ChangeHistoryIcon from '@mui/icons-material/ChangeHistory'
+import HexagonOutlinedIcon from '@mui/icons-material/HexagonOutlined'
+import StarBorderIcon from '@mui/icons-material/StarBorder'
+import PentagonOutlinedIcon from '@mui/icons-material/PentagonOutlined'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -65,6 +85,10 @@ import {
   createLayerDomain,
   createLayerField,
   createLayer as createLayerApi,
+  createUtilityNetworkEdge,
+  createUtilityNetworkNode,
+  createUtilityNetwork,
+  createUtilityNetworkServicePoint,
   deleteLayerJoin,
   deleteLayerRelationship,
   deleteLayerDomain,
@@ -79,7 +103,7 @@ import {
   fetchCurrentUser,
   fetchEditSessionChanges,
   fetchEditSessions,
-  fetchFeatureHistory,
+  // fetchFeatureHistory,
   fetchLayerJoins,
   fetchLayerRelationships,
   fetchLayerViews,
@@ -88,9 +112,14 @@ import {
   fetchLayerFeatures,
   fetchLayers,
   fetchShareLinks,
+  fetchUtilityNetworkEdges,
+  fetchUtilityNetworkNodes,
+  fetchUtilityNetworks,
+  fetchUtilityNetworkServicePoints,
+  fetchUtilityNetworkSummary,
   fetchViews,
   queryLayerFeatures,
-  rollbackFeature,
+  // rollbackFeature,
   runBufferAnalysis,
   runIntersectAnalysis,
   runWithinAnalysis,
@@ -108,12 +137,26 @@ import { ApiError } from './api/http'
 import { AuthDialog } from './components/AuthDialog'
 import { CreateLayerDialog } from './components/CreateLayerDialog'
 import type { AnalysisJobState, AnalysisTab } from './components/AnalysisDialog'
-import type { MapViewportState, MeasurementMode, MeasurementSummary } from './components/MapCanvas'
+import type {
+  AdvancedEditMode,
+  AdvancedEditOptions,
+  EditCommand,
+  EditState,
+  EditUiState,
+  MapViewportState,
+  MeasurementMode,
+  MeasurementSummary,
+} from './components/MapCanvas'
 import { ActivityFeed } from './components/ActivityFeed'
 import type { ActivityEvent, ActivityLevel } from './components/ActivityFeed'
+import { UtilityModePanel } from './components/UtilityModePanel'
 import { useAuthStore } from './store/auth'
 import type { LegendMode } from './utils/legend'
-import { normalizePolygonPattern } from './utils/polygonPatterns'
+import {
+  inferPolygonPatternLibraryFromName,
+  normalizePolygonPatternLibrary,
+  resolvePolygonPatternName,
+} from './utils/polygonPatterns'
 import type {
   AsyncJob,
   AuthResponse,
@@ -129,9 +172,15 @@ import type {
   LayerStyleDraft,
   LayerView,
   MapView,
+  UtilityNetwork,
+  UtilityNetworkSummary,
 } from './types/gis'
 import type {
   BulkUpdatePayload,
+  CreateUtilityEdgePayload,
+  CreateUtilityNetworkPayload,
+  CreateUtilityNodePayload,
+  CreateUtilityServicePointPayload,
   CreateEditSessionPayload,
   CreateLayerJoinPayload,
   CreateLayerRelationshipPayload,
@@ -156,9 +205,15 @@ const LayerStyleDialog = lazy(async () => {
   return { default: module.LayerStyleDialog }
 })
 
-const AttributeTableDialog = lazy(async () => {
-  const module = await import('./components/AttributeTableDialog')
-  return { default: module.AttributeTableDialog }
+// Unused - replaced with AttributeTablePanel
+// const AttributeTableDialog = lazy(async () => {
+//   const module = await import('./components/AttributeTableDialog')
+//   return { default: module.AttributeTableDialog }
+// })
+
+const AttributeTablePanel = lazy(async () => {
+  const module = await import('./components/AttributeTablePanel')
+  return { default: module.AttributeTablePanel }
 })
 
 const FieldsManagerDialog = lazy(async () => {
@@ -212,7 +267,89 @@ interface FeatureConflictState {
 
 const drawerWidth = 360
 const EMPTY_LAYERS: Layer[] = []
+const APP_MODE_STORAGE_KEY = 'enterprise-gis-app-mode-v1'
 const LEGEND_MODE_STORAGE_KEY = 'enterprise-gis-legend-mode-v1'
+const WORK_MODE_STORAGE_KEY = 'enterprise-gis-work-mode-v1'
+const EDIT_TOOL_TAB_STORAGE_KEY = 'enterprise-gis-edit-tool-tab-v1'
+const EDIT_TOOL_FAVORITES_STORAGE_KEY = 'enterprise-gis-edit-tool-favorites-v1'
+type AppMode = 'standard' | 'utilities'
+type EditToolTab = 'all' | 'my'
+type EditToolGroup = 'Alignment' | 'Reshape' | 'Construction'
+const EDIT_TOOL_GROUP_ORDER: EditToolGroup[] = ['Alignment', 'Reshape', 'Construction']
+const DEFAULT_ADVANCED_EDIT_OPTIONS: AdvancedEditOptions = {
+  rotateDegrees: 15,
+  scaleFactor: 1,
+  reshapeStrength: 0.45,
+  gridSizeMeters: 2,
+  alignTarget: 'center-x',
+}
+
+const ADVANCED_EDIT_MODE_OPTIONS: Array<{
+  value: AdvancedEditMode
+  label: string
+  helper: string
+  group: EditToolGroup
+  keywords: string[]
+}> = [
+  {
+    value: 'align',
+    label: 'Align Features',
+    helper: 'Align selected features by side or center.',
+    group: 'Alignment',
+    keywords: ['align', 'edge', 'center', 'arrange'],
+  },
+  {
+    value: 'rotate-scale',
+    label: 'Rotate / Scale',
+    helper: 'Drag the orange handle above selection to rotate; hold Shift while dragging to scale.',
+    group: 'Alignment',
+    keywords: ['rotate', 'scale', 'transform'],
+  },
+  {
+    value: 'reshape',
+    label: 'Reshape',
+    helper: 'Edit vertices directly on-map; Apply runs smoothing/generalization.',
+    group: 'Reshape',
+    keywords: ['reshape', 'edit vertices', 'generalize', 'smooth'],
+  },
+  {
+    value: 'split',
+    label: 'Split',
+    helper: 'Select features, then draw a split line directly on the map.',
+    group: 'Reshape',
+    keywords: ['split', 'cut', 'line intersection'],
+  },
+  {
+    value: 'trace',
+    label: 'Trace',
+    helper: 'Copy geometry from last selected feature into the first one.',
+    group: 'Construction',
+    keywords: ['trace', 'copy geometry', 'follow edge'],
+  },
+  {
+    value: 'rectangular-constraints',
+    label: 'Rectangular Constraints',
+    helper: 'Force selected polygons/lines into rectilinear form.',
+    group: 'Construction',
+    keywords: ['rectangular', 'orthogonal', 'constraints'],
+  },
+  {
+    value: 'grid-lock',
+    label: 'Grid Lock',
+    helper: 'Snap selected (and live edits) to a configurable grid.',
+    group: 'Construction',
+    keywords: ['grid', 'snap', 'lock'],
+  },
+]
+
+const ALIGN_TARGET_OPTIONS: Array<{ value: AdvancedEditOptions['alignTarget']; label: string }> = [
+  { value: 'left', label: 'Left' },
+  { value: 'right', label: 'Right' },
+  { value: 'top', label: 'Top' },
+  { value: 'bottom', label: 'Bottom' },
+  { value: 'center-x', label: 'Center X' },
+  { value: 'center-y', label: 'Center Y' },
+]
 
 function readStoredLegendMode(): LegendMode {
   if (typeof window === 'undefined') {
@@ -223,6 +360,59 @@ function readStoredLegendMode(): LegendMode {
     return raw
   }
   return 'professional'
+}
+
+function readStoredAppMode(): AppMode {
+  if (typeof window === 'undefined') {
+    return 'standard'
+  }
+  const raw = window.localStorage.getItem(APP_MODE_STORAGE_KEY)
+  return raw === 'utilities' ? 'utilities' : 'standard'
+}
+
+function readStoredWorkMode(): boolean {
+  if (typeof window === 'undefined') {
+    return true
+  }
+  const raw = window.localStorage.getItem(WORK_MODE_STORAGE_KEY)
+  if (raw === 'true') {
+    return true
+  }
+  if (raw === 'false') {
+    return false
+  }
+  return true
+}
+
+function readStoredEditToolTab(): EditToolTab {
+  if (typeof window === 'undefined') {
+    return 'all'
+  }
+  const raw = window.localStorage.getItem(EDIT_TOOL_TAB_STORAGE_KEY)
+  return raw === 'my' ? 'my' : 'all'
+}
+
+function readStoredFavoriteEditTools(): AdvancedEditMode[] {
+  if (typeof window === 'undefined') {
+    return ['align', 'reshape', 'split']
+  }
+  const raw = window.localStorage.getItem(EDIT_TOOL_FAVORITES_STORAGE_KEY)
+  if (!raw) {
+    return ['align', 'reshape', 'split']
+  }
+
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) {
+      return ['align', 'reshape', 'split']
+    }
+    const allowed = new Set(ADVANCED_EDIT_MODE_OPTIONS.map((option) => option.value))
+    return parsed
+      .map((value) => (typeof value === 'string' ? value : null))
+      .filter((value): value is AdvancedEditMode => Boolean(value && allowed.has(value as AdvancedEditMode)))
+  } catch {
+    return ['align', 'reshape', 'split']
+  }
 }
 
 function layerSubtitle(layer: Layer): string {
@@ -272,6 +462,7 @@ const DEFAULT_STYLE_DRAFT: LayerStyleDraft = {
   opacityField: '',
   opacityMin: 0.2,
   opacityMax: 1,
+  polygonPatternLibrary: 'builtin',
   polygonPattern: 'solid',
   polygonPatternColor: '#0f4c5c',
   polygonPatternOpacity: 0.65,
@@ -418,7 +609,17 @@ function readStyle(layer: Layer): LayerStyleDraft {
     opacityField: typeof style?.opacityField === 'string' ? style.opacityField : '',
     opacityMin: typeof style?.opacityMin === 'number' ? style.opacityMin : DEFAULT_STYLE_DRAFT.opacityMin,
     opacityMax: typeof style?.opacityMax === 'number' ? style.opacityMax : DEFAULT_STYLE_DRAFT.opacityMax,
-    polygonPattern: normalizePolygonPattern(style?.polygonPattern),
+    polygonPatternLibrary: normalizePolygonPatternLibrary(
+      style?.polygonPatternLibrary ??
+      inferPolygonPatternLibraryFromName(typeof style?.polygonPattern === 'string' ? style.polygonPattern : ''),
+    ),
+    polygonPattern: resolvePolygonPatternName(
+      normalizePolygonPatternLibrary(
+        style?.polygonPatternLibrary ??
+        inferPolygonPatternLibraryFromName(typeof style?.polygonPattern === 'string' ? style.polygonPattern : ''),
+      ),
+      typeof style?.polygonPattern === 'string' ? style.polygonPattern : DEFAULT_STYLE_DRAFT.polygonPattern,
+    ),
     polygonPatternColor:
       typeof style?.polygonPatternColor === 'string'
         ? style.polygonPatternColor
@@ -501,6 +702,7 @@ function toStylePayload(style: LayerStyleDraft): Record<string, unknown> {
     opacityField: style.opacityField,
     opacityMin: style.opacityMin,
     opacityMax: style.opacityMax,
+    polygonPatternLibrary: style.polygonPatternLibrary,
     polygonPattern: style.polygonPattern,
     polygonPatternColor: style.polygonPatternColor,
     polygonPatternOpacity: style.polygonPatternOpacity,
@@ -605,9 +807,22 @@ export default function App() {
 
   const [activeEditLayerId, setActiveEditLayerId] = useState<string | null>(null)
   const [activeEditSessionByLayerId, setActiveEditSessionByLayerId] = useState<Record<string, string | null>>({})
+  const [advancedEditMode, setAdvancedEditMode] = useState<AdvancedEditMode>('reshape')
+  const [advancedEditOptions, setAdvancedEditOptions] = useState<AdvancedEditOptions>(DEFAULT_ADVANCED_EDIT_OPTIONS)
+  const [editCommand, setEditCommand] = useState<EditCommand | null>(null)
+  const [editState, setEditState] = useState<EditState>({ selectedCount: 0, canUndo: false, canRedo: false })
+  const [editUiState, setEditUiState] = useState<EditUiState | null>(null)
+  const [activeShapeType, setActiveShapeType] = useState<'circle' | 'rectangle' | 'square' | 'triangle' | 'pentagon' | 'hexagon' | 'star' | null>(null)
+  const [shapeSize, setShapeSize] = useState(100)
   const [measurementMode, setMeasurementMode] = useState<MeasurementMode>(null)
   const [measurementResetNonce, setMeasurementResetNonce] = useState(0)
   const [measurementSummary, setMeasurementSummary] = useState<MeasurementSummary | null>(null)
+
+  // Phase 1: Attribute Table Selection & Map Interaction
+  const [selectedFeaturesByLayer, setSelectedFeaturesByLayer] = useState<Record<string, string[]>>({})
+  // const [highlightedFeature, setHighlightedFeature] = useState<{ layerId: string; featureId: string } | null>(null)
+  const [featureZoomRequest, setFeatureZoomRequest] = useState<{ layerId: string; featureIds: string[]; nonce: number } | null>(null)
+  const [flashFeatureRequest, setFlashFeatureRequest] = useState<{ layerId: string; featureId: string; nonce: number } | null>(null)
 
   const [searchText, setSearchText] = useState('')
   const [searching, setSearching] = useState(false)
@@ -629,7 +844,19 @@ export default function App() {
 
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false)
   const [visibleByLayerId, setVisibleByLayerId] = useState<Record<string, boolean>>({})
+  const [appMode, setAppMode] = useState<AppMode>(() => readStoredAppMode())
   const [legendMode, setLegendMode] = useState<LegendMode>(() => readStoredLegendMode())
+  const [workMode, setWorkMode] = useState<boolean>(() => readStoredWorkMode())
+  const [selectedUtilityNetworkId, setSelectedUtilityNetworkId] = useState<string | null>(null)
+  const [utilityModeError, setUtilityModeError] = useState<string | null>(null)
+  const [editToolSearch, setEditToolSearch] = useState('')
+  const [editToolTab, setEditToolTab] = useState<EditToolTab>(() => readStoredEditToolTab())
+  const [favoriteEditTools, setFavoriteEditTools] = useState<AdvancedEditMode[]>(() => readStoredFavoriteEditTools())
+  const [openEditToolGroups, setOpenEditToolGroups] = useState<Record<EditToolGroup, boolean>>({
+    Alignment: true,
+    Reshape: true,
+    Construction: true,
+  })
   const [legendFiltersByLayerId, setLegendFiltersByLayerId] = useState<Record<string, string[]>>({})
 
   const pushActivity = useCallback((message: string, level: ActivityLevel = 'info') => {
@@ -805,6 +1032,41 @@ export default function App() {
     staleTime: 10_000,
   })
 
+  const utilityNetworksQuery = useQuery({
+    queryKey: ['utility-networks', token],
+    queryFn: () => fetchUtilityNetworks(token),
+    enabled: appMode === 'utilities',
+    staleTime: 15_000,
+  })
+
+  const utilitySummaryQuery = useQuery({
+    queryKey: ['utility-network-summary', selectedUtilityNetworkId, token],
+    queryFn: () => fetchUtilityNetworkSummary(selectedUtilityNetworkId as string, token),
+    enabled: appMode === 'utilities' && Boolean(selectedUtilityNetworkId),
+    staleTime: 15_000,
+  })
+
+  const utilityNodesQuery = useQuery({
+    queryKey: ['utility-network-nodes', selectedUtilityNetworkId, token],
+    queryFn: () => fetchUtilityNetworkNodes(selectedUtilityNetworkId as string, token, 40),
+    enabled: appMode === 'utilities' && Boolean(selectedUtilityNetworkId),
+    staleTime: 15_000,
+  })
+
+  const utilityEdgesQuery = useQuery({
+    queryKey: ['utility-network-edges', selectedUtilityNetworkId, token],
+    queryFn: () => fetchUtilityNetworkEdges(selectedUtilityNetworkId as string, token, 40),
+    enabled: appMode === 'utilities' && Boolean(selectedUtilityNetworkId),
+    staleTime: 15_000,
+  })
+
+  const utilityServicePointsQuery = useQuery({
+    queryKey: ['utility-network-service-points', selectedUtilityNetworkId, token],
+    queryFn: () => fetchUtilityNetworkServicePoints(selectedUtilityNetworkId as string, token, 40),
+    enabled: appMode === 'utilities' && Boolean(selectedUtilityNetworkId),
+    staleTime: 15_000,
+  })
+
   const editSessionsQuery = useQuery({
     queryKey: ['edit-sessions', layerOpsLayer?.id, token],
     queryFn: () => fetchEditSessions(layerOpsLayer?.id as string, token as string),
@@ -819,12 +1081,12 @@ export default function App() {
     staleTime: 5_000,
   })
 
-  const tableJoinsQuery = useQuery({
-    queryKey: ['layer-joins', tableLayer?.id, token, 'table'],
-    queryFn: () => fetchLayerJoins(tableLayer?.id as string, token),
-    enabled: Boolean(tableLayer?.id) && tableOpen,
-    staleTime: 10_000,
-  })
+  // const tableJoinsQuery = useQuery({
+  //   queryKey: ['layer-joins', tableLayer?.id, token, 'table'],
+  //   queryFn: () => fetchLayerJoins(tableLayer?.id as string, token),
+  //   enabled: Boolean(tableLayer?.id) && tableOpen,
+  //   staleTime: 10_000,
+  // })
 
   const viewsQuery = useQuery({
     queryKey: ['map-views', token],
@@ -888,8 +1150,24 @@ export default function App() {
   }, [layers])
 
   useEffect(() => {
+    window.localStorage.setItem(APP_MODE_STORAGE_KEY, appMode)
+  }, [appMode])
+
+  useEffect(() => {
     window.localStorage.setItem(LEGEND_MODE_STORAGE_KEY, legendMode)
   }, [legendMode])
+
+  useEffect(() => {
+    window.localStorage.setItem(WORK_MODE_STORAGE_KEY, workMode ? 'true' : 'false')
+  }, [workMode])
+
+  useEffect(() => {
+    window.localStorage.setItem(EDIT_TOOL_TAB_STORAGE_KEY, editToolTab)
+  }, [editToolTab])
+
+  useEffect(() => {
+    window.localStorage.setItem(EDIT_TOOL_FAVORITES_STORAGE_KEY, JSON.stringify(favoriteEditTools))
+  }, [favoriteEditTools])
 
   useEffect(() => {
     const allowedLayerIds = new Set(layers.map((layer) => layer.id))
@@ -904,6 +1182,15 @@ export default function App() {
     })
   }, [layers])
 
+  useEffect(() => {
+    if (activeEditLayerId) {
+      return
+    }
+    setEditState({ selectedCount: 0, canUndo: false, canRedo: false })
+    setEditUiState(null)
+    setEditCommand(null)
+  }, [activeEditLayerId])
+
   const schemaFields: LayerField[] = layerFieldsQuery.data ?? []
   const schemaDomains: LayerDomain[] = layerDomainsQuery.data ?? []
   const layerOpsFields: LayerField[] = layerOpsFieldsQuery.data ?? []
@@ -911,9 +1198,11 @@ export default function App() {
   const shareLinks: LayerShareLink[] = shareLinksQuery.data ?? []
   const layerViews: LayerView[] = layerViewsQuery.data ?? []
   const layerRelationships: LayerRelationship[] = layerRelationshipsQuery.data ?? []
+  const utilityNetworks: UtilityNetwork[] = utilityNetworksQuery.data ?? []
+  const utilityNetworkSummary: UtilityNetworkSummary | null = utilitySummaryQuery.data ?? null
   const editSessions: EditSession[] = editSessionsQuery.data ?? []
   const editSessionChanges: EditSessionChange[] = editSessionChangesQuery.data ?? []
-  const tableJoins: LayerJoin[] = tableJoinsQuery.data ?? []
+  // const tableJoins: LayerJoin[] = tableJoinsQuery.data ?? []
   const mapViews: MapView[] = viewsQuery.data ?? []
   const asyncJobs: AsyncJob[] = jobsQuery.data ?? []
 
@@ -927,6 +1216,12 @@ export default function App() {
     layerRelationshipsQuery.isFetching ||
     editSessionsQuery.isFetching ||
     editSessionChangesQuery.isFetching
+  const utilityModeLoading = utilityNetworksQuery.isFetching
+  const utilityModeDetailLoading =
+    utilitySummaryQuery.isFetching ||
+    utilityNodesQuery.isFetching ||
+    utilityEdgesQuery.isFetching ||
+    utilityServicePointsQuery.isFetching
   const schemaQueryError =
     (layerFieldsQuery.error instanceof Error ? layerFieldsQuery.error.message : null) ??
     (layerDomainsQuery.error instanceof Error ? layerDomainsQuery.error.message : null)
@@ -938,7 +1233,27 @@ export default function App() {
     (layerRelationshipsQuery.error instanceof Error ? layerRelationshipsQuery.error.message : null) ??
     (editSessionsQuery.error instanceof Error ? editSessionsQuery.error.message : null) ??
     (editSessionChangesQuery.error instanceof Error ? editSessionChangesQuery.error.message : null)
+  const utilityModeQueryError =
+    utilityModeError ??
+    (utilityNetworksQuery.error instanceof Error ? utilityNetworksQuery.error.message : null) ??
+    (utilitySummaryQuery.error instanceof Error ? utilitySummaryQuery.error.message : null) ??
+    (utilityNodesQuery.error instanceof Error ? utilityNodesQuery.error.message : null) ??
+    (utilityEdgesQuery.error instanceof Error ? utilityEdgesQuery.error.message : null) ??
+    (utilityServicePointsQuery.error instanceof Error ? utilityServicePointsQuery.error.message : null)
   const ownerName = user?.username ?? null
+
+  useEffect(() => {
+    if (appMode !== 'utilities') {
+      return
+    }
+    if (!utilityNetworks.length) {
+      setSelectedUtilityNetworkId(null)
+      return
+    }
+    if (!selectedUtilityNetworkId || !utilityNetworks.some((network) => network.id === selectedUtilityNetworkId)) {
+      setSelectedUtilityNetworkId(utilityNetworks[0]?.id ?? null)
+    }
+  }, [appMode, utilityNetworks, selectedUtilityNetworkId])
 
   const resolveActiveSessionId = useCallback(
     (layerId: string): string | undefined => {
@@ -1058,6 +1373,86 @@ export default function App() {
     },
   })
 
+  const createUtilityNetworkMutation = useMutation({
+    mutationFn: async (payload: CreateUtilityNetworkPayload) => {
+      if (!token) {
+        throw new Error('You must be signed in to create utility networks.')
+      }
+      return createUtilityNetwork(payload, token)
+    },
+    onSuccess: (network) => {
+      setUtilityModeError(null)
+      setSelectedUtilityNetworkId(network.id)
+      queryClient.invalidateQueries({ queryKey: ['utility-networks'] })
+      notify(`Utility network "${network.name}" created`, 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Failed to create utility network'
+      setUtilityModeError(message)
+      notify(message, 'error')
+    },
+  })
+
+  const createUtilityNodeMutation = useMutation({
+    mutationFn: async ({ networkId, payload }: { networkId: string; payload: CreateUtilityNodePayload }) => {
+      if (!token) {
+        throw new Error('You must be signed in to create utility assets.')
+      }
+      return createUtilityNetworkNode(networkId, payload, token)
+    },
+    onSuccess: (_, variables) => {
+      setUtilityModeError(null)
+      queryClient.invalidateQueries({ queryKey: ['utility-network-summary', variables.networkId] })
+      queryClient.invalidateQueries({ queryKey: ['utility-network-nodes', variables.networkId] })
+      notify('Utility node created', 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Failed to create utility node'
+      setUtilityModeError(message)
+      notify(message, 'error')
+    },
+  })
+
+  const createUtilityEdgeMutation = useMutation({
+    mutationFn: async ({ networkId, payload }: { networkId: string; payload: CreateUtilityEdgePayload }) => {
+      if (!token) {
+        throw new Error('You must be signed in to create utility assets.')
+      }
+      return createUtilityNetworkEdge(networkId, payload, token)
+    },
+    onSuccess: (_, variables) => {
+      setUtilityModeError(null)
+      queryClient.invalidateQueries({ queryKey: ['utility-network-summary', variables.networkId] })
+      queryClient.invalidateQueries({ queryKey: ['utility-network-edges', variables.networkId] })
+      notify('Utility edge created', 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Failed to create utility edge'
+      setUtilityModeError(message)
+      notify(message, 'error')
+    },
+  })
+
+  const createUtilityServicePointMutation = useMutation({
+    mutationFn: async ({ networkId, payload }: { networkId: string; payload: CreateUtilityServicePointPayload }) => {
+      if (!token) {
+        throw new Error('You must be signed in to create utility assets.')
+      }
+      return createUtilityNetworkServicePoint(networkId, payload, token)
+    },
+    onSuccess: (_, variables) => {
+      setUtilityModeError(null)
+      queryClient.invalidateQueries({ queryKey: ['utility-network-summary', variables.networkId] })
+      queryClient.invalidateQueries({ queryKey: ['utility-network-service-points', variables.networkId] })
+      notify('Utility service point created', 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Failed to create service point'
+      setUtilityModeError(message)
+      notify(message, 'error')
+    },
+  })
+
   const styleMutation = useMutation({
     mutationFn: async (payload: { layer: Layer; style: LayerStyleDraft }) => {
       if (!token) {
@@ -1075,6 +1470,25 @@ export default function App() {
     },
     onError: (error) => {
       setStyleError(error instanceof Error ? error.message : 'Failed to update style')
+    },
+  })
+
+  const quickEditStyleMutation = useMutation({
+    mutationFn: async (payload: { layer: Layer; patch: Partial<LayerStyleDraft> }) => {
+      if (!token) {
+        throw new Error('You must be signed in to update editing settings.')
+      }
+      const base = readStyle(payload.layer)
+      const nextStyle = { ...base, ...payload.patch }
+      return updateLayer(payload.layer.id, { style: toStylePayload(nextStyle) }, token)
+    },
+    onSuccess: (layer) => {
+      queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['layer-features', layer.id] })
+      notify(`Editing settings updated for "${layer.name}"`, 'success', false)
+    },
+    onError: (error) => {
+      notify(error instanceof Error ? error.message : 'Failed to update editing settings', 'error')
     },
   })
 
@@ -1782,6 +2196,7 @@ export default function App() {
     setCurrentMapView(null)
     setJobsOpen(false)
     setJobsError(null)
+    setUtilityModeError(null)
     setFeatureConflict(null)
     setActiveEditLayerId(null)
     setMeasurementMode(null)
@@ -1793,6 +2208,38 @@ export default function App() {
   const handleCreateLayer = (payload: CreateLayerPayload) => {
     setCreateLayerError(null)
     createLayerMutation.mutate(payload)
+  }
+
+  const handleCreateUtilityNetwork = (payload: CreateUtilityNetworkPayload) => {
+    setUtilityModeError(null)
+    createUtilityNetworkMutation.mutate(payload)
+  }
+
+  const handleCreateUtilityNode = (payload: CreateUtilityNodePayload) => {
+    if (!selectedUtilityNetworkId) {
+      setUtilityModeError('Select a utility network before creating a node.')
+      return
+    }
+    setUtilityModeError(null)
+    createUtilityNodeMutation.mutate({ networkId: selectedUtilityNetworkId, payload })
+  }
+
+  const handleCreateUtilityEdge = (payload: CreateUtilityEdgePayload) => {
+    if (!selectedUtilityNetworkId) {
+      setUtilityModeError('Select a utility network before creating an edge.')
+      return
+    }
+    setUtilityModeError(null)
+    createUtilityEdgeMutation.mutate({ networkId: selectedUtilityNetworkId, payload })
+  }
+
+  const handleCreateUtilityServicePoint = (payload: CreateUtilityServicePointPayload) => {
+    if (!selectedUtilityNetworkId) {
+      setUtilityModeError('Select a utility network before creating a service point.')
+      return
+    }
+    setUtilityModeError(null)
+    createUtilityServicePointMutation.mutate({ networkId: selectedUtilityNetworkId, payload })
   }
 
   const handleOpenUpload = (layer: Layer) => {
@@ -1881,27 +2328,28 @@ export default function App() {
     return result
   }
 
-  const handleFetchFeatureHistory = async (featureId: string) => {
-    if (!tableLayer) {
-      throw new Error('No table layer selected')
-    }
-    return fetchFeatureHistory(tableLayer.id, featureId, token)
-  }
+  // Unused - will be implemented later
+  // const handleFetchFeatureHistory = async (featureId: string) => {
+  //   if (!tableLayer) {
+  //     throw new Error('No table layer selected')
+  //   }
+  //   return fetchFeatureHistory(tableLayer.id, featureId, token)
+  // }
 
-  const handleRollbackFeature = async (featureId: string, payload: { history_id?: string; version?: number }) => {
-    if (!tableLayer) {
-      throw new Error('No table layer selected')
-    }
-    if (!token) {
-      throw new Error('Sign in to rollback feature history')
-    }
-    if (!canManageLayer(ownerName, tableLayer)) {
-      throw new Error('Read-only layer: only the owner can rollback features')
-    }
-    await rollbackFeature(tableLayer.id, featureId, payload, token)
-    queryClient.invalidateQueries({ queryKey: ['layer-features', tableLayer.id] })
-    notify('Feature rolled back', 'success')
-  }
+  // const handleRollbackFeature = async (featureId: string, payload: { history_id?: string; version?: number }) => {
+  //   if (!tableLayer) {
+  //     throw new Error('No table layer selected')
+  //   }
+  //   if (!token) {
+  //     throw new Error('Sign in to rollback feature history')
+  //   }
+  //   if (!canManageLayer(ownerName, tableLayer)) {
+  //     throw new Error('Read-only layer: only the owner can rollback features')
+  //   }
+  //   await rollbackFeature(tableLayer.id, featureId, payload, token)
+  //   queryClient.invalidateQueries({ queryKey: ['layer-features', tableLayer.id] })
+  //   notify('Feature rolled back', 'success')
+  // }
 
   const handleSaveProperties = (featureId: string, properties: Record<string, unknown>, version?: number) => {
     if (!tableLayer) {
@@ -2209,6 +2657,37 @@ export default function App() {
     setFitVisibleRequest({ nonce: Date.now() })
   }
 
+  // Phase 1: Attribute Table Selection Handlers
+  const handleFeatureSelectionChange = (layerId: string, featureIds: string[]) => {
+    setSelectedFeaturesByLayer((prev) => ({
+      ...prev,
+      [layerId]: featureIds,
+    }))
+  }
+
+  const handleZoomToFeature = (layerId: string, featureId: string) => {
+    setFeatureZoomRequest({ layerId, featureIds: [featureId], nonce: Date.now() })
+  }
+
+  const handleZoomToSelection = (layerId: string, featureIds: string[]) => {
+    if (!featureIds.length) {
+      notify('No features selected to zoom to', 'warning')
+      return
+    }
+    setFeatureZoomRequest({ layerId, featureIds, nonce: Date.now() })
+  }
+
+  const handleFlashFeature = (layerId: string, featureId: string) => {
+    setFlashFeatureRequest({ layerId, featureId, nonce: Date.now() })
+  }
+
+  const handlePanToFeature = (layerId: string, featureId: string) => {
+    // setHighlightedFeature({ layerId, featureId })
+    // Pan will be handled in MapCanvas based on highlightedFeature
+    // Note: highlightedFeature state currently unused - could be implemented later
+    console.log('Pan to feature:', layerId, featureId)
+  }
+
   const handleToggleMeasurement = (mode: Exclude<MeasurementMode, null>) => {
     setMeasurementSummary(null)
     setMeasurementResetNonce((current) => current + 1)
@@ -2301,6 +2780,13 @@ export default function App() {
     notify(`Legend mode set to ${mode}`, 'info', false)
   }
 
+  const handleToggleAppMode = () => {
+    const nextMode: AppMode = appMode === 'utilities' ? 'standard' : 'utilities'
+    setAppMode(nextMode)
+    setUtilityModeError(null)
+    notify(nextMode === 'utilities' ? 'Utility mode activated' : 'Standard GIS mode activated', 'info')
+  }
+
   const handleToggleLegendItem = (layerId: string, itemKey: string) => {
     setLegendFiltersByLayerId((previous) => {
       const current = new Set(previous[layerId] ?? [])
@@ -2324,8 +2810,56 @@ export default function App() {
     setLegendFiltersByLayerId({})
   }
 
+  const queueEditCommand = (action: EditCommand['action']) => {
+    if (!activeEditLayerId) {
+      notify('Enable draw/edit mode on a layer first.', 'warning')
+      return
+    }
+    setEditCommand({
+      action,
+      nonce: Date.now() + Math.floor(Math.random() * 1000),
+    })
+  }
+
   const activeEditLayer = activeEditLayerId ? layerById[activeEditLayerId] ?? null : null
   const editableLayerFeatures = activeEditLayerId ? featureCollections[activeEditLayerId] ?? null : null
+  const selectedUtilityNetwork = selectedUtilityNetworkId
+    ? utilityNetworks.find((network) => network.id === selectedUtilityNetworkId) ?? null
+    : null
+  const utilityOverlay = useMemo(
+    () =>
+      appMode === 'utilities' && selectedUtilityNetwork
+        ? {
+            networkName: selectedUtilityNetwork.name,
+            utilityType: selectedUtilityNetwork.utility_type,
+            nodes: utilityNodesQuery.data ?? null,
+            edges: utilityEdgesQuery.data ?? null,
+            servicePoints: utilityServicePointsQuery.data ?? null,
+          }
+        : null,
+    [
+      appMode,
+      selectedUtilityNetwork,
+      utilityNodesQuery.data,
+      utilityEdgesQuery.data,
+      utilityServicePointsQuery.data,
+    ],
+  )
+  const selectedModeMeta = ADVANCED_EDIT_MODE_OPTIONS.find((option) => option.value === advancedEditMode)
+  const favoriteToolsSet = useMemo(() => new Set(favoriteEditTools), [favoriteEditTools])
+  const activeEditStyle = (activeEditLayer?.style ?? null) as Record<string, unknown> | null
+  const activeLayerSnapEnabled = Boolean(activeEditStyle?.snap_enabled ?? activeEditStyle?.snapEnabled)
+  const activeLayerSnapTolerance = Math.max(
+    1,
+    Number(
+      activeEditStyle?.snap_tolerance_m ??
+      activeEditStyle?.snapToleranceMeters ??
+      DEFAULT_STYLE_DRAFT.snapToleranceMeters,
+    ) || DEFAULT_STYLE_DRAFT.snapToleranceMeters,
+  )
+  const activeLayerTopologyNoOverlap = Boolean(activeEditStyle?.topology_no_overlap ?? activeEditStyle?.topologyNoOverlap)
+  const activeLayerIsPolygonFamily = Boolean(activeEditLayer?.geometry_type?.toLowerCase().includes('polygon'))
+  const quickEditStyleBusy = quickEditStyleMutation.isPending
 
   const drawBusy = createFeatureMutation.isPending || updateFeatureMutation.isPending || deleteFeatureMutation.isPending
   const measurementLabel = measurementSummary
@@ -2335,6 +2869,485 @@ export default function App() {
       : measurementMode === 'area'
         ? 'Area: click map to add vertices'
         : null
+  const snapChipColor: 'default' | 'success' | 'warning' =
+    editUiState?.snapEnabled && !editUiState.snapTemporarilyDisabled
+      ? editUiState.snapCandidate
+        ? 'success'
+        : 'default'
+      : 'warning'
+  const snapChipLabel = !editUiState?.snapEnabled
+    ? 'Snap off'
+    : editUiState.snapTemporarilyDisabled
+      ? 'Snap paused (Alt)'
+      : editUiState.snapCandidate
+        ? 'Snap target acquired'
+        : `Snap tolerance: ${editUiState.snapTolerancePixels}px`
+
+  const applyQuickEditStylePatch = (patch: Partial<LayerStyleDraft>) => {
+    if (!activeEditLayer) {
+      return
+    }
+    quickEditStyleMutation.mutate({ layer: activeEditLayer, patch })
+  }
+
+  const toggleFavoriteEditTool = (mode: AdvancedEditMode) => {
+    setFavoriteEditTools((previous) => {
+      const current = new Set(previous)
+      if (current.has(mode)) {
+        current.delete(mode)
+      } else {
+        current.add(mode)
+      }
+      return Array.from(current)
+    })
+  }
+
+  const filteredEditTools = useMemo(() => {
+    const query = editToolSearch.trim().toLowerCase()
+    return ADVANCED_EDIT_MODE_OPTIONS.filter((tool) => {
+      if (editToolTab === 'my' && !favoriteToolsSet.has(tool.value)) {
+        return false
+      }
+      if (!query) {
+        return true
+      }
+      const haystack = `${tool.label} ${tool.helper} ${tool.group} ${tool.keywords.join(' ')}`.toLowerCase()
+      return haystack.includes(query)
+    })
+  }, [editToolSearch, editToolTab, favoriteToolsSet])
+
+  const groupedEditTools = useMemo(() => {
+    const groups: Record<EditToolGroup, typeof ADVANCED_EDIT_MODE_OPTIONS> = {
+      Alignment: [],
+      Reshape: [],
+      Construction: [],
+    }
+    for (const tool of filteredEditTools) {
+      groups[tool.group].push(tool)
+    }
+    return groups
+  }, [filteredEditTools])
+
+  const toolIconForMode = (mode: AdvancedEditMode) => {
+    if (mode === 'align') {
+      return <ViewColumnIcon fontSize="small" />
+    }
+    if (mode === 'rotate-scale') {
+      return <ZoomOutMapIcon fontSize="small" />
+    }
+    if (mode === 'reshape') {
+      return <EditLocationAltIcon fontSize="small" />
+    }
+    if (mode === 'split') {
+      return <ViewSidebarIcon fontSize="small" />
+    }
+    if (mode === 'trace') {
+      return <SearchIcon fontSize="small" />
+    }
+    if (mode === 'rectangular-constraints') {
+      return <SquareFootIcon fontSize="small" />
+    }
+    return <StraightenIcon fontSize="small" />
+  }
+
+  const toggleEditToolGroup = (group: EditToolGroup) => {
+    setOpenEditToolGroups((previous) => ({
+      ...previous,
+      [group]: !previous[group],
+    }))
+  }
+
+  const editToolsContent = activeEditLayer ? (
+    <Stack spacing={1}>
+      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+        <Chip
+          size="small"
+          color="primary"
+          label={`${editState.selectedCount} selected`}
+        />
+        <Chip size="small" variant="outlined" label={editState.canUndo ? 'Undo ready' : 'Undo empty'} />
+        <Chip size="small" variant="outlined" label={editState.canRedo ? 'Redo ready' : 'Redo empty'} />
+      </Stack>
+
+      {editUiState && (
+        <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+          <Chip size="small" variant="outlined" label={`Cursor: ${editUiState.cursor}`} />
+          <Chip size="small" variant="outlined" label={`Draw mode: ${editUiState.drawMode}`} />
+          <Chip size="small" variant="outlined" color={snapChipColor} label={snapChipLabel} />
+        </Stack>
+      )}
+
+      {activeEditLayer?.geometry_type?.includes('Polygon') && (
+        <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1.5, p: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75 }}>
+            Draw Shapes
+          </Typography>
+
+          <ToggleButtonGroup
+            value={activeShapeType}
+            exclusive
+            onChange={(_, newShape: typeof activeShapeType) => {
+              setActiveShapeType(newShape)
+            }}
+            size="small"
+            sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: activeShapeType ? 1.5 : 0 }}
+          >
+            <Tooltip title="Circle" arrow>
+              <ToggleButton value="circle" sx={{ flex: '1 1 auto', minWidth: '42px' }}>
+                <CircleOutlinedIcon fontSize="small" />
+              </ToggleButton>
+            </Tooltip>
+            <Tooltip title="Rectangle" arrow>
+              <ToggleButton value="rectangle" sx={{ flex: '1 1 auto', minWidth: '42px' }}>
+                <RectangleOutlinedIcon fontSize="small" />
+              </ToggleButton>
+            </Tooltip>
+            <Tooltip title="Square" arrow>
+              <ToggleButton value="square" sx={{ flex: '1 1 auto', minWidth: '42px' }}>
+                <CropSquareIcon fontSize="small" />
+              </ToggleButton>
+            </Tooltip>
+            <Tooltip title="Triangle" arrow>
+              <ToggleButton value="triangle" sx={{ flex: '1 1 auto', minWidth: '42px' }}>
+                <ChangeHistoryIcon fontSize="small" />
+              </ToggleButton>
+            </Tooltip>
+            <Tooltip title="Pentagon" arrow>
+              <ToggleButton value="pentagon" sx={{ flex: '1 1 auto', minWidth: '42px' }}>
+                <PentagonOutlinedIcon fontSize="small" />
+              </ToggleButton>
+            </Tooltip>
+            <Tooltip title="Hexagon" arrow>
+              <ToggleButton value="hexagon" sx={{ flex: '1 1 auto', minWidth: '42px' }}>
+                <HexagonOutlinedIcon fontSize="small" />
+              </ToggleButton>
+            </Tooltip>
+            <Tooltip title="Star" arrow>
+              <ToggleButton value="star" sx={{ flex: '1 1 auto', minWidth: '42px' }}>
+                <StarBorderIcon fontSize="small" />
+              </ToggleButton>
+            </Tooltip>
+          </ToggleButtonGroup>
+
+          {activeShapeType && (
+            <Box>
+              <Typography variant="caption" color="text.secondary" gutterBottom display="block">
+                Default Size: {shapeSize}m
+              </Typography>
+              <TextField
+                size="small"
+                type="number"
+                value={shapeSize}
+                onChange={(e) => {
+                  const value = Number(e.target.value)
+                  if (value >= 10) {
+                    setShapeSize(value)
+                  }
+                }}
+                inputProps={{ min: 10, step: 10 }}
+                fullWidth
+                sx={{ mb: 1 }}
+              />
+              <Alert severity="info" sx={{ mb: 0.75 }}>
+                <Typography variant="caption" display="block">
+                  <strong>Click and drag</strong> on the map to draw the {activeShapeType}
+                </Typography>
+                <Typography variant="caption" display="block" sx={{ mt: 0.25 }}>
+                  Or <strong>single click</strong> to use default size ({shapeSize}m)
+                </Typography>
+              </Alert>
+              <Button
+                fullWidth
+                variant="outlined"
+                size="small"
+                onClick={() => setActiveShapeType(null)}
+              >
+                Cancel
+              </Button>
+            </Box>
+          )}
+        </Box>
+      )}
+
+      <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1.5, p: 1 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75 }}>
+          Modify Features
+        </Typography>
+        <TextField
+          size="small"
+          fullWidth
+          placeholder="Search tools"
+          value={editToolSearch}
+          onChange={(event) => setEditToolSearch(event.target.value)}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon fontSize="small" />
+              </InputAdornment>
+            ),
+          }}
+        />
+        <Tabs
+          value={editToolTab}
+          onChange={(_, value: EditToolTab) => setEditToolTab(value)}
+          variant="fullWidth"
+          sx={{ minHeight: 34, mt: 0.75, mb: 0.5 }}
+        >
+          <Tab value="all" label="All Tools" sx={{ minHeight: 34, textTransform: 'none' }} />
+          <Tab value="my" label={`My Tools (${favoriteEditTools.length})`} sx={{ minHeight: 34, textTransform: 'none' }} />
+        </Tabs>
+
+        {editToolTab === 'my' && !favoriteEditTools.length && (
+          <Alert severity="info" sx={{ mb: 0.75 }}>
+            Pin tools with the bookmark icon to build My Tools.
+          </Alert>
+        )}
+
+        {!filteredEditTools.length && (
+          <Alert severity="warning" sx={{ mb: 0.75 }}>
+            No tools match the current search.
+          </Alert>
+        )}
+
+        <Stack spacing={1}>
+          {EDIT_TOOL_GROUP_ORDER.map((group) => {
+            const tools = groupedEditTools[group]
+            if (!tools.length) {
+              return null
+            }
+            const open = openEditToolGroups[group]
+            return (
+              <Box key={group}>
+                <Button
+                  size="small"
+                  fullWidth
+                  color="inherit"
+                  onClick={() => toggleEditToolGroup(group)}
+                  endIcon={open ? <ExpandLessIcon fontSize="small" /> : <ExpandMoreIcon fontSize="small" />}
+                  sx={{ justifyContent: 'space-between', textTransform: 'none', mb: 0.4, fontWeight: 700 }}
+                >
+                  {group}
+                </Button>
+                {open && (
+                  <Stack spacing={0.5}>
+                    {tools.map((tool) => {
+                      const selected = advancedEditMode === tool.value
+                      const favorite = favoriteToolsSet.has(tool.value)
+                      return (
+                        <Stack key={tool.value} direction="row" spacing={0.5} alignItems="center">
+                          <Button
+                            size="small"
+                            variant={selected ? 'contained' : 'outlined'}
+                            color={selected ? 'primary' : 'inherit'}
+                            fullWidth
+                            startIcon={toolIconForMode(tool.value)}
+                            sx={{ justifyContent: 'flex-start', textTransform: 'none' }}
+                            onClick={() => setAdvancedEditMode(tool.value)}
+                          >
+                            {tool.label}
+                          </Button>
+                          <Tooltip title={favorite ? 'Remove from My Tools' : 'Add to My Tools'}>
+                            <IconButton
+                              size="small"
+                              onClick={() => toggleFavoriteEditTool(tool.value)}
+                              sx={favorite ? undefined : { opacity: 0.45 }}
+                            >
+                              <BookmarkAddedIcon fontSize="small" color={favorite ? 'primary' : 'inherit'} />
+                            </IconButton>
+                          </Tooltip>
+                        </Stack>
+                      )
+                    })}
+                  </Stack>
+                )}
+              </Box>
+            )
+          })}
+        </Stack>
+      </Box>
+
+      <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: 'wrap' }}>
+        <Button
+          size="small"
+          variant={activeLayerSnapEnabled ? 'contained' : 'outlined'}
+          onClick={() => applyQuickEditStylePatch({ snapEnabled: !activeLayerSnapEnabled })}
+          disabled={quickEditStyleBusy}
+        >
+          {activeLayerSnapEnabled ? 'Snap On' : 'Snap Off'}
+        </Button>
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={() => applyQuickEditStylePatch({ snapToleranceMeters: Math.max(1, activeLayerSnapTolerance - 1) })}
+          disabled={quickEditStyleBusy}
+        >
+          Tol -
+        </Button>
+        <Chip size="small" variant="outlined" label={`${activeLayerSnapTolerance} m`} />
+        <Button
+          size="small"
+          variant="outlined"
+          onClick={() => applyQuickEditStylePatch({ snapToleranceMeters: Math.min(200, activeLayerSnapTolerance + 1) })}
+          disabled={quickEditStyleBusy}
+        >
+          Tol +
+        </Button>
+        {activeLayerIsPolygonFamily && (
+          <Button
+            size="small"
+            variant={activeLayerTopologyNoOverlap ? 'contained' : 'outlined'}
+            onClick={() => applyQuickEditStylePatch({ topologyNoOverlap: !activeLayerTopologyNoOverlap })}
+            disabled={quickEditStyleBusy}
+          >
+            {activeLayerTopologyNoOverlap ? 'No-Overlap On' : 'No-Overlap Off'}
+          </Button>
+        )}
+      </Stack>
+
+      <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1.5, p: 1 }}>
+        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.75 }}>
+          Tool Settings
+        </Typography>
+
+        {advancedEditMode === 'rotate-scale' && (
+          <Stack spacing={0.75}>
+            <Box display="grid" gridTemplateColumns="1fr 1fr" gap={1}>
+              <TextField
+                size="small"
+                type="number"
+                label="Rotate (°)"
+                value={advancedEditOptions.rotateDegrees}
+                onChange={(event) => {
+                  const next = Number(event.target.value)
+                  setAdvancedEditOptions((previous) => ({
+                    ...previous,
+                    rotateDegrees: Number.isFinite(next) ? next : previous.rotateDegrees,
+                  }))
+                }}
+              />
+              <TextField
+                size="small"
+                type="number"
+                inputProps={{ step: 0.1, min: 0.1 }}
+                label="Scale"
+                value={advancedEditOptions.scaleFactor}
+                onChange={(event) => {
+                  const next = Number(event.target.value)
+                  setAdvancedEditOptions((previous) => ({
+                    ...previous,
+                    scaleFactor: Number.isFinite(next) && next > 0 ? next : previous.scaleFactor,
+                  }))
+                }}
+              />
+            </Box>
+            <Typography variant="caption" color="text.secondary">
+              Drag the orange handle above the selection to rotate. Hold <strong>Shift</strong> while dragging to scale.
+            </Typography>
+          </Stack>
+        )}
+
+        {advancedEditMode === 'reshape' && (
+          <Stack spacing={0.75}>
+            <TextField
+              size="small"
+              type="number"
+              inputProps={{ step: 0.05, min: 0.1, max: 1 }}
+              label="Reshape Strength (0.1 - 1)"
+              value={advancedEditOptions.reshapeStrength}
+              onChange={(event) => {
+                const next = Number(event.target.value)
+                setAdvancedEditOptions((previous) => ({
+                  ...previous,
+                  reshapeStrength: Number.isFinite(next) ? Math.max(0.1, Math.min(1, next)) : previous.reshapeStrength,
+                }))
+              }}
+              fullWidth
+            />
+            <Typography variant="caption" color="text.secondary">
+              Drag vertices directly on the map to reshape geometry. Use Apply for smoothing strength.
+            </Typography>
+          </Stack>
+        )}
+
+        {advancedEditMode === 'split' && (
+          <Typography variant="caption" color="text.secondary">
+            Select one or more features, then draw a temporary split line on the map canvas.
+          </Typography>
+        )}
+
+        {advancedEditMode === 'grid-lock' && (
+          <TextField
+            size="small"
+            type="number"
+            inputProps={{ step: 0.5, min: 0.5 }}
+            label="Grid Size (meters)"
+            value={advancedEditOptions.gridSizeMeters}
+            onChange={(event) => {
+              const next = Number(event.target.value)
+              setAdvancedEditOptions((previous) => ({
+                ...previous,
+                gridSizeMeters: Number.isFinite(next) ? Math.max(0.5, next) : previous.gridSizeMeters,
+              }))
+            }}
+            fullWidth
+          />
+        )}
+
+        {advancedEditMode === 'align' && (
+          <TextField
+            select
+            size="small"
+            label="Align Target"
+            value={advancedEditOptions.alignTarget}
+            onChange={(event) =>
+              setAdvancedEditOptions((previous) => ({
+                ...previous,
+                alignTarget: event.target.value as AdvancedEditOptions['alignTarget'],
+              }))
+            }
+            fullWidth
+          >
+            {ALIGN_TARGET_OPTIONS.map((option) => (
+              <MenuItem key={option.value} value={option.value}>
+                {option.label}
+              </MenuItem>
+            ))}
+          </TextField>
+        )}
+      </Box>
+
+      <Stack direction="row" spacing={0.75} alignItems="center">
+        <Button
+          size="small"
+          variant="contained"
+          onClick={() => queueEditCommand('apply')}
+        >
+          Apply
+        </Button>
+        <Tooltip title="Undo">
+          <span>
+            <IconButton size="small" onClick={() => queueEditCommand('undo')} disabled={!editState.canUndo}>
+              <UndoIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Redo">
+          <span>
+            <IconButton size="small" onClick={() => queueEditCommand('redo')} disabled={!editState.canRedo}>
+              <RedoIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Stack>
+
+      <Typography variant="caption" color="text.secondary">
+        {selectedModeMeta?.helper ?? 'Select a mode and apply to selected features.'}
+      </Typography>
+      <Typography variant="caption" color="text.secondary">
+        Hold <strong>Alt</strong> to temporarily disable snapping while editing.
+      </Typography>
+    </Stack>
+  ) : null
 
   const drawerContent = (
     <Box>
@@ -2342,15 +3355,61 @@ export default function App() {
       <Box sx={{ px: 2, pb: 2 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
           <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-            Data Layers
+            {appMode === 'utilities' ? 'Utility Workspace' : 'Data Layers'}
           </Typography>
-          <Chip label={`${layers.length} layers`} size="small" />
+          <Chip label={appMode === 'utilities' ? `${utilityNetworks.length} networks` : `${layers.length} layers`} size="small" />
         </Stack>
 
+        {appMode === 'utilities' && (
+          <UtilityModePanel
+            userId={user?.id ?? null}
+            networks={utilityNetworks}
+            selectedNetworkId={selectedUtilityNetworkId}
+            summary={utilityNetworkSummary}
+            nodes={utilityNodesQuery.data ?? null}
+            edges={utilityEdgesQuery.data ?? null}
+            servicePoints={utilityServicePointsQuery.data ?? null}
+            loading={utilityModeLoading}
+            detailLoading={utilityModeDetailLoading}
+            creating={createUtilityNetworkMutation.isPending}
+            creatingNode={createUtilityNodeMutation.isPending}
+            creatingEdge={createUtilityEdgeMutation.isPending}
+            creatingServicePoint={createUtilityServicePointMutation.isPending}
+            error={utilityModeQueryError}
+            onSelectNetwork={(networkId) => {
+              setSelectedUtilityNetworkId(networkId)
+              setUtilityModeError(null)
+            }}
+            onCreateNetwork={handleCreateUtilityNetwork}
+            onCreateNode={handleCreateUtilityNode}
+            onCreateEdge={handleCreateUtilityEdge}
+            onCreateServicePoint={handleCreateUtilityServicePoint}
+          />
+        )}
+
         {activeEditLayer && (
-          <Alert severity="info" sx={{ mb: 1.5 }}>
-            Draw/Edit mode active: <strong>{activeEditLayer.name}</strong>
-          </Alert>
+          <Box sx={{ mb: 1.5 }}>
+            <Alert severity="info" sx={{ mb: 1 }}>
+              Draw/Edit mode active: <strong>{activeEditLayer.name}</strong>
+            </Alert>
+            {workMode ? (
+              <Alert severity="info">
+                Work mode is active. Advanced edit tools are docked in the right-side workbench.
+              </Alert>
+            ) : (
+              <Box
+                sx={{
+                  border: 1,
+                  borderColor: 'divider',
+                  borderRadius: 1.5,
+                  p: 1.25,
+                  bgcolor: 'background.paper',
+                }}
+              >
+                {editToolsContent}
+              </Box>
+            )}
+          </Box>
         )}
 
         {layersQuery.isLoading && (
@@ -2549,8 +3608,43 @@ export default function App() {
 
           <Chip label={`${totalFeatures} visible features`} color="primary" variant="outlined" size="small" />
           <Chip label={isOnline ? 'Online' : 'Offline'} color={isOnline ? 'success' : 'warning'} variant="outlined" size="small" />
+          <Chip
+            label={appMode === 'utilities' ? 'Mode: Utilities' : 'Mode: Standard'}
+            color={appMode === 'utilities' ? 'success' : 'default'}
+            variant="outlined"
+            size="small"
+          />
+          {appMode === 'utilities' && selectedUtilityNetwork && (
+            <Chip label={`Network: ${selectedUtilityNetwork.name}`} color="success" variant="outlined" size="small" />
+          )}
 
           {measurementLabel && <Chip label={measurementLabel} color="info" variant="outlined" size="small" />}
+
+          <Tooltip title={appMode === 'utilities' ? 'Return to standard GIS mode' : 'Activate utility network workflows'}>
+            <Button
+              size="small"
+              variant={appMode === 'utilities' ? 'contained' : 'outlined'}
+              color={appMode === 'utilities' ? 'success' : 'inherit'}
+              startIcon={<AccountTreeIcon fontSize="small" />}
+              onClick={handleToggleAppMode}
+              sx={{ textTransform: 'none' }}
+            >
+              Utility Mode
+            </Button>
+          </Tooltip>
+
+          <Tooltip title={workMode ? 'Work mode on: dialogs open as right-side panels' : 'Enable right-side work panels'}>
+            <Button
+              size="small"
+              variant={workMode ? 'contained' : 'outlined'}
+              color={workMode ? 'primary' : 'inherit'}
+              startIcon={<ViewSidebarIcon fontSize="small" />}
+              onClick={() => setWorkMode((value) => !value)}
+              sx={{ textTransform: 'none' }}
+            >
+              Work Mode
+            </Button>
+          </Tooltip>
 
           <TextField
             value={searchText}
@@ -2733,6 +3827,7 @@ export default function App() {
             featureCollections={featureCollections}
             legendFilters={legendFiltersByLayerId}
             analysisOverlay={analysisOverlay}
+            utilityOverlay={utilityOverlay}
             zoomRequest={zoomRequest}
             fitVisibleRequest={fitVisibleRequest}
             locateRequest={locateRequest}
@@ -2740,6 +3835,14 @@ export default function App() {
             measurementResetNonce={measurementResetNonce}
             activeEditLayerId={activeEditLayerId}
             editLayerFeatures={editableLayerFeatures}
+            advancedEditMode={advancedEditMode}
+            advancedEditOptions={advancedEditOptions}
+            editCommand={editCommand}
+            activeShapeType={activeShapeType}
+            shapeSize={shapeSize}
+            selectedFeaturesByLayer={selectedFeaturesByLayer}
+            featureZoomRequest={featureZoomRequest}
+            flashFeatureRequest={flashFeatureRequest}
             onMeasurementChange={setMeasurementSummary}
             onViewStateChange={setCurrentMapView}
             onFeatureCreated={(layerId, geometry, properties) => {
@@ -2781,8 +3884,83 @@ export default function App() {
 
               deleteFeatureMutation.mutate({ layerId, featureId })
             }}
+            onEditValidationError={(message) => {
+              notify(message, 'warning')
+            }}
+            onEditInfo={(message, severity = 'info') => {
+              notify(message, severity)
+            }}
+            onEditStateChange={setEditState}
+            onEditUiStateChange={setEditUiState}
           />
         </Suspense>
+
+        {tableOpen && (
+          <Suspense fallback={null}>
+            <AttributeTablePanel
+              layerName={tableLayer?.name ?? null}
+              layerId={tableLayer?.id ?? null}
+              featureCollection={tableLayer ? featureCollections[tableLayer.id] ?? null : null}
+              fields={schemaFields}
+              saving={updateFeatureMutation.isPending}
+              error={tableError}
+              selectedFeatureIds={tableLayer ? selectedFeaturesByLayer[tableLayer.id] ?? [] : []}
+              accessToken={token}
+              onClose={() => {
+                setTableOpen(false)
+                setTableLayer(null)
+                setTableError(null)
+              }}
+              onSaveProperties={handleSaveProperties}
+              onQueryRows={handleQueryTableRows}
+              onBulkUpdateRows={handleBulkTableUpdate}
+              onFeatureSelectionChange={(featureIds) => {
+                if (tableLayer) {
+                  handleFeatureSelectionChange(tableLayer.id, featureIds)
+                }
+              }}
+              onZoomToFeature={(featureId) => {
+                if (tableLayer) {
+                  handleZoomToFeature(tableLayer.id, featureId)
+                }
+              }}
+              onZoomToSelection={(featureIds) => {
+                if (tableLayer) {
+                  handleZoomToSelection(tableLayer.id, featureIds)
+                }
+              }}
+              onFlashFeature={(featureId) => {
+                if (tableLayer) {
+                  handleFlashFeature(tableLayer.id, featureId)
+                }
+              }}
+              onPanToFeature={(featureId) => {
+                if (tableLayer) {
+                  handlePanToFeature(tableLayer.id, featureId)
+                }
+              }}
+              onNavigateToRelatedLayer={(relatedLayerId, relatedFeatureId) => {
+                // Find the related layer
+                const relatedLayer = layers.find((l) => l.id === relatedLayerId)
+                if (!relatedLayer) {
+                  notify('Related layer not found', 'error')
+                  return
+                }
+
+                // Switch to the related layer's table
+                setTableLayer(relatedLayer)
+                setTableError(null)
+
+                // Select the related feature
+                handleFeatureSelectionChange(relatedLayerId, [relatedFeatureId])
+
+                // Flash and zoom to the related feature
+                handleFlashFeature(relatedLayerId, relatedFeatureId)
+                handleZoomToFeature(relatedLayerId, relatedFeatureId)
+              }}
+            />
+          </Suspense>
+        )}
 
         <Suspense fallback={null}>
           <LayerLegend
@@ -2797,6 +3975,114 @@ export default function App() {
             onResetLegendFilters={handleResetLegendFilters}
           />
         </Suspense>
+
+        {workMode && appMode === 'utilities' && !activeEditLayer && (
+          <Box
+            sx={{
+              position: 'absolute',
+              top: !isOnline ? 78 : 12,
+              right: 12,
+              width: 360,
+              maxWidth: 'calc(100vw - 24px)',
+              maxHeight: !isOnline ? 'calc(100% - 90px)' : 'calc(100% - 24px)',
+              zIndex: 12,
+              pointerEvents: 'none',
+            }}
+          >
+            <Paper
+              elevation={6}
+              sx={{
+                border: 1,
+                borderColor: 'divider',
+                pointerEvents: 'auto',
+                overflow: 'auto',
+              }}
+            >
+              <Box sx={{ p: 1.25, borderBottom: 1, borderColor: 'divider' }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                  Utility Workbench
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  {selectedUtilityNetwork ? selectedUtilityNetwork.name : 'Select a utility network from the left panel'}
+                </Typography>
+              </Box>
+              <Box sx={{ p: 1.25 }}>
+                {selectedUtilityNetwork ? (
+                  <Stack spacing={1}>
+                    <Chip
+                      label={`${selectedUtilityNetwork.utility_type.replace('_', ' ')} · ${selectedUtilityNetwork.status}`}
+                      color="success"
+                      variant="outlined"
+                      sx={{ alignSelf: 'flex-start', textTransform: 'capitalize' }}
+                    />
+                    <Box display="grid" gridTemplateColumns="repeat(2, minmax(0, 1fr))" gap={1}>
+                      <Paper variant="outlined" sx={{ p: 1 }}>
+                        <Typography variant="caption" color="text.secondary">Nodes</Typography>
+                        <Typography variant="subtitle2">{utilityNetworkSummary?.node_count ?? 0}</Typography>
+                      </Paper>
+                      <Paper variant="outlined" sx={{ p: 1 }}>
+                        <Typography variant="caption" color="text.secondary">Edges</Typography>
+                        <Typography variant="subtitle2">{utilityNetworkSummary?.edge_count ?? 0}</Typography>
+                      </Paper>
+                      <Paper variant="outlined" sx={{ p: 1 }}>
+                        <Typography variant="caption" color="text.secondary">Service Points</Typography>
+                        <Typography variant="subtitle2">{utilityNetworkSummary?.service_point_count ?? 0}</Typography>
+                      </Paper>
+                      <Paper variant="outlined" sx={{ p: 1 }}>
+                        <Typography variant="caption" color="text.secondary">Length (m)</Typography>
+                        <Typography variant="subtitle2">
+                          {Math.round(utilityNetworkSummary?.total_length_m ?? 0).toLocaleString()}
+                        </Typography>
+                      </Paper>
+                    </Box>
+                    <Typography variant="caption" color="text.secondary">
+                      Use the left drawer to create networks and inspect assets. Map rendering and trace tools are the next step.
+                    </Typography>
+                  </Stack>
+                ) : (
+                  <Alert severity="info">Activate Utility Mode and select or create a network to start utility workflows.</Alert>
+                )}
+              </Box>
+            </Paper>
+          </Box>
+        )}
+
+        {workMode && activeEditLayer && (
+          <Box
+            sx={{
+              position: 'absolute',
+              top: !isOnline ? 78 : 12,
+              right: 12,
+              width: 360,
+              maxWidth: 'calc(100vw - 24px)',
+              maxHeight: !isOnline ? 'calc(100% - 90px)' : 'calc(100% - 24px)',
+              zIndex: 12,
+              pointerEvents: 'none',
+            }}
+          >
+            <Paper
+              elevation={6}
+              sx={{
+                border: 1,
+                borderColor: 'divider',
+                pointerEvents: 'auto',
+                overflow: 'auto',
+              }}
+            >
+              <Box sx={{ p: 1.25, borderBottom: 1, borderColor: 'divider' }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                  Editing Workbench
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Layer: {activeEditLayer.name}
+                </Typography>
+              </Box>
+              <Box sx={{ p: 1.25 }}>
+                {editToolsContent}
+              </Box>
+            </Paper>
+          </Box>
+        )}
       </Box>
 
       <AuthDialog open={authOpen} onClose={() => setAuthOpen(false)} onAuthenticated={handleAuthenticated} />
@@ -2812,6 +4098,7 @@ export default function App() {
       <Suspense fallback={null}>
         <UploadLayerDialog
           open={uploadOpen}
+          workMode={workMode}
           layerName={uploadTargetLayer?.name ?? null}
           file={uploadFile}
           submitting={uploadLayerMutation.isPending}
@@ -2829,6 +4116,7 @@ export default function App() {
       <Suspense fallback={null}>
         <LayerStyleDialog
           open={styleOpen}
+          workMode={workMode}
           layerName={styleLayer?.name ?? null}
           layerGeometryType={styleLayer?.geometry_type ?? null}
           fields={schemaFields}
@@ -2846,9 +4134,11 @@ export default function App() {
         />
       </Suspense>
 
-      <Suspense fallback={null}>
+      {/* Replaced with AttributeTablePanel bottom panel for all modes */}
+      {/* <Suspense fallback={null}>
         <AttributeTableDialog
           open={tableOpen}
+          workMode={workMode}
           layerName={tableLayer?.name ?? null}
           featureCollection={tableLayer ? featureCollections[tableLayer.id] ?? null : null}
           fields={schemaFields}
@@ -2866,11 +4156,12 @@ export default function App() {
           onFetchHistory={handleFetchFeatureHistory}
           onRollbackFeature={handleRollbackFeature}
         />
-      </Suspense>
+      </Suspense> */}
 
       <Suspense fallback={null}>
         <FieldsManagerDialog
           open={fieldsOpen}
+          workMode={workMode}
           layerName={fieldsLayer?.name ?? null}
           fields={schemaFields}
           domains={schemaDomains}
@@ -2894,6 +4185,7 @@ export default function App() {
       <Suspense fallback={null}>
         <LayerOpsDialog
           open={layerOpsOpen}
+          workMode={workMode}
           layer={layerOpsLayer}
           layers={layers}
           fields={layerOpsFields}
@@ -2934,6 +4226,7 @@ export default function App() {
       <Suspense fallback={null}>
         <MapViewsDialog
           open={viewsOpen}
+          workMode={workMode}
           views={mapViews}
           currentView={currentMapView}
           loading={viewsQuery.isFetching}
@@ -2952,6 +4245,7 @@ export default function App() {
       <Suspense fallback={null}>
         <JobsDialog
           open={jobsOpen}
+          workMode={workMode}
           jobs={asyncJobs}
           loading={jobsQuery.isFetching}
           error={jobsError ?? (jobsQuery.error instanceof Error ? jobsQuery.error.message : null)}
@@ -2968,6 +4262,7 @@ export default function App() {
       <Suspense fallback={null}>
         <AnalysisDialog
           open={analysisOpen}
+          workMode={workMode}
           layers={layers}
           running={analysisRunning}
           error={analysisError}

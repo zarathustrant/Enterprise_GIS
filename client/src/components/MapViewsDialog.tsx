@@ -20,6 +20,7 @@ import {
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
 import type { MapView } from '../types/gis'
 import type { MapViewportState } from './MapCanvas'
+import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 
 interface MapViewsDialogProps {
   open: boolean
@@ -28,6 +29,7 @@ interface MapViewsDialogProps {
   loading: boolean
   saving: boolean
   error: string | null
+  workMode?: boolean
   onClose: () => void
   onCreateView: (name: string, view: MapViewportState) => void
   onDeleteView: (viewId: string) => void
@@ -45,6 +47,7 @@ export function MapViewsDialog({
   loading,
   saving,
   error,
+  workMode = false,
   onClose,
   onCreateView,
   onDeleteView,
@@ -70,7 +73,14 @@ export function MapViewsDialog({
   }
 
   return (
-    <Dialog open={open} onClose={onClose} fullWidth maxWidth="md">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      fullWidth
+      maxWidth="md"
+      {...(workMode ? WORK_MODE_DIALOG_PROPS : {})}
+      sx={workMode ? workModeDialogSx('min(720px, 96vw)') : normalModeDialogSx('min(720px, 96vw)')}
+    >
       <DialogTitle>Map Bookmarks</DialogTitle>
       <DialogContent>
         <Box display="grid" gap={2} pt={0.5}>
