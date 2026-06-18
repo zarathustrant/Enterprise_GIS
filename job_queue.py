@@ -53,6 +53,6 @@ def queue_enabled(redis_url: str) -> bool:
 
 
 if __name__ == '__main__':
-    redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6379/0')
+    redis_url = os.environ.get('REDIS_URL', 'redis://localhost:6380/0')
     queue_name = os.environ.get('JOB_QUEUE_NAME', 'enterprise_gis_jobs')
     print('queue_enabled', queue_enabled(redis_url), 'queue_name', queue_name)
