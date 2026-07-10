@@ -26,6 +26,41 @@ docker compose up --build
 - API health: `http://localhost:5001/health`
 - API root (`http://localhost:5001/`) redirects to frontend in Docker mode
 
+### Deploy From GitHub To Local Docker
+
+Clone the repo and start the local web stack with one command:
+
+```bash
+git clone -b claude/enterprise-gis-docs-gatfp https://github.com/zarathustrant/Enterprise_GIS.git
+cd Enterprise_GIS
+make github-web
+```
+
+What `make github-web` does:
+
+- creates `.env` from `.env.example` if needed
+- checks that the clone has no local uncommitted changes
+- fast-forwards the clone to the latest pushed commit on GitHub
+- rebuilds and starts the Docker stack from that latest code
+- serves the web app at `http://localhost:5173`
+- preserves the local Postgres volume and does not delete database data
+
+Local ports used by this repo:
+
+- Frontend: `5173`
+- API: `5001`
+- Postgres: `5433`
+- Redis: `6380`
+
+Useful follow-up commands:
+
+```bash
+make github-sync
+make docker-ps
+make docker-logs
+make docker-down
+```
+
 ### Advanced GIS UI (now available)
 
 After sign-in, use these controls in the app:
@@ -140,6 +175,10 @@ docs/
 - Passwords hashed with Werkzeug (PBKDF2-SHA256)
 - Spatial RBAC schema ready (`user_regions` table) for geographic access control
 - Row-level security and audit logging designed for Phase 2
+
+## Documentation
+
+Start with [docs/README.md](docs/README.md) for the structured documentation set covering product goals, architecture, local operations, and next engineering priorities.
 
 ## Roadmap
 
