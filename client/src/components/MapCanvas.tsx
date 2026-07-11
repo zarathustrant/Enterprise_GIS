@@ -1444,12 +1444,10 @@ function labelPosition(feature: GeoJsonFeature): [number, number] | null {
     return [mid[0], mid[1]]
   }
 
-  if (geometry.type === 'Polygon') {
-    return centroidFromPolygonCoordinates(geometry.coordinates)
-  }
-
-  if (geometry.type === 'MultiPolygon' && geometry.coordinates[0]) {
-    return centroidFromPolygonCoordinates(geometry.coordinates[0])
+  if (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon') {
+    // Vertex averages can fall outside concave polygons or inside holes. Labels
+    // need the same guaranteed-inside placement used by polygon markers.
+    return polygonMarkerPosition(geometry, 'interior')
   }
 
   return null
@@ -3524,6 +3522,77 @@ export function MapCanvas({
   const deckLayers = useMemo(() => {
     const builtLayers: Array<GeoJsonLayer | IconLayer | TextLayer> = []
 
+    const pushLabelLayer = (
+      layer: Layer,
+      data: GeoJsonFeatureCollection,
+      evaluator: LayerStyleEvaluator,
+      idSuffix = '',
+    ) => {
+      if (mapZoom < evaluator.labelMinZoom || mapZoom > evaluator.labelMaxZoom) {
+        return
+      }
+
+      const labelData = data.features
+        .flatMap((feature) => {
+          const text = evaluator.getLabelText(feature)
+          if (!text) return []
+
+          const common = {
+            text,
+            priority: evaluator.getLabelPriority(feature),
+            color: evaluator.getLabelColor(feature),
+            size: evaluator.getLabelSize(feature),
+          }
+          if (
+            evaluator.labelPolygonFitEnabled &&
+            feature.geometry &&
+            isPolygonGeometryType(feature.geometry.type) &&
+            !polygonLabelFits(mapRef.current, feature.geometry, text, common.size)
+          ) {
+            return []
+          }
+          if (
+            evaluator.labelRepeatDistanceMeters > 0 &&
+            feature.geometry &&
+            isLineGeometryType(feature.geometry.type)
+          ) {
+            return sampleLineMarkers(feature.geometry, evaluator.labelRepeatDistanceMeters).map((marker) => ({
+              ...common,
+              position: marker.position,
+              angle: evaluator.labelRotateWithLine ? marker.angle : 0,
+            }))
+          }
+          const position = labelPosition(feature)
+          return position ? [{ ...common, position, angle: 0 }] : []
+        })
+        .sort((a, b) => b.priority - a.priority)
+        .slice(0, evaluator.labelMaxCount)
+
+      if (!labelData.length) return
+
+      builtLayers.push(new TextLayer({
+        id: `layer-label-${layer.id}${idSuffix}`,
+        data: labelData,
+        pickable: false,
+        billboard: true,
+        getPosition: (d) => d.position,
+        getText: (d) => d.text,
+        getColor: (d) => d.color,
+        getSize: (d) => d.size,
+        getAngle: (d) => d.angle,
+        getTextAnchor: evaluator.labelTextAnchor,
+        getAlignmentBaseline: evaluator.labelAlignmentBaseline,
+        getOutlineColor: evaluator.labelHaloColor,
+        getOutlineWidth: evaluator.labelHaloWidth,
+        outlineWidthMaxPixels: 3,
+        characterSet: 'auto',
+        collisionEnabled: evaluator.labelCollisionEnabled,
+        collisionGroup: `labels-${layer.id}`,
+        getCollisionPriority: (d: { priority: number }) => d.priority,
+        extensions: evaluator.labelCollisionEnabled ? [new CollisionFilterExtension()] : [],
+      }))
+    }
+
     const orderedLayers = layers
       .map((layer, index) => ({ layer, index }))
       .sort((a, b) => {
@@ -3842,89 +3911,19 @@ export function MapCanvas({
         }
       }
 
-      if (mapZoom >= evaluator.labelMinZoom && mapZoom <= evaluator.labelMaxZoom) {
-        const labelData = filteredData.features
-          .flatMap((feature) => {
-            const text = evaluator.getLabelText(feature)
-            if (!text) {
-              return []
-            }
+      pushLabelLayer(layer, filteredData, evaluator)
+    }
 
-            const common = {
-              text,
-              priority: evaluator.getLabelPriority(feature),
-              color: evaluator.getLabelColor(feature),
-              size: evaluator.getLabelSize(feature),
-            }
-
-            if (
-              evaluator.labelPolygonFitEnabled &&
-              feature.geometry &&
-              isPolygonGeometryType(feature.geometry.type) &&
-              !polygonLabelFits(mapRef.current, feature.geometry, text, common.size)
-            ) {
-              return []
-            }
-
-            if (
-              evaluator.labelRepeatDistanceMeters > 0 &&
-              feature.geometry &&
-              isLineGeometryType(feature.geometry.type)
-            ) {
-              return sampleLineMarkers(feature.geometry, evaluator.labelRepeatDistanceMeters).map((marker) => ({
-                ...common,
-                position: marker.position,
-                angle: evaluator.labelRotateWithLine ? marker.angle : 0,
-              }))
-            }
-
-            const position = labelPosition(feature)
-            if (!position) {
-              return []
-            }
-
-            return [{
-              ...common,
-              position,
-              angle: 0,
-            }]
-          })
-          .filter((item): item is {
-            text: string
-            position: [number, number]
-            priority: number
-            color: RgbaColor
-            size: number
-            angle: number
-          } => Boolean(item))
-          .sort((a, b) => b.priority - a.priority)
-          .slice(0, evaluator.labelMaxCount)
-
-        if (labelData.length) {
-          builtLayers.push(
-            new TextLayer({
-              id: `layer-label-${layer.id}`,
-              data: labelData,
-              pickable: false,
-              billboard: true,
-              getPosition: (d) => d.position,
-              getText: (d) => d.text,
-              getColor: (d) => d.color,
-              getSize: (d) => d.size,
-              getAngle: (d) => d.angle,
-              getTextAnchor: evaluator.labelTextAnchor,
-              getAlignmentBaseline: evaluator.labelAlignmentBaseline,
-              getOutlineColor: evaluator.labelHaloColor,
-              getOutlineWidth: evaluator.labelHaloWidth,
-              outlineWidthMaxPixels: 3,
-              characterSet: 'auto',
-              collisionEnabled: evaluator.labelCollisionEnabled,
-              collisionGroup: `labels-${layer.id}`,
-              getCollisionPriority: (d: { priority: number }) => d.priority,
-              extensions: evaluator.labelCollisionEnabled ? [new CollisionFilterExtension()] : [],
-            }),
-          )
-        }
+    // Mapbox Draw replaces the active layer's geometry while editing. Keep its
+    // deck.gl labels visible so entering work mode does not silently disable labels.
+    if (activeEditLayerId) {
+      const activeLayerIndex = layers.findIndex((layer) => layer.id === activeEditLayerId)
+      const activeLayer = layers[activeLayerIndex]
+      const activeData = editLayerFeatures ?? featureCollections[activeEditLayerId]
+      if (activeLayer && activeData && visibleByLayerId[activeEditLayerId]) {
+        const hiddenLegendKeys = new Set(legendFilters[activeEditLayerId] ?? [])
+        const filteredData = filterFeatureCollectionByLegend(activeLayer, activeData, hiddenLegendKeys)
+        pushLabelLayer(activeLayer, filteredData, resolveLayerStyle(activeLayer, activeLayerIndex, mapZoom), '-editing')
       }
     }
 
@@ -4308,6 +4307,7 @@ export function MapCanvas({
     analysisOverlay,
     utilityOverlay,
     activeEditLayerId,
+    editLayerFeatures,
     measurementOverlay,
     mapZoom,
     selectedVertexGuides,
