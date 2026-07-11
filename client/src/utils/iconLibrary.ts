@@ -29,10 +29,14 @@ export function resolveIconPrefix(iconLibrary: LayerIconLibrary, iconifyPrefix: 
   return sanitizeIconToken(iconifyPrefix) || 'maki'
 }
 
+function defaultIconName(iconLibrary: LayerIconLibrary): string {
+  return ICON_LIBRARY_DEFINITIONS.find((item) => item.value === iconLibrary)?.example || 'marker'
+}
+
 export function resolveIconId(token: string, iconLibrary: LayerIconLibrary, iconifyPrefix: string): string {
   const cleaned = sanitizeIconToken(token)
   if (!cleaned) {
-    return `${resolveIconPrefix(iconLibrary, iconifyPrefix)}:marker`
+    return `${resolveIconPrefix(iconLibrary, iconifyPrefix)}:${defaultIconName(iconLibrary)}`
   }
 
   if (cleaned.includes(':')) {
@@ -41,6 +45,12 @@ export function resolveIconId(token: string, iconLibrary: LayerIconLibrary, icon
     if (prefix && name) {
       return `${prefix}:${name}`
     }
+  }
+
+  // "marker" is the Maki default, but it does not exist in several other
+  // bundled sets. Translate that inherited default when users switch library.
+  if (cleaned === 'marker' && iconLibrary !== 'maki' && iconLibrary !== 'iconify') {
+    return `${resolveIconPrefix(iconLibrary, iconifyPrefix)}:${defaultIconName(iconLibrary)}`
   }
 
   return `${resolveIconPrefix(iconLibrary, iconifyPrefix)}:${cleaned}`

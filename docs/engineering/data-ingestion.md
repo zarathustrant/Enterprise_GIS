@@ -45,6 +45,19 @@ Recognized WKT columns: `wkt`, `geometry`, `geom`.
 
 Column matching is handled by the GDAL CSV driver. Attribute values then pass through the target layer's field schema, type, nullability, and domain validation.
 
+## Field Schema Inference
+
+When the target layer has no fields and no existing features, import creates field metadata automatically. Types are inferred across the complete source dataset using conservative promotion:
+
+- boolean remains boolean
+- integer remains integer
+- mixed integer/double becomes double
+- mixed or complex values become strings
+
+Invalid database field characters are replaced with underscores, leading digits are prefixed, names are made unique, and the original source name is retained as the field alias. Imported properties are rewritten to the registered field names. The response includes `fields_created` and `field_mapping`.
+
+Populated layers and layers with an explicit schema remain strict: imports must match their existing field definitions. This prevents an upload from silently changing an operational schema.
+
 ## Multi-Layer Datasets
 
 GeoPackage, KML, FileGDB, and archives may expose multiple source layers. The optional `source_layer` form field selects one by name. If omitted, the first layer reported by OGR is imported.

@@ -48,6 +48,8 @@ export interface UploadLayerResult {
   source_layer?: string | null
   source_crs?: string
   target_crs?: string
+  fields_created?: number
+  field_mapping?: Record<string, string>
 }
 
 export interface UpdateLayerPayload {

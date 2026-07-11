@@ -32,6 +32,13 @@ function errorMessage(status: number, body: unknown): string {
     if ('error' in body) {
       resolvedMessage = String((body as { error: unknown }).error)
     }
+    if (resolvedMessage && 'diagnostics' in body && Array.isArray((body as { diagnostics?: unknown }).diagnostics)) {
+      const diagnostics = (body as { diagnostics: Array<{ feature?: unknown; error?: unknown }> }).diagnostics
+      const first = diagnostics[0]
+      if (first?.error && !resolvedMessage.includes(String(first.error))) {
+        resolvedMessage += ` Feature ${String(first.feature ?? '?')}: ${String(first.error)}`
+      }
+    }
     if (!resolvedMessage && 'msg' in body) {
       resolvedMessage = String((body as { msg: unknown }).msg)
     }

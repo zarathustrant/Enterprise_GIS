@@ -2201,13 +2201,17 @@ export default function App() {
     },
     onSuccess: (payload) => {
       queryClient.invalidateQueries({ queryKey: ['layer-features', payload.layerId] })
+      queryClient.invalidateQueries({ queryKey: ['layer-fields', payload.layerId] })
       queryClient.invalidateQueries({ queryKey: ['layers'] })
       setUploadOpen(false)
       setUploadError(null)
       setUploadTargetLayer(null)
       setUploadFile(null)
       const errorPart = payload.result.errors ? `, ${payload.result.errors} skipped` : ''
-      notify(`Uploaded ${payload.result.inserted} feature(s) to "${payload.layerName}"${errorPart}`, 'success')
+      const fieldPart = payload.result.fields_created
+        ? `, ${payload.result.fields_created} field(s) detected`
+        : ''
+      notify(`Uploaded ${payload.result.inserted} feature(s) to "${payload.layerName}"${fieldPart}${errorPart}`, 'success')
     },
     onError: (error) => {
       setUploadError(error instanceof Error ? error.message : 'Upload failed')
