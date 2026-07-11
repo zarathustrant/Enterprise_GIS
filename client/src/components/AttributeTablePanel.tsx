@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 import type { BulkUpdatePayload, FeatureStatisticsResponse, FeaturesQueryPayload, FeaturesQueryResponse } from '../api/services'
 import { fetchLayerRelationships, fetchRelatedRecords } from '../api/services'
@@ -285,6 +285,17 @@ export function AttributeTablePanel({
   // Consolidated "table tools" overflow menu (calculate / format / sort)
   const [toolsMenuAnchor, setToolsMenuAnchor] = useState<HTMLElement | null>(null)
 
+  // Inline cell editing
+  const [editingCell, setEditingCell] = useState<{ rowId: string; field: string } | null>(null)
+  const [cellDraft, setCellDraft] = useState('')
+  const advancingRef = useRef(false)
+  // Optimistic row overrides: the panel drives its own query state and is not
+  // refreshed by the update mutation, so we patch edited rows locally (value +
+  // optimistic-lock version) until the next real refetch clears them.
+  const [rowOverrides, setRowOverrides] = useState<
+    Record<string, { properties: Record<string, unknown>; version: number }>
+  >({})
+
   // Phase 2: Selection tools
   // const [showSelectionTools, setShowSelectionTools] = useState(false)
   const [showSelectionStats, setShowSelectionStats] = useState(false)
@@ -374,7 +385,16 @@ export function AttributeTablePanel({
     })
   }, [features])
 
-  const rows = onQueryRows ? queryRows ?? [] : localRows
+  const rows = useMemo(() => {
+    const baseRows = onQueryRows ? queryRows ?? [] : localRows
+    if (Object.keys(rowOverrides).length === 0) {
+      return baseRows
+    }
+    return baseRows.map((row) => {
+      const override = rowOverrides[row.id]
+      return override ? { ...row, properties: override.properties, version: override.version } : row
+    })
+  }, [onQueryRows, queryRows, localRows, rowOverrides])
   const totalRows = onQueryRows ? queryTotal : rows.length
 
   const allColumns = useMemo(() => {
@@ -409,7 +429,14 @@ export function AttributeTablePanel({
     setQueryTotal(0)
     setQueryError(null)
     setSelectedFeatureId(null)
+    setEditingCell(null)
+    setRowOverrides({})
   }, [layerId])
+
+  // Fresh server data supersedes any optimistic edits still held locally.
+  useEffect(() => {
+    setRowOverrides({})
+  }, [queryRows])
 
   useEffect(() => {
     if (!onQueryRows || !layerId) {
@@ -580,11 +607,98 @@ export function AttributeTablePanel({
 
       setLocalError(null)
       onSaveProperties(selectedRow.id, payload, selectedRow.version)
-      // Optimistically mark the draft as saved so the dirty indicator clears.
+      // Optimistically mark the draft as saved so the dirty indicator clears,
+      // and patch the row so the grid and version stay consistent.
       setBaselineDraft(typedDraft)
+      setRowOverrides((prev) => ({
+        ...prev,
+        [selectedRow.id]: { properties: payload, version: selectedRow.version + 1 },
+      }))
     } catch (saveError) {
       setLocalError(saveError instanceof Error ? saveError.message : 'Invalid attribute values')
     }
+  }
+
+  // ── Inline cell editing ──────────────────────────────────────────────────
+  const beginCellEdit = (rowId: string, fieldName: string) => {
+    if (!hasSchema) {
+      return
+    }
+    const fieldDef = fields.find((field) => field.name === fieldName)
+    const row = rows.find((item) => item.id === rowId)
+    if (!fieldDef || !row) {
+      return
+    }
+    setEditingCell({ rowId, field: fieldName })
+    setCellDraft(stringifyFieldValue(editableProperties(row.properties)[fieldName], fieldDef.field_type))
+    setLocalError(null)
+  }
+
+  const cancelCellEdit = () => {
+    setEditingCell(null)
+  }
+
+  const commitCellEdit = (rawValue: string, advance?: 'next' | 'prev') => {
+    if (!editingCell) {
+      return
+    }
+    const { rowId, field } = editingCell
+    const row = rows.find((item) => item.id === rowId)
+    const fieldDef = fields.find((item) => item.name === field)
+    if (!row || !fieldDef) {
+      setEditingCell(null)
+      return
+    }
+
+    let parsed: unknown
+    try {
+      parsed = parseTypedField(fieldDef, rawValue)
+    } catch (cellError) {
+      // Keep the editor open so the user can correct an invalid value.
+      setLocalError(cellError instanceof Error ? cellError.message : 'Invalid value')
+      return
+    }
+
+    const props = editableProperties(row.properties)
+    const changed = (props[field] ?? null) !== (parsed ?? null)
+    const nextProps = changed ? { ...props, [field]: parsed } : props
+
+    if (changed) {
+      const payload: Record<string, unknown> = {}
+      for (const item of fields) {
+        payload[item.name] = item.name === field ? parsed : (props[item.name] ?? null)
+      }
+      onSaveProperties(rowId, payload, row.version)
+      setRowOverrides((prev) => ({
+        ...prev,
+        [rowId]: { properties: nextProps, version: row.version + 1 },
+      }))
+      setLocalError(null)
+    }
+
+    if (advance) {
+      const currentIndex = columns.findIndex((column) => column.name === field)
+      const nextColumn = columns[advance === 'next' ? currentIndex + 1 : currentIndex - 1]
+      const nextFieldDef = nextColumn ? fields.find((item) => item.name === nextColumn.name) : undefined
+      if (nextColumn && nextFieldDef) {
+        advancingRef.current = true
+        setEditingCell({ rowId, field: nextColumn.name })
+        setCellDraft(stringifyFieldValue(nextProps[nextColumn.name], nextFieldDef.field_type))
+        return
+      }
+    }
+
+    setEditingCell(null)
+  }
+
+  const handleCellBlur = (rawValue: string) => {
+    // A blur triggered by an intentional Tab-advance must not re-commit and
+    // close the cell we just moved to.
+    if (advancingRef.current) {
+      advancingRef.current = false
+      return
+    }
+    commitCellEdit(rawValue)
   }
 
   // Header-click sorting. Plain click cycles a single column (asc → desc → off);
@@ -1172,8 +1286,24 @@ export function AttributeTablePanel({
       }}
     >
       <span id="attribute-table-description" style={{ position: 'absolute', width: '1px', height: '1px', overflow: 'hidden', clip: 'rect(0,0,0,0)' }}>
-        Table showing attributes of {layerName} layer with {totalRows} features. Click a row to open it in the feature inspector; click a column header to sort.
+        Table showing attributes of {layerName} layer with {totalRows} features. Click a row to open it in the feature inspector; click a column header to sort. Double-click a cell to edit it in place.
       </span>
+
+      <Box
+        aria-live="polite"
+        sx={{
+          position: 'absolute',
+          width: '1px',
+          height: '1px',
+          overflow: 'hidden',
+          clip: 'rect(0 0 0 0)',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        {querying
+          ? 'Loading records…'
+          : `${totalRows.toLocaleString()} records. ${selectedFeatureIds.length} selected.`}
+      </Box>
 
       {!collapsed && (
         <Box
@@ -1765,11 +1895,119 @@ export function AttributeTablePanel({
                         >
                           {row.id || 'n/a'}
                         </TableCell>
-                        {columns.map((column) => (
-                          <TableCell key={`${row.id}-${column.name}`}>
-                            {displayValue(props[column.name])}
-                          </TableCell>
-                        ))}
+                        {columns.map((column) => {
+                          const fieldDef = hasSchema ? fields.find((f) => f.name === column.name) : undefined
+                          const editable = Boolean(fieldDef)
+                          const isEditingCell =
+                            editingCell?.rowId === row.id && editingCell.field === column.name
+
+                          if (isEditingCell && fieldDef) {
+                            const codedValues =
+                              fieldDef.domain?.domain_type === 'codedValue'
+                                ? fieldDef.domain.coded_values ?? []
+                                : []
+                            const usesSelect = codedValues.length > 0 || fieldDef.field_type === 'boolean'
+                            let inputType = 'text'
+                            if (fieldDef.field_type === 'integer' || fieldDef.field_type === 'double') {
+                              inputType = 'number'
+                            } else if (fieldDef.field_type === 'date') {
+                              inputType = 'date'
+                            } else if (fieldDef.field_type === 'datetime') {
+                              inputType = 'datetime-local'
+                            }
+                            const rangeInputProps =
+                              fieldDef.domain?.domain_type === 'range'
+                                ? {
+                                    min: fieldDef.domain.min_value ?? undefined,
+                                    max: fieldDef.domain.max_value ?? undefined,
+                                  }
+                                : undefined
+
+                            return (
+                              <TableCell
+                                key={`${row.id}-${column.name}`}
+                                onClick={(event) => event.stopPropagation()}
+                                sx={{ p: 0.5 }}
+                              >
+                                {usesSelect ? (
+                                  <TextField
+                                    select
+                                    autoFocus
+                                    size="small"
+                                    fullWidth
+                                    value={cellDraft}
+                                    SelectProps={{ defaultOpen: true, onClose: () => setEditingCell(null) }}
+                                    onChange={(event) => commitCellEdit(event.target.value)}
+                                    onKeyDown={(event) => {
+                                      if (event.key === 'Escape') {
+                                        event.preventDefault()
+                                        cancelCellEdit()
+                                      }
+                                    }}
+                                  >
+                                    {fieldDef.nullable && <MenuItem value="">— Null —</MenuItem>}
+                                    {fieldDef.field_type === 'boolean' && [
+                                      <MenuItem key="true" value="true">Yes</MenuItem>,
+                                      <MenuItem key="false" value="false">No</MenuItem>,
+                                    ]}
+                                    {codedValues.map((entry, optionIndex) => {
+                                      const code = typeof entry === 'object' && entry !== null && 'code' in entry ? entry.code : entry
+                                      const label = typeof entry === 'object' && entry !== null && 'label' in entry && entry.label
+                                        ? entry.label
+                                        : String(code)
+                                      return (
+                                        <MenuItem key={`${String(code)}-${optionIndex}`} value={String(code)}>
+                                          {String(label)}
+                                        </MenuItem>
+                                      )
+                                    })}
+                                  </TextField>
+                                ) : (
+                                  <TextField
+                                    autoFocus
+                                    size="small"
+                                    fullWidth
+                                    type={inputType}
+                                    value={cellDraft}
+                                    inputProps={rangeInputProps}
+                                    onChange={(event) => setCellDraft(event.target.value)}
+                                    onKeyDown={(event) => {
+                                      if (event.key === 'Enter') {
+                                        event.preventDefault()
+                                        commitCellEdit(cellDraft)
+                                      } else if (event.key === 'Escape') {
+                                        event.preventDefault()
+                                        cancelCellEdit()
+                                      } else if (event.key === 'Tab') {
+                                        event.preventDefault()
+                                        commitCellEdit(cellDraft, event.shiftKey ? 'prev' : 'next')
+                                      }
+                                    }}
+                                    onBlur={() => handleCellBlur(cellDraft)}
+                                  />
+                                )}
+                              </TableCell>
+                            )
+                          }
+
+                          return (
+                            <TableCell
+                              key={`${row.id}-${column.name}`}
+                              onDoubleClick={
+                                editable
+                                  ? (event) => {
+                                      event.stopPropagation()
+                                      beginCellEdit(row.id, column.name)
+                                    }
+                                  : undefined
+                              }
+                              title={editable ? 'Double-click to edit' : undefined}
+                              sx={editable ? { cursor: 'cell' } : undefined}
+                            >
+                              {displayValue(props[column.name])}
+                            </TableCell>
+                          )
+                        })}
                       </TableRow>
                     )
                   })}
