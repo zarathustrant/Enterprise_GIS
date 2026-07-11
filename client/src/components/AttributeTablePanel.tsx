@@ -44,7 +44,6 @@ import {
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
 import FilterListIcon from '@mui/icons-material/FilterList'
-import RefreshIcon from '@mui/icons-material/Refresh'
 import UnfoldLessIcon from '@mui/icons-material/UnfoldLess'
 import UnfoldMoreIcon from '@mui/icons-material/UnfoldMore'
 import ViewColumnIcon from '@mui/icons-material/ViewColumn'
@@ -69,6 +68,8 @@ import TableChartIcon from '@mui/icons-material/TableChart'
 import SortIcon from '@mui/icons-material/Sort'
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward'
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward'
+import ChevronRightIcon from '@mui/icons-material/ChevronRight'
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 
 interface AttributeTablePanelProps {
   layerName: string | null
@@ -95,7 +96,6 @@ interface AttributeTablePanelProps {
     filters?: FeaturesQueryPayload['filters']
     feature_ids?: string[]
   }) => Promise<Blob>
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onBulkUpdateRows?: (payload: BulkUpdatePayload) => Promise<{ updated_count: number; message?: string }>
   onFeatureSelectionChange?: (featureIds: string[]) => void
   onZoomToFeature?: (featureId: string) => void
@@ -213,6 +213,35 @@ function parseTypedField(field: LayerField, raw: string): unknown {
   return value
 }
 
+const PANEL_MIN_HEIGHT = 220
+const INSPECTOR_MIN_WIDTH = 300
+const INSPECTOR_MAX_WIDTH = 640
+const PANEL_HEIGHT_KEY = 'attrTable.panelHeight'
+const INSPECTOR_WIDTH_KEY = 'attrTable.inspectorWidth'
+
+function readStoredNumber(key: string, fallback: number, min: number, max: number): number {
+  try {
+    const raw = window.localStorage.getItem(key)
+    const parsed = raw == null ? Number.NaN : Number(raw)
+    if (Number.isFinite(parsed) && parsed >= min && parsed <= max) {
+      return parsed
+    }
+  } catch {
+    /* ignore storage failures */
+  }
+  return fallback
+}
+
+function writeStoredNumber(key: string, value: number): void {
+  try {
+    window.localStorage.setItem(key, String(Math.round(value)))
+  } catch {
+    /* ignore storage failures */
+  }
+}
+
+type PendingNav = { kind: 'select'; id: string } | { kind: 'close' }
+
 export function AttributeTablePanel({
   layerName,
   layerId,
@@ -238,9 +267,23 @@ export function AttributeTablePanel({
 }: AttributeTablePanelProps) {
   const [selectedFeatureId, setSelectedFeatureId] = useState<string | null>(null)
   const [typedDraft, setTypedDraft] = useState<Record<string, string>>({})
+  const [baselineDraft, setBaselineDraft] = useState<Record<string, string>>({})
+  const [pendingNav, setPendingNav] = useState<PendingNav | null>(null)
   const [localError, setLocalError] = useState<string | null>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [showFilters, setShowFilters] = useState(false)
+
+  // Layout: resizable panel height and inspector width (persisted)
+  const [panelHeight, setPanelHeight] = useState<number>(() =>
+    readStoredNumber(PANEL_HEIGHT_KEY, 400, PANEL_MIN_HEIGHT, 2000),
+  )
+  const [inspectorWidth, setInspectorWidth] = useState<number>(() =>
+    readStoredNumber(INSPECTOR_WIDTH_KEY, 360, INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH),
+  )
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(false)
+
+  // Consolidated "table tools" overflow menu (calculate / format / sort)
+  const [toolsMenuAnchor, setToolsMenuAnchor] = useState<HTMLElement | null>(null)
 
   // Phase 2: Selection tools
   // const [showSelectionTools, setShowSelectionTools] = useState(false)
@@ -413,7 +456,59 @@ export function AttributeTablePanel({
 
   const selectedRow = rows.find((row) => row.id === selectedFeatureId) ?? null
 
-  const handleSelect = (featureId: string) => {
+  // Dirty-state model: which draft fields differ from the loaded baseline
+  const dirtyFields = useMemo(() => {
+    const dirty = new Set<string>()
+    for (const key of Object.keys(typedDraft)) {
+      if ((typedDraft[key] ?? '') !== (baselineDraft[key] ?? '')) {
+        dirty.add(key)
+      }
+    }
+    return dirty
+  }, [typedDraft, baselineDraft])
+  const isDirty = dirtyFields.size > 0
+
+  // Drag-to-resize: panel height (anchored to bottom, so drag up = taller)
+  const startHeightDrag = (event: React.PointerEvent) => {
+    event.preventDefault()
+    const startY = event.clientY
+    const startH = panelHeight
+    let latest = startH
+    const onMove = (moveEvent: PointerEvent) => {
+      const delta = startY - moveEvent.clientY
+      latest = Math.min(Math.max(startH + delta, PANEL_MIN_HEIGHT), window.innerHeight - 120)
+      setPanelHeight(latest)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      writeStoredNumber(PANEL_HEIGHT_KEY, latest)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
+  // Drag-to-resize: inspector width (docked right, so drag left = wider)
+  const startInspectorDrag = (event: React.PointerEvent) => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startW = inspectorWidth
+    let latest = startW
+    const onMove = (moveEvent: PointerEvent) => {
+      const delta = startX - moveEvent.clientX
+      latest = Math.min(Math.max(startW + delta, INSPECTOR_MIN_WIDTH), INSPECTOR_MAX_WIDTH)
+      setInspectorWidth(latest)
+    }
+    const onUp = () => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      writeStoredNumber(INSPECTOR_WIDTH_KEY, latest)
+    }
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+
+  const loadDraftForRow = (featureId: string) => {
     setSelectedFeatureId(featureId)
     setLocalError(null)
 
@@ -426,7 +521,49 @@ export function AttributeTablePanel({
         nextDraft[field.name] = stringifyFieldValue(props[field.name], field.field_type)
       }
       setTypedDraft(nextDraft)
+      setBaselineDraft(nextDraft)
     }
+  }
+
+  const handleSelect = (featureId: string) => {
+    if (featureId === selectedFeatureId) {
+      return
+    }
+    // Guard against silently discarding unsaved edits when switching rows
+    if (isDirty) {
+      setPendingNav({ kind: 'select', id: featureId })
+      return
+    }
+    loadDraftForRow(featureId)
+  }
+
+  const handleCloseInspector = () => {
+    if (isDirty) {
+      setPendingNav({ kind: 'close' })
+      return
+    }
+    setSelectedFeatureId(null)
+    setTypedDraft({})
+    setBaselineDraft({})
+  }
+
+  const handleRevertDraft = () => {
+    setTypedDraft(baselineDraft)
+    setLocalError(null)
+  }
+
+  const confirmDiscard = () => {
+    if (!pendingNav) {
+      return
+    }
+    if (pendingNav.kind === 'select') {
+      loadDraftForRow(pendingNav.id)
+    } else {
+      setSelectedFeatureId(null)
+      setTypedDraft({})
+      setBaselineDraft({})
+    }
+    setPendingNav(null)
   }
 
   const handleSave = () => {
@@ -443,10 +580,64 @@ export function AttributeTablePanel({
 
       setLocalError(null)
       onSaveProperties(selectedRow.id, payload, selectedRow.version)
+      // Optimistically mark the draft as saved so the dirty indicator clears.
+      setBaselineDraft(typedDraft)
     } catch (saveError) {
       setLocalError(saveError instanceof Error ? saveError.message : 'Invalid attribute values')
     }
   }
+
+  // Header-click sorting. Plain click cycles a single column (asc → desc → off);
+  // shift-click builds a multi-column sort. Feeds sortColumns, which drives the
+  // server query (schema layers) or the local sort (browser fallback).
+  const handleHeaderSort = (fieldName: string, additive: boolean) => {
+    setPage(0)
+    setSortColumns((current) => {
+      const existingIndex = current.findIndex((entry) => entry.field === fieldName)
+
+      if (additive) {
+        if (existingIndex === -1) {
+          return [...current, { field: fieldName, direction: 'asc' }]
+        }
+        if (current[existingIndex].direction === 'asc') {
+          const next = [...current]
+          next[existingIndex] = { field: fieldName, direction: 'desc' }
+          return next
+        }
+        return current.filter((_, index) => index !== existingIndex)
+      }
+
+      if (current.length !== 1 || current[0].field !== fieldName) {
+        return [{ field: fieldName, direction: 'asc' }]
+      }
+      if (current[0].direction === 'asc') {
+        return [{ field: fieldName, direction: 'desc' }]
+      }
+      return []
+    })
+  }
+
+  const fieldAlias = (name: string) => fields.find((field) => field.name === name)?.alias || name
+
+  const removeFilter = (index: number) => {
+    setAppliedFilters((current) => current.filter((_, idx) => idx !== index))
+    setPage(0)
+  }
+
+  const clearAllFilters = () => {
+    setFilterField('')
+    setFilterValue('')
+    setAppliedFilters([])
+    setPage(0)
+  }
+
+  const scopeMeta: Record<typeof operationScope, { label: string; color: string; count: number }> = {
+    current_page: { label: 'Current page', color: 'grey.500', count: rows.length },
+    filtered: { label: 'Filtered result', color: 'warning.main', count: queryTotal },
+    selected: { label: 'Selected records', color: 'info.main', count: selectedFeatureIds.length },
+    all: { label: 'Entire layer', color: 'error.main', count: totalRows },
+  }
+  const activeScope = scopeMeta[operationScope]
 
   const toggleSelectRow = (featureId: string, checked: boolean) => {
     const newSelection = checked
@@ -741,6 +932,16 @@ export function AttributeTablePanel({
   // Phase 7: Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Never hijack keystrokes while the user is typing in a form control or
+      // editable element — Ctrl+A/Escape/Ctrl+F must behave normally there.
+      const target = e.target as HTMLElement | null
+      if (target) {
+        const tag = target.tagName
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable) {
+          return
+        }
+      }
+
       // Ctrl/Cmd + A: Select all
       if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
         e.preventDefault()
@@ -860,7 +1061,14 @@ export function AttributeTablePanel({
       setExportMenuAnchor(null)
       return
     }
-    const exportRows = selectedFeatureIds.length > 0
+    if (operationScope === 'selected' && !selectedFeatureIds.length) {
+      setLocalError('Select one or more records before exporting selected records.')
+      setExportMenuAnchor(null)
+      return
+    }
+    // Honor the operation scope like CSV/JSON: 'selected' exports the selection,
+    // 'current_page' exports the visible page regardless of incidental checkboxes.
+    const exportRows = operationScope === 'selected'
       ? rows.filter((row) => selectedFeatureIds.includes(row.id))
       : rows
 
@@ -964,8 +1172,29 @@ export function AttributeTablePanel({
       }}
     >
       <span id="attribute-table-description" style={{ position: 'absolute', width: '1px', height: '1px', overflow: 'hidden', clip: 'rect(0,0,0,0)' }}>
-        Table showing attributes of {layerName} layer with {totalRows} features. Use arrow keys to navigate, Enter to edit.
+        Table showing attributes of {layerName} layer with {totalRows} features. Click a row to open it in the feature inspector; click a column header to sort.
       </span>
+
+      {!collapsed && (
+        <Box
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Drag to resize the attribute table height"
+          onPointerDown={startHeightDrag}
+          onDoubleClick={() => {
+            setPanelHeight(400)
+            writeStoredNumber(PANEL_HEIGHT_KEY, 400)
+          }}
+          sx={{
+            height: 6,
+            cursor: 'ns-resize',
+            touchAction: 'none',
+            bgcolor: 'transparent',
+            transition: 'background-color 0.15s',
+            '&:hover': { bgcolor: 'primary.light' },
+          }}
+        />
+      )}
 
       <Toolbar
         variant="dense"
@@ -978,9 +1207,25 @@ export function AttributeTablePanel({
           pr: 1,
         }}
       >
-        <Typography variant="subtitle1" sx={{ flex: 1, fontWeight: 600 }} id="table-title">
+        <Typography variant="subtitle1" sx={{ fontWeight: 600 }} id="table-title">
           {layerName || 'Attribute Table'} ({totalRows} {totalRows === 1 ? 'feature' : 'features'})
         </Typography>
+
+        <Tooltip title="Operation scope — the record set that Select, Statistics, and Export act on">
+          <Chip
+            size="small"
+            label={`Working on: ${activeScope.label} · ${activeScope.count.toLocaleString()}`}
+            sx={{
+              ml: 1.5,
+              fontWeight: 600,
+              color: 'common.white',
+              bgcolor: activeScope.color,
+              '& .MuiChip-label': { px: 1 },
+            }}
+          />
+        </Tooltip>
+
+        <Box sx={{ flex: 1 }} />
 
         <Stack direction="row" spacing={0.5}>
           {selectedFeatureIds.length > 0 && (
@@ -1057,7 +1302,7 @@ export function AttributeTablePanel({
       </Toolbar>
 
       {!collapsed && (
-        <Box sx={{ height: 400, display: 'flex', flexDirection: 'column' }}>
+        <Box sx={{ height: panelHeight, display: 'flex', flexDirection: 'column' }}>
           {(error || localError || queryError) && (
             <Box sx={{ px: 2, pt: 1 }}>
               {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
@@ -1111,31 +1356,67 @@ export function AttributeTablePanel({
                 />
                 <Button
                   variant="outlined"
-                  startIcon={<RefreshIcon />}
+                  startIcon={<AddIcon />}
                   size="small"
                   disabled={!filterField || querying}
                   onClick={() => {
+                    if (!filterField) {
+                      return
+                    }
                     setPage(0)
-                    setAppliedFilters(filterField ? [{ field: filterField, op: filterOp, value: filterValue }] : [])
+                    // Stack filters as removable chips; replace any existing rule
+                    // on the same field so a field appears at most once.
+                    setAppliedFilters((current) => [
+                      ...current.filter((entry) => entry.field !== filterField),
+                      { field: filterField, op: filterOp, value: filterValue },
+                    ])
+                    setFilterValue('')
                   }}
                 >
-                  Apply
+                  Add filter
                 </Button>
                 {appliedFilters.length > 0 && (
-                  <Button
-                    size="small"
-                    color="inherit"
-                    onClick={() => {
-                      setFilterField('')
-                      setFilterValue('')
-                      setAppliedFilters([])
-                      setPage(0)
-                    }}
-                  >
-                    Clear
+                  <Button size="small" color="inherit" onClick={clearAllFilters}>
+                    Clear all
                   </Button>
                 )}
               </Stack>
+            </Box>
+          )}
+
+          {/* Active filters — always visible as removable chips, even when the
+              filter editor row is collapsed. */}
+          {appliedFilters.length > 0 && (
+            <Box
+              sx={{
+                px: 2,
+                py: 1,
+                display: 'flex',
+                gap: 0.75,
+                flexWrap: 'wrap',
+                alignItems: 'center',
+                bgcolor: 'grey.50',
+                borderBottom: 1,
+                borderColor: 'divider',
+              }}
+            >
+              <Typography variant="caption" color="text.secondary" sx={{ mr: 0.5, fontWeight: 600 }}>
+                Filters:
+              </Typography>
+              {appliedFilters.map((filter, index) => (
+                <Chip
+                  key={`${filter.field}-${filter.op}-${index}`}
+                  size="small"
+                  variant="outlined"
+                  label={`${fieldAlias(filter.field)} ${filter.op}${
+                    filter.op === 'isnull' || filter.op === 'notnull' ? '' : ` ${filter.value ?? ''}`
+                  }`.trim()}
+                  onDelete={() => removeFilter(index)}
+                />
+              ))}
+              <Button size="small" color="inherit" onClick={clearAllFilters} sx={{ ml: 0.5 }}>
+                Clear all
+              </Button>
             </Box>
           )}
 
@@ -1255,38 +1536,22 @@ export function AttributeTablePanel({
 
               <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
 
-              <Tooltip title="Field Calculator">
+              <Tooltip title="Field calculator, conditional formatting, and sorting">
                 <Button
                   size="small"
-                  variant="outlined"
+                  variant={formatRules.length > 0 || sortColumns.length > 0 ? 'contained' : 'outlined'}
                   startIcon={<CalculateIcon />}
-                  onClick={() => setShowFieldCalculator(true)}
+                  endIcon={<ExpandMoreIcon />}
+                  onClick={(e) => setToolsMenuAnchor(e.currentTarget)}
                 >
-                  Calculate
-                </Button>
-              </Tooltip>
-
-              <Tooltip title="Conditional Formatting">
-                <Button
-                  size="small"
-                  variant={formatRules.length > 0 ? 'contained' : 'outlined'}
-                  startIcon={<FormatPaintIcon />}
-                  onClick={() => setShowConditionalFormat(true)}
-                >
-                  Format ({formatRules.length})
-                </Button>
-              </Tooltip>
-
-              <Divider orientation="vertical" flexItem sx={{ mx: 0.5 }} />
-
-              <Tooltip title="Multi-column sort">
-                <Button
-                  size="small"
-                  variant={sortColumns.length > 0 ? 'contained' : 'outlined'}
-                  startIcon={<SortIcon />}
-                  onClick={() => setShowSortDialog(true)}
-                >
-                  Sort ({sortColumns.length})
+                  Tools
+                  {(formatRules.length > 0 || sortColumns.length > 0) && (
+                    <Chip
+                      size="small"
+                      label={formatRules.length + sortColumns.length}
+                      sx={{ ml: 0.5, height: 18, '& .MuiChip-label': { px: 0.75, fontSize: '0.7rem' } }}
+                    />
+                  )}
                 </Button>
               </Tooltip>
 
@@ -1375,26 +1640,66 @@ export function AttributeTablePanel({
                     >
                       FID
                     </TableCell>
-                    {columns.map((column) => (
-                      <TableCell
-                        key={column.id}
-                        sx={{
-                          bgcolor: 'grey.100',
-                          fontWeight: 700,
-                          minWidth: 120,
-                          whiteSpace: 'nowrap',
-                        }}
-                      >
-                        <Stack direction="row" spacing={0.5} alignItems="center">
-                          <Typography variant="body2" fontWeight={700}>
-                            {column.alias}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            ({column.type})
-                          </Typography>
-                        </Stack>
-                      </TableCell>
-                    ))}
+                    {columns.map((column) => {
+                      const sortIndex = sortColumns.findIndex((entry) => entry.field === column.name)
+                      const sortEntry = sortIndex >= 0 ? sortColumns[sortIndex] : null
+                      return (
+                        <TableCell
+                          key={column.id}
+                          onClick={(event) => handleHeaderSort(column.name, event.shiftKey)}
+                          aria-sort={
+                            sortEntry
+                              ? sortEntry.direction === 'asc'
+                                ? 'ascending'
+                                : 'descending'
+                              : 'none'
+                          }
+                          title={`Sort by ${column.alias} — click to cycle, shift-click to add a level`}
+                          sx={{
+                            bgcolor: sortEntry ? 'action.selected' : 'grey.100',
+                            fontWeight: 700,
+                            minWidth: 120,
+                            whiteSpace: 'nowrap',
+                            cursor: 'pointer',
+                            userSelect: 'none',
+                            '&:hover': { bgcolor: 'action.hover' },
+                          }}
+                        >
+                          <Stack direction="row" spacing={0.5} alignItems="center">
+                            <Typography variant="body2" fontWeight={700}>
+                              {column.alias}
+                            </Typography>
+                            <Typography variant="caption" color="text.secondary">
+                              ({column.type})
+                            </Typography>
+                            {sortEntry && (
+                              sortEntry.direction === 'asc'
+                                ? <ArrowUpwardIcon sx={{ fontSize: 15 }} color="primary" />
+                                : <ArrowDownwardIcon sx={{ fontSize: 15 }} color="primary" />
+                            )}
+                            {sortEntry && sortColumns.length > 1 && (
+                              <Box
+                                component="span"
+                                sx={{
+                                  fontSize: '0.65rem',
+                                  fontWeight: 700,
+                                  color: 'common.white',
+                                  bgcolor: 'primary.main',
+                                  borderRadius: '50%',
+                                  width: 16,
+                                  height: 16,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center',
+                                }}
+                              >
+                                {sortIndex + 1}
+                              </Box>
+                            )}
+                          </Stack>
+                        </TableCell>
+                      )
+                    })}
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -1481,11 +1786,62 @@ export function AttributeTablePanel({
               </Table>
             </TableContainer>
 
-            {selectedRow && hasSchema && (
+            {selectedRow && hasSchema && inspectorCollapsed && (
+              <Box
+                sx={{
+                  width: 40,
+                  flexShrink: 0,
+                  borderLeft: 2,
+                  borderColor: 'divider',
+                  bgcolor: 'grey.100',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  pt: 1,
+                  gap: 0.5,
+                }}
+              >
+                <Tooltip title="Expand inspector">
+                  <IconButton size="small" onClick={() => setInspectorCollapsed(false)}>
+                    <ChevronLeftIcon />
+                  </IconButton>
+                </Tooltip>
+                {isDirty && (
+                  <Tooltip title="Unsaved changes">
+                    <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'warning.main' }} />
+                  </Tooltip>
+                )}
+              </Box>
+            )}
+
+            {selectedRow && hasSchema && !inspectorCollapsed && (
+              <Box
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Drag to resize the feature inspector"
+                onPointerDown={startInspectorDrag}
+                onDoubleClick={() => {
+                  setInspectorWidth(360)
+                  writeStoredNumber(INSPECTOR_WIDTH_KEY, 360)
+                }}
+                sx={{
+                  width: 6,
+                  flexShrink: 0,
+                  cursor: 'ew-resize',
+                  touchAction: 'none',
+                  bgcolor: 'transparent',
+                  transition: 'background-color 0.15s',
+                  '&:hover': { bgcolor: 'primary.light' },
+                }}
+              />
+            )}
+
+            {selectedRow && hasSchema && !inspectorCollapsed && (
               <Paper
                 elevation={0}
                 sx={{
-                  width: 360,
+                  width: inspectorWidth,
+                  flexShrink: 0,
                   borderLeft: 2,
                   borderColor: 'divider',
                   overflow: 'auto',
@@ -1495,9 +1851,33 @@ export function AttributeTablePanel({
                 }}
               >
                 <Box sx={{ borderBottom: 1, borderColor: 'divider', bgcolor: 'white' }}>
-                  <Typography variant="subtitle2" fontWeight={700} sx={{ p: 1.5, pb: 1 }}>
-                    Feature {selectedRow.id}
-                  </Typography>
+                  <Stack direction="row" alignItems="center" spacing={1} sx={{ p: 1.5, pb: 1 }}>
+                    <Typography
+                      variant="subtitle2"
+                      fontWeight={700}
+                      sx={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                    >
+                      Feature {selectedRow.id}
+                    </Typography>
+                    {isDirty && (
+                      <Chip
+                        size="small"
+                        color="warning"
+                        label="Unsaved"
+                        sx={{ height: 20, '& .MuiChip-label': { px: 0.75, fontSize: '0.68rem' } }}
+                      />
+                    )}
+                    <Tooltip title="Collapse inspector">
+                      <IconButton size="small" onClick={() => setInspectorCollapsed(true)}>
+                        <ChevronRightIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                    <Tooltip title="Close inspector">
+                      <IconButton size="small" onClick={handleCloseInspector}>
+                        <CloseIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </Stack>
                   <Tabs
                     value={editPanelTab || 'attributes'}
                     onChange={(_, value) => setEditPanelTab(value)}
@@ -1558,6 +1938,12 @@ export function AttributeTablePanel({
                               InputLabelProps={{
                                 shrink: inputType === 'date' || inputType === 'datetime-local' ? true : undefined,
                               }}
+                              sx={dirtyFields.has(field.name) ? {
+                                '& .MuiOutlinedInput-notchedOutline': {
+                                  borderLeftWidth: 3,
+                                  borderLeftColor: 'warning.main',
+                                },
+                              } : undefined}
                             >
                               {field.nullable && <MenuItem value="">— Null —</MenuItem>}
                               {field.field_type === 'boolean' && [
@@ -1581,18 +1967,19 @@ export function AttributeTablePanel({
                           variant="contained"
                           size="small"
                           onClick={handleSave}
-                          disabled={saving}
+                          disabled={saving || !isDirty}
                           fullWidth
                         >
-                          Save
+                          {saving ? 'Saving…' : 'Save'}
                         </Button>
                         <Button
                           variant="outlined"
                           size="small"
-                          onClick={() => setSelectedFeatureId(null)}
+                          onClick={handleRevertDraft}
+                          disabled={!isDirty || saving}
                           fullWidth
                         >
-                          Cancel
+                          Revert
                         </Button>
                       </Stack>
                     </>
@@ -2313,6 +2700,65 @@ export function AttributeTablePanel({
         </MenuItem>
       </Menu>
 
+      {/* Unsaved-changes guard: prevents silent data loss when switching or closing */}
+      <Dialog open={pendingNav !== null} onClose={() => setPendingNav(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>Discard unsaved changes?</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2" color="text.secondary">
+            This feature has unsaved attribute edits.{' '}
+            {pendingNav?.kind === 'select' ? 'Switching to another record' : 'Closing the inspector'}{' '}
+            will discard them.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPendingNav(null)}>Keep editing</Button>
+          <Button color="error" variant="contained" onClick={confirmDiscard}>
+            Discard changes
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Table Tools Menu (consolidates calculate / format / sort) */}
+      <Menu
+        anchorEl={toolsMenuAnchor}
+        open={Boolean(toolsMenuAnchor)}
+        onClose={() => setToolsMenuAnchor(null)}
+      >
+        <MenuItem
+          onClick={() => {
+            setShowFieldCalculator(true)
+            setToolsMenuAnchor(null)
+          }}
+        >
+          <CalculateIcon fontSize="small" sx={{ mr: 1 }} />
+          Field Calculator
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            setShowConditionalFormat(true)
+            setToolsMenuAnchor(null)
+          }}
+        >
+          <FormatPaintIcon fontSize="small" sx={{ mr: 1 }} />
+          Conditional Formatting
+          {formatRules.length > 0 && (
+            <Chip size="small" label={formatRules.length} sx={{ ml: 'auto' }} />
+          )}
+        </MenuItem>
+        <MenuItem
+          onClick={() => {
+            setShowSortDialog(true)
+            setToolsMenuAnchor(null)
+          }}
+        >
+          <SortIcon fontSize="small" sx={{ mr: 1 }} />
+          Multi-column Sort
+          {sortColumns.length > 0 && (
+            <Chip size="small" label={sortColumns.length} sx={{ ml: 'auto' }} />
+          )}
+        </MenuItem>
+      </Menu>
+
       {/* Export Menu */}
       <Menu
         anchorEl={exportMenuAnchor}
@@ -2323,21 +2769,21 @@ export function AttributeTablePanel({
           <TableChartIcon fontSize="small" sx={{ mr: 1 }} />
           Export to CSV
           <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-            ({selectedFeatureIds.length > 0 ? `${selectedFeatureIds.length} selected` : `${rows.length} total`})
+            ({activeScope.count.toLocaleString()} · {activeScope.label})
           </Typography>
         </MenuItem>
         <MenuItem onClick={exportToJSON}>
           <DownloadIcon fontSize="small" sx={{ mr: 1 }} />
           Export to JSON
           <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-            ({selectedFeatureIds.length > 0 ? `${selectedFeatureIds.length} selected` : `${rows.length} total`})
+            ({activeScope.count.toLocaleString()} · {activeScope.label})
           </Typography>
         </MenuItem>
         <MenuItem onClick={exportToExcel}>
           <TableChartIcon fontSize="small" sx={{ mr: 1 }} />
           Export to Excel
           <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-            ({selectedFeatureIds.length > 0 ? `${selectedFeatureIds.length} selected` : `${rows.length} total`})
+            (current page or selection)
           </Typography>
         </MenuItem>
       </Menu>

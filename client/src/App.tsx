@@ -209,12 +209,6 @@ const LayerStyleDialog = lazy(async () => {
   return { default: module.LayerStyleDialog }
 })
 
-// Unused - replaced with AttributeTablePanel
-// const AttributeTableDialog = lazy(async () => {
-//   const module = await import('./components/AttributeTableDialog')
-//   return { default: module.AttributeTableDialog }
-// })
-
 const AttributeTablePanel = lazy(async () => {
   const module = await import('./components/AttributeTablePanel')
   return { default: module.AttributeTablePanel }
@@ -4400,30 +4394,6 @@ export default function App() {
           onSubmit={handleSaveStyle}
         />
       </Suspense>
-
-      {/* Replaced with AttributeTablePanel bottom panel for all modes */}
-      {/* <Suspense fallback={null}>
-        <AttributeTableDialog
-          open={tableOpen}
-          workMode={workMode}
-          layerName={tableLayer?.name ?? null}
-          featureCollection={tableLayer ? featureCollections[tableLayer.id] ?? null : null}
-          fields={schemaFields}
-          joins={tableJoins}
-          saving={updateFeatureMutation.isPending}
-          error={tableError}
-          onClose={() => {
-            setTableOpen(false)
-            setTableLayer(null)
-            setTableError(null)
-          }}
-          onSaveProperties={handleSaveProperties}
-          onQueryRows={handleQueryTableRows}
-          onBulkUpdateRows={handleBulkTableUpdate}
-          onFetchHistory={handleFetchFeatureHistory}
-          onRollbackFeature={handleRollbackFeature}
-        />
-      </Suspense> */}
 
       <Suspense fallback={null}>
         <FieldsManagerDialog
