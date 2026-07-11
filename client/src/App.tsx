@@ -103,6 +103,7 @@ import {
   exportFeatureRows,
   fetchAsyncJobs,
   fetchCurrentUser,
+  fetchDistinctFeatureValues,
   fetchFeatureStatistics,
   fetchEditSessionChanges,
   fetchEditSessions,
@@ -4419,6 +4420,10 @@ export default function App() {
           submitting={styleMutation.isPending}
           error={styleError}
           onStyleChange={setStyleDraft}
+          onFetchUniqueValues={async (field) => {
+            if (!styleLayer) throw new Error('No layer is selected for styling.')
+            return fetchDistinctFeatureValues(styleLayer.id, field, token, 100)
+          }}
           onClose={() => {
             setStyleOpen(false)
             setStyleLayer(null)

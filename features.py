@@ -1036,6 +1036,69 @@ def query_features(layer_id):
     })
 
 
+@features_bp.route('/<layer_id>/features/distinct-values', methods=['GET'])
+@jwt_required(optional=True)
+def distinct_feature_values(layer_id):
+    user_id = get_jwt_identity()
+    share_token = request.args.get('share_token')
+    field = str(request.args.get('field', '')).strip()
+    db = get_db()
+    cur = db.cursor()
+
+    if not _layer_accessible(cur, layer_id, user_id, share_token):
+        return jsonify({'error': 'Layer not found'}), 404
+    if not field:
+        return jsonify({'error': 'field is required'}), 400
+
+    try:
+        limit = min(max(int(request.args.get('limit', 100)), 1), 500)
+    except ValueError:
+        return jsonify({'error': 'limit must be an integer'}), 400
+
+    cur.execute(
+        'SELECT 1 FROM layer_fields WHERE layer_id = %s::uuid AND name = %s',
+        (layer_id, field),
+    )
+    if not cur.fetchone():
+        return jsonify({'error': 'Field not found in layer schema'}), 400
+
+    cur.execute(
+        """
+        SELECT properties ->> %s AS value, COUNT(*)::integer AS count
+        FROM features
+        WHERE layer_id = %s::uuid
+          AND properties -> %s IS NOT NULL
+          AND properties ->> %s IS NOT NULL
+        GROUP BY properties ->> %s
+        ORDER BY COUNT(*) DESC, properties ->> %s ASC
+        LIMIT %s
+        """,
+        (field, layer_id, field, field, field, field, limit + 1),
+    )
+    rows = [dict(row) for row in cur.fetchall()]
+    truncated = len(rows) > limit
+    rows = rows[:limit]
+
+    cur.execute(
+        """
+        SELECT COUNT(*)::integer AS count
+        FROM features
+        WHERE layer_id = %s::uuid
+          AND (properties -> %s IS NULL OR properties ->> %s IS NULL)
+        """,
+        (layer_id, field, field),
+    )
+    null_row = cur.fetchone()
+
+    return jsonify({
+        'field': field,
+        'values': rows,
+        'null_count': int(null_row['count']) if null_row else 0,
+        'limit': limit,
+        'truncated': truncated,
+    })
+
+
 @features_bp.route('/<layer_id>/features/select', methods=['POST'])
 @jwt_required(optional=True)
 def select_features(layer_id):

@@ -38,9 +38,20 @@ interface LayerStyleDialogProps {
   error: string | null
   workMode?: boolean
   onStyleChange: (next: LayerStyleDraft) => void
+  onFetchUniqueValues: (field: string) => Promise<{
+    values: Array<{ value: string; count: number }>
+    null_count: number
+    truncated: boolean
+  }>
   onClose: () => void
   onSubmit: () => void
 }
+
+const CATEGORY_PALETTE = [
+  '#4477aa', '#ee6677', '#228833', '#ccbb44', '#66ccee',
+  '#aa3377', '#bbbbbb', '#ee8866', '#44aa99', '#997700',
+  '#6699cc', '#cc6677', '#117733', '#ddcc77', '#88ccee',
+]
 
 function clamp01(value: number): number {
   return Math.max(0, Math.min(1, value))
@@ -129,15 +140,51 @@ export function LayerStyleDialog({
   error,
   workMode = false,
   onStyleChange,
+  onFetchUniqueValues,
   onClose,
   onSubmit,
 }: LayerStyleDialogProps) {
+  const [generatingCategories, setGeneratingCategories] = useState(false)
+  const [categoryMessage, setCategoryMessage] = useState<string | null>(null)
   const [iconPickerOpen, setIconPickerOpen] = useState(false)
   const [patternPickerOpen, setPatternPickerOpen] = useState(false)
 
   const handleClose = () => {
     if (!submitting) {
       onClose()
+    }
+  }
+
+  const handleGenerateCategories = async () => {
+    if (!style.uniqueValueField) {
+      setCategoryMessage('Choose a category field first.')
+      return
+    }
+
+    setGeneratingCategories(true)
+    setCategoryMessage(null)
+    try {
+      const result = await onFetchUniqueValues(style.uniqueValueField)
+      const existingByValue = new Map(style.uniqueValueStops.map((stop) => [stop.value, stop]))
+      const uniqueValueStops = result.values.map((entry, index) => {
+        const existing = existingByValue.get(entry.value)
+        return existing ?? {
+          value: entry.value,
+          color: CATEGORY_PALETTE[index % CATEGORY_PALETTE.length],
+          opacity: 0.8,
+        }
+      })
+      onStyleChange({ ...style, uniqueValueStops })
+      const details = [
+        `${uniqueValueStops.length} categor${uniqueValueStops.length === 1 ? 'y' : 'ies'} generated`,
+        result.null_count > 0 ? `${result.null_count} null feature${result.null_count === 1 ? '' : 's'}` : null,
+        result.truncated ? 'additional values use “All other values”' : null,
+      ].filter(Boolean)
+      setCategoryMessage(details.join(' · '))
+    } catch (generateError) {
+      setCategoryMessage(generateError instanceof Error ? generateError.message : 'Failed to generate categories.')
+    } finally {
+      setGeneratingCategories(false)
     }
   }
 
@@ -1507,7 +1554,10 @@ export function LayerStyleDialog({
               <TextField
                 label="Category Field"
                 value={style.uniqueValueField}
-                onChange={(event) => onStyleChange({ ...style, uniqueValueField: event.target.value })}
+                onChange={(event) => {
+                  setCategoryMessage(null)
+                  onStyleChange({ ...style, uniqueValueField: event.target.value })
+                }}
                 size="small"
                 select
                 fullWidth
@@ -1517,24 +1567,36 @@ export function LayerStyleDialog({
                 ))}
               </TextField>
 
-              <Stack direction="row" justifyContent="space-between" alignItems="center">
+              <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }} gap={1}>
                 <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Unique Value Stops</Typography>
-                <Button
-                  size="small"
-                  startIcon={<AddIcon fontSize="small" />}
-                  onClick={() => {
-                    onStyleChange({
-                      ...style,
-                      uniqueValueStops: [
-                        ...style.uniqueValueStops,
-                        { value: '', color: '#3f88c5', opacity: 0.8 },
-                      ],
-                    })
-                  }}
-                >
-                  Add Stop
-                </Button>
+                <Stack direction="row" gap={1}>
+                  <Button
+                    size="small"
+                    variant="contained"
+                    disabled={!style.uniqueValueField || generatingCategories}
+                    onClick={() => void handleGenerateCategories()}
+                  >
+                    {generatingCategories ? 'Generating…' : 'Generate Categories'}
+                  </Button>
+                  <Button
+                    size="small"
+                    startIcon={<AddIcon fontSize="small" />}
+                    onClick={() => {
+                      onStyleChange({
+                        ...style,
+                        uniqueValueStops: [
+                          ...style.uniqueValueStops,
+                          { value: '', color: '#3f88c5', opacity: 0.8 },
+                        ],
+                      })
+                    }}
+                  >
+                    Add Manually
+                  </Button>
+                </Stack>
               </Stack>
+
+              {categoryMessage && <Alert severity="info">{categoryMessage}</Alert>}
 
               {style.uniqueValueStops.map((stop, index) => (
                 <Stack key={`${stop.value}-${index}`} direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems="center">

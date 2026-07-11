@@ -68,6 +68,14 @@ export interface UpdateFeaturePayload {
   session_id?: string
 }
 
+export interface DistinctFeatureValuesResponse {
+  field: string
+  values: Array<{ value: string; count: number }>
+  null_count: number
+  limit: number
+  truncated: boolean
+}
+
 export interface GeometryValidationResult {
   valid: boolean
   geometry_type: string
@@ -632,6 +640,20 @@ export function updateFeature(
       method: 'PUT',
       body: JSON.stringify(payload),
     },
+    token,
+  )
+}
+
+export function fetchDistinctFeatureValues(
+  layerId: string,
+  field: string,
+  token?: string | null,
+  limit = 100,
+): Promise<DistinctFeatureValuesResponse> {
+  const params = new URLSearchParams({ field, limit: String(limit) })
+  return apiRequest<DistinctFeatureValuesResponse>(
+    `/layers/${layerId}/features/distinct-values?${params.toString()}`,
+    {},
     token,
   )
 }
