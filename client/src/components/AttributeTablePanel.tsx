@@ -84,7 +84,7 @@ interface AttributeTablePanelProps {
   selectedFeatureIds?: string[]
   accessToken?: string | null
   onClose: () => void
-  onSaveProperties: (featureId: string, properties: Record<string, unknown>, version?: number) => void
+  onSaveProperties: (featureId: string, properties: Record<string, unknown>, version?: number) => Promise<number>
   onQueryRows?: (payload: FeaturesQueryPayload) => Promise<FeaturesQueryResponse>
   onSelectRows?: (payload: { filters?: FeaturesQueryPayload['filters']; limit?: number }) => Promise<{
     feature_ids: string[]
@@ -301,6 +301,7 @@ export function AttributeTablePanel({
   const [editingCell, setEditingCell] = useState<{ rowId: string; field: string } | null>(null)
   const [cellDraft, setCellDraft] = useState('')
   const advancingRef = useRef(false)
+  const cellsSavingRef = useRef(new Set<string>())
   // Optimistic row overrides: the panel drives its own query state and is not
   // refreshed by the update mutation, so we patch edited rows locally (value +
   // optimistic-lock version) until the next real refetch clears them.
@@ -606,7 +607,7 @@ export function AttributeTablePanel({
     setPendingNav(null)
   }
 
-  const handleSave = () => {
+  const handleSave = async () => {
     if (!selectedRow) {
       return
     }
@@ -619,15 +620,26 @@ export function AttributeTablePanel({
       }
 
       setLocalError(null)
-      onSaveProperties(selectedRow.id, payload, selectedRow.version)
-      // Optimistically mark the draft as saved so the dirty indicator clears,
-      // and patch the row so the grid and version stay consistent.
-      setBaselineDraft(typedDraft)
       setRowOverrides((prev) => ({
         ...prev,
         [selectedRow.id]: { properties: payload, version: selectedRow.version + 1 },
       }))
+      const serverVersion = await onSaveProperties(selectedRow.id, payload, selectedRow.version)
+      setRowOverrides((prev) => ({
+        ...prev,
+        [selectedRow.id]: { properties: payload, version: serverVersion },
+      }))
+      setBaselineDraft(typedDraft)
     } catch (saveError) {
+      if (selectedRow) {
+        setRowOverrides((prev) => {
+          const next = { ...prev }
+          const previousOverride = rowOverrides[selectedRow.id]
+          if (previousOverride) next[selectedRow.id] = previousOverride
+          else delete next[selectedRow.id]
+          return next
+        })
+      }
       setLocalError(saveError instanceof Error ? saveError.message : 'Invalid attribute values')
     }
   }
@@ -651,11 +663,15 @@ export function AttributeTablePanel({
     setEditingCell(null)
   }
 
-  const commitCellEdit = (rawValue: string, advance?: 'next' | 'prev') => {
+  const commitCellEdit = async (rawValue: string, advance?: 'next' | 'prev') => {
     if (!editingCell) {
       return
     }
     const { rowId, field } = editingCell
+    const cellKey = `${rowId}:${field}`
+    if (cellsSavingRef.current.has(cellKey)) {
+      return
+    }
     const row = rows.find((item) => item.id === rowId)
     const fieldDef = fields.find((item) => item.name === field)
     if (!row || !fieldDef) {
@@ -677,16 +693,35 @@ export function AttributeTablePanel({
     const nextProps = changed ? { ...props, [field]: parsed } : props
 
     if (changed) {
+      cellsSavingRef.current.add(cellKey)
       const payload: Record<string, unknown> = {}
       for (const item of fields) {
         payload[item.name] = item.name === field ? parsed : (props[item.name] ?? null)
       }
-      onSaveProperties(rowId, payload, row.version)
+      const previousOverride = rowOverrides[rowId]
       setRowOverrides((prev) => ({
         ...prev,
         [rowId]: { properties: nextProps, version: row.version + 1 },
       }))
       setLocalError(null)
+      try {
+        const serverVersion = await onSaveProperties(rowId, payload, row.version)
+        setRowOverrides((prev) => ({
+          ...prev,
+          [rowId]: { properties: nextProps, version: serverVersion },
+        }))
+      } catch (saveError) {
+        setRowOverrides((prev) => {
+          const next = { ...prev }
+          if (previousOverride) next[rowId] = previousOverride
+          else delete next[rowId]
+          return next
+        })
+        setLocalError(saveError instanceof Error ? saveError.message : 'Failed to save cell value')
+        return
+      } finally {
+        cellsSavingRef.current.delete(cellKey)
+      }
     }
 
     if (advance) {

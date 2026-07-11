@@ -3201,7 +3201,10 @@ export function MapCanvas({
     applyingHistoryRef.current = false
     editHistoryIndexRef.current = targetIndex
     diffAndEmitPersistence(before, next)
-    onEditInfoRef.current?.(action === 'undo' ? 'Undo complete.' : 'Redo complete.', 'success')
+    onEditInfoRef.current?.(
+      action === 'undo' ? 'Undo applied locally; saving changes…' : 'Redo applied locally; saving changes…',
+      'info',
+    )
     publishEditState()
   }
 

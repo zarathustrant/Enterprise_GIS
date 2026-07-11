@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Geometry } from 'geojson'
 import {
   type AlertColor,
@@ -1020,6 +1020,8 @@ export default function App() {
   const [analysisJob, setAnalysisJob] = useState<AnalysisJobState | null>(null)
 
   const [featureConflict, setFeatureConflict] = useState<FeatureConflictState | null>(null)
+  const featureUpdateQueuesRef = useRef(new Map<string, Promise<unknown>>())
+  const latestFeatureVersionsRef = useRef(new Map<string, number>())
 
   const [activeEditLayerId, setActiveEditLayerId] = useState<string | null>(null)
   const [activeEditSessionByLayerId, setActiveEditSessionByLayerId] = useState<Record<string, string | null>>({})
@@ -2245,12 +2247,39 @@ export default function App() {
         throw new Error('You must be signed in to update features.')
       }
 
-      return updateFeature(payload.layerId, payload.featureId, {
-        geometry: payload.geometry,
-        properties: stripInternalProperties(payload.properties),
-        version: payload.version,
-        session_id: resolveActiveSessionId(payload.layerId),
-      }, token)
+      const queueKey = `${payload.layerId}:${payload.featureId}`
+      const previousUpdate = featureUpdateQueuesRef.current.get(queueKey) ?? Promise.resolve()
+      const queuedUpdate = previousUpdate
+        .catch(() => undefined)
+        .then(async () => {
+          const latestKnownVersion = latestFeatureVersionsRef.current.get(queueKey)
+          const requestedVersion = payload.version
+          const version = latestKnownVersion === undefined
+            ? requestedVersion
+            : requestedVersion === undefined
+              ? latestKnownVersion
+              : Math.max(latestKnownVersion, requestedVersion)
+          const updatedFeature = await updateFeature(payload.layerId, payload.featureId, {
+            geometry: payload.geometry,
+            properties: stripInternalProperties(payload.properties),
+            version,
+            session_id: resolveActiveSessionId(payload.layerId),
+          }, token)
+          const serverVersion = readFeatureVersion(updatedFeature.properties ?? undefined)
+          if (serverVersion !== undefined) {
+            latestFeatureVersionsRef.current.set(queueKey, serverVersion)
+          }
+          return updatedFeature
+        })
+
+      featureUpdateQueuesRef.current.set(queueKey, queuedUpdate)
+      try {
+        return await queuedUpdate
+      } finally {
+        if (featureUpdateQueuesRef.current.get(queueKey) === queuedUpdate) {
+          featureUpdateQueuesRef.current.delete(queueKey)
+        }
+      }
     },
     onSuccess: (_, payload) => {
       queryClient.invalidateQueries({ queryKey: ['layer-features', payload.layerId] })
@@ -2275,7 +2304,7 @@ export default function App() {
           serverVersion,
         })
         setTableError('Conflict detected: this feature was updated elsewhere.')
-        notify('Edit conflict detected. Reload latest data or overwrite with latest version.', 'warning')
+        notify('This feature changed after it was loaded. Review the conflict before saving.', 'warning')
         return
       }
 
@@ -2595,23 +2624,28 @@ export default function App() {
   //   notify('Feature rolled back', 'success')
   // }
 
-  const handleSaveProperties = (featureId: string, properties: Record<string, unknown>, version?: number) => {
+  const handleSaveProperties = async (
+    featureId: string,
+    properties: Record<string, unknown>,
+    version?: number,
+  ): Promise<number> => {
     if (!tableLayer) {
-      return
+      throw new Error('No attribute table layer is selected.')
     }
 
     if (!canManageLayer(ownerName, tableLayer)) {
       setTableError('Read-only layer: only the owner can edit properties.')
-      return
+      throw new Error('Read-only layer: only the owner can edit properties.')
     }
 
     setTableError(null)
-    updateFeatureMutation.mutate({
+    const updatedFeature = await updateFeatureMutation.mutateAsync({
       layerId: tableLayer.id,
       featureId,
       properties,
       version,
     })
+    return readFeatureVersion(updatedFeature.properties ?? undefined) ?? version ?? 1
   }
 
   const handleOpenViews = () => {
