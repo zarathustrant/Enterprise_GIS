@@ -245,6 +245,15 @@ function writeStoredNumber(key: string, value: number): void {
 
 type PendingNav = { kind: 'select'; id: string } | { kind: 'close' }
 
+type WorkbenchTool = 'query' | 'calculate' | 'format' | 'sort'
+
+const WORKBENCH_META: Record<WorkbenchTool, { title: string; subtitle: string }> = {
+  query: { title: 'Select by Attributes', subtitle: 'Build a query to select features by attribute values' },
+  calculate: { title: 'Field Calculator', subtitle: 'Calculate values for a field using expressions' },
+  format: { title: 'Conditional Formatting', subtitle: 'Color-code rows based on attribute values' },
+  sort: { title: 'Multi-column Sort', subtitle: 'Sort by multiple columns in sequence' },
+}
+
 export function AttributeTablePanel({
   layerName,
   layerId,
@@ -306,7 +315,8 @@ export function AttributeTablePanel({
   const [statisticsLoading, setStatisticsLoading] = useState(false)
   const [selectionMode, setSelectionMode] = useState<'new' | 'add' | 'remove'>('new')
   const [operationScope, setOperationScope] = useState<'current_page' | 'filtered' | 'selected' | 'all'>('current_page')
-  const [showQueryBuilder, setShowQueryBuilder] = useState(false)
+  // Docked, non-modal table workbench: which tool (if any) is open in the dock.
+  const [activeTool, setActiveTool] = useState<WorkbenchTool | null>(null)
   const [queryConditions, setQueryConditions] = useState<Array<{
     field: string
     operator: FilterOperator
@@ -322,13 +332,11 @@ export function AttributeTablePanel({
   const [loadingRelatedRecords, setLoadingRelatedRecords] = useState<Record<string, boolean>>({})
 
   // Phase 4: Advanced table features
-  const [showFieldCalculator, setShowFieldCalculator] = useState(false)
   const [calculatorField, setCalculatorField] = useState('')
   const [calculatorExpression, setCalculatorExpression] = useState('')
   const [calculatorApplyToSelected, setCalculatorApplyToSelected] = useState(false)
 
   // Phase 4.2: Conditional formatting
-  const [showConditionalFormat, setShowConditionalFormat] = useState(false)
   const [formatRules, setFormatRules] = useState<Array<{
     field: string
     operator: FilterOperator
@@ -342,7 +350,6 @@ export function AttributeTablePanel({
 
   // Phase 4.4: Multi-column sorting
   const [sortColumns, setSortColumns] = useState<Array<{ field: string; direction: 'asc' | 'desc' }>>([])
-  const [showSortDialog, setShowSortDialog] = useState(false)
 
   // Phase 5: Context menu
   const [contextMenu, setContextMenu] = useState<{ mouseX: number; mouseY: number; featureId: string } | null>(null)
@@ -939,8 +946,8 @@ export function AttributeTablePanel({
         onFeatureSelectionChange?.(selectedFeatureIds.filter((id) => !matchingIds.includes(id)))
         break
     }
-
-    setShowQueryBuilder(false)
+    // Leave the workbench open so the user can see the selection change and
+    // refine the query without reopening a modal.
   }
 
   // Calculate selection statistics
@@ -1652,9 +1659,9 @@ export function AttributeTablePanel({
               <Tooltip title="Select by attributes (SQL query)">
                 <Button
                   size="small"
-                  variant="contained"
+                  variant={activeTool === 'query' ? 'contained' : 'outlined'}
                   startIcon={<SearchIcon />}
-                  onClick={() => setShowQueryBuilder(true)}
+                  onClick={() => setActiveTool((current) => (current === 'query' ? null : 'query'))}
                 >
                   Query
                 </Button>
@@ -1994,7 +2001,7 @@ export function AttributeTablePanel({
               </Table>
             </TableContainer>
 
-            {selectedRow && hasSchema && inspectorCollapsed && !isNarrow && (
+            {selectedRow && hasSchema && inspectorCollapsed && !isNarrow && !activeTool && (
               <Box
                 sx={{
                   width: 40,
@@ -2022,7 +2029,7 @@ export function AttributeTablePanel({
               </Box>
             )}
 
-            {selectedRow && hasSchema && !inspectorCollapsed && !isNarrow && (
+            {selectedRow && hasSchema && !inspectorCollapsed && !isNarrow && !activeTool && (
               <Box
                 role="separator"
                 aria-orientation="vertical"
@@ -2044,7 +2051,7 @@ export function AttributeTablePanel({
               />
             )}
 
-            {selectedRow && hasSchema && !inspectorCollapsed && (
+            {selectedRow && hasSchema && !inspectorCollapsed && !activeTool && (
               <Paper
                 elevation={isNarrow ? 8 : 0}
                 sx={{
@@ -2290,6 +2297,456 @@ export function AttributeTablePanel({
                 </Box>
               </Paper>
             )}
+
+            {/* ── Docked table workbench (non-modal): query / calculate / format / sort ── */}
+            {activeTool && (
+              <Paper
+                elevation={isNarrow ? 8 : 0}
+                sx={{
+                  ...(isNarrow
+                    ? { position: 'absolute', inset: 0, width: '100%', zIndex: 5 }
+                    : { width: 440 }),
+                  flexShrink: 0,
+                  borderLeft: 2,
+                  borderColor: 'primary.main',
+                  overflow: 'hidden',
+                  bgcolor: 'background.paper',
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}
+              >
+                <Box sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider', bgcolor: 'grey.50' }}>
+                  <Stack direction="row" alignItems="flex-start" spacing={1}>
+                    <Box sx={{ flex: 1, minWidth: 0 }}>
+                      <Typography variant="subtitle2" fontWeight={700}>
+                        {WORKBENCH_META[activeTool].title}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                        {WORKBENCH_META[activeTool].subtitle}
+                      </Typography>
+                    </Box>
+                    <Tooltip title="Close workbench">
+                      <IconButton size="small" onClick={() => setActiveTool(null)}>
+                        <CloseIcon fontSize="small" />
+                      </IconButton>
+                    </Tooltip>
+                  </Stack>
+                </Box>
+
+                <Box sx={{ flex: 1, overflow: 'auto', p: 2 }}>
+                  {activeTool === 'query' && (
+                    <Stack spacing={2}>
+                      {queryConditions.map((condition, index) => (
+                        <Box key={index}>
+                          <Stack spacing={1}>
+                            <Select
+                              value={condition.field}
+                              onChange={(e) => {
+                                const next = [...queryConditions]
+                                next[index].field = e.target.value
+                                setQueryConditions(next)
+                              }}
+                              size="small"
+                              displayEmpty
+                              fullWidth
+                            >
+                              <MenuItem value="">Select field</MenuItem>
+                              {fields.map((field) => (
+                                <MenuItem key={field.id} value={field.name}>
+                                  {field.alias || field.name}
+                                </MenuItem>
+                              ))}
+                            </Select>
+                            <Stack direction="row" spacing={1} alignItems="center">
+                              <Select
+                                value={condition.operator}
+                                onChange={(e) => {
+                                  const next = [...queryConditions]
+                                  next[index].operator = e.target.value as FilterOperator
+                                  setQueryConditions(next)
+                                }}
+                                size="small"
+                                sx={{ minWidth: 120 }}
+                              >
+                                <MenuItem value="eq">equals</MenuItem>
+                                <MenuItem value="neq">not equals</MenuItem>
+                                <MenuItem value="contains">contains</MenuItem>
+                                <MenuItem value="startswith">starts with</MenuItem>
+                                <MenuItem value="endswith">ends with</MenuItem>
+                                <MenuItem value="gt">&gt;</MenuItem>
+                                <MenuItem value="gte">≥</MenuItem>
+                                <MenuItem value="lt">&lt;</MenuItem>
+                                <MenuItem value="lte">≤</MenuItem>
+                                <MenuItem value="isnull">is null</MenuItem>
+                                <MenuItem value="notnull">is not null</MenuItem>
+                              </Select>
+                              {condition.operator !== 'isnull' && condition.operator !== 'notnull' && (
+                                <TextField
+                                  value={condition.value}
+                                  onChange={(e) => {
+                                    const next = [...queryConditions]
+                                    next[index].value = e.target.value
+                                    setQueryConditions(next)
+                                  }}
+                                  size="small"
+                                  placeholder="Value"
+                                  sx={{ flex: 1 }}
+                                />
+                              )}
+                              <IconButton
+                                size="small"
+                                onClick={() => setQueryConditions(queryConditions.filter((_, i) => i !== index))}
+                                disabled={queryConditions.length === 1}
+                              >
+                                <CloseIcon fontSize="small" />
+                              </IconButton>
+                            </Stack>
+                          </Stack>
+                          {index < queryConditions.length - 1 && (
+                            <Box sx={{ mt: 1 }}>
+                              <ToggleButtonGroup
+                                value={condition.logicalOp}
+                                exclusive
+                                onChange={(_, value) => {
+                                  if (value) {
+                                    const next = [...queryConditions]
+                                    next[index].logicalOp = value
+                                    setQueryConditions(next)
+                                  }
+                                }}
+                                size="small"
+                              >
+                                <ToggleButton value="AND">AND</ToggleButton>
+                                <ToggleButton value="OR">OR</ToggleButton>
+                              </ToggleButtonGroup>
+                            </Box>
+                          )}
+                        </Box>
+                      ))}
+                      <Button
+                        variant="outlined"
+                        size="small"
+                        startIcon={<AddIcon />}
+                        onClick={() =>
+                          setQueryConditions([
+                            ...queryConditions,
+                            { field: '', operator: 'eq', value: '', logicalOp: 'AND' },
+                          ])
+                        }
+                        sx={{ alignSelf: 'flex-start' }}
+                      >
+                        Add condition
+                      </Button>
+                      <Divider />
+                      <Box>
+                        <Typography variant="subtitle2" gutterBottom>
+                          Selection mode
+                        </Typography>
+                        <ToggleButtonGroup
+                          value={selectionMode}
+                          exclusive
+                          onChange={(_, value) => value && setSelectionMode(value)}
+                          size="small"
+                        >
+                          <ToggleButton value="new">New</ToggleButton>
+                          <ToggleButton value="add">Add</ToggleButton>
+                          <ToggleButton value="remove">Remove</ToggleButton>
+                        </ToggleButtonGroup>
+                      </Box>
+                    </Stack>
+                  )}
+
+                  {activeTool === 'calculate' && (
+                    <Stack spacing={2}>
+                      <Select
+                        value={calculatorField}
+                        onChange={(e) => setCalculatorField(e.target.value)}
+                        displayEmpty
+                        fullWidth
+                        size="small"
+                      >
+                        <MenuItem value="">Select target field</MenuItem>
+                        {fields
+                          .filter((f) => f.field_type === 'integer' || f.field_type === 'double' || f.field_type === 'string')
+                          .map((field) => (
+                            <MenuItem key={field.id} value={field.name}>
+                              {field.alias || field.name} ({field.field_type})
+                            </MenuItem>
+                          ))}
+                      </Select>
+                      <TextField
+                        label="Expression"
+                        value={calculatorExpression}
+                        onChange={(e) => setCalculatorExpression(e.target.value)}
+                        multiline
+                        rows={4}
+                        placeholder={"Examples:\n- Population * 1.5\n- (Area / 1000000) * Price\n- str(FirstName) + ' ' + str(LastName)\n- round(Population / Area, 2)"}
+                        fullWidth
+                        size="small"
+                        helperText="Use field names directly. Functions: abs, max, min, round, int, float, str, len"
+                      />
+                      <Box>
+                        <Typography variant="caption" fontWeight={600} gutterBottom display="block">
+                          Available fields
+                        </Typography>
+                        <Stack direction="row" spacing={0.5} flexWrap="wrap" sx={{ gap: 0.5 }}>
+                          {fields.slice(0, 8).map((field) => (
+                            <Chip
+                              key={field.id}
+                              label={field.name}
+                              size="small"
+                              onClick={() => setCalculatorExpression((prev) => prev + field.name)}
+                              sx={{ cursor: 'pointer' }}
+                            />
+                          ))}
+                        </Stack>
+                      </Box>
+                      <FormControlLabel
+                        control={
+                          <Checkbox
+                            checked={calculatorApplyToSelected}
+                            onChange={(e) => setCalculatorApplyToSelected(e.target.checked)}
+                          />
+                        }
+                        label={`Apply to selected only (${selectedFeatureIds.length} features)`}
+                        disabled={selectedFeatureIds.length === 0}
+                      />
+                    </Stack>
+                  )}
+
+                  {activeTool === 'format' && (
+                    <Stack spacing={2}>
+                      {formatRules.map((rule, index) => (
+                        <Paper key={index} variant="outlined" sx={{ p: 1.5 }}>
+                          <Stack spacing={1}>
+                            <Select
+                              value={rule.field}
+                              onChange={(e) => {
+                                const next = [...formatRules]
+                                next[index].field = e.target.value
+                                setFormatRules(next)
+                              }}
+                              size="small"
+                              displayEmpty
+                              fullWidth
+                            >
+                              <MenuItem value="">Select field</MenuItem>
+                              {fields.map((field) => (
+                                <MenuItem key={field.id} value={field.name}>
+                                  {field.alias || field.name}
+                                </MenuItem>
+                              ))}
+                            </Select>
+                            <Stack direction="row" spacing={1} alignItems="center">
+                              <Select
+                                value={rule.operator}
+                                onChange={(e) => {
+                                  const next = [...formatRules]
+                                  next[index].operator = e.target.value as FilterOperator
+                                  setFormatRules(next)
+                                }}
+                                size="small"
+                                sx={{ minWidth: 110 }}
+                              >
+                                <MenuItem value="eq">equals</MenuItem>
+                                <MenuItem value="neq">not equals</MenuItem>
+                                <MenuItem value="contains">contains</MenuItem>
+                                <MenuItem value="gt">&gt;</MenuItem>
+                                <MenuItem value="gte">≥</MenuItem>
+                                <MenuItem value="lt">&lt;</MenuItem>
+                                <MenuItem value="lte">≤</MenuItem>
+                              </Select>
+                              <TextField
+                                value={rule.value}
+                                onChange={(e) => {
+                                  const next = [...formatRules]
+                                  next[index].value = e.target.value
+                                  setFormatRules(next)
+                                }}
+                                size="small"
+                                placeholder="Value"
+                                sx={{ flex: 1 }}
+                              />
+                              <TextField
+                                type="color"
+                                value={rule.color}
+                                onChange={(e) => {
+                                  const next = [...formatRules]
+                                  next[index].color = e.target.value
+                                  setFormatRules(next)
+                                }}
+                                size="small"
+                                sx={{ width: 64 }}
+                              />
+                              <IconButton
+                                size="small"
+                                onClick={() => setFormatRules(formatRules.filter((_, i) => i !== index))}
+                              >
+                                <DeleteIcon fontSize="small" />
+                              </IconButton>
+                            </Stack>
+                          </Stack>
+                        </Paper>
+                      ))}
+                      <Button
+                        variant="outlined"
+                        startIcon={<AddIcon />}
+                        onClick={() =>
+                          setFormatRules([...formatRules, { field: '', operator: 'eq', value: '', color: '#ffeb3b' }])
+                        }
+                        sx={{ alignSelf: 'flex-start' }}
+                      >
+                        Add rule
+                      </Button>
+                      <Typography variant="caption" color="text.secondary">
+                        Rules apply in order; the first match wins.
+                      </Typography>
+                    </Stack>
+                  )}
+
+                  {activeTool === 'sort' && (
+                    <Stack spacing={2}>
+                      {sortColumns.length === 0 && (
+                        <Typography variant="body2" color="text.secondary">
+                          No sort levels yet. Add one below, or click a column header in the grid.
+                        </Typography>
+                      )}
+                      {sortColumns.map((sortCol, index) => (
+                        <Paper key={index} variant="outlined" sx={{ p: 1.5 }}>
+                          <Stack direction="row" spacing={1} alignItems="center">
+                            <Typography variant="caption" color="text.secondary" sx={{ minWidth: 18 }}>
+                              {index + 1}.
+                            </Typography>
+                            <Select
+                              value={sortCol.field}
+                              onChange={(e) => {
+                                const next = [...sortColumns]
+                                next[index].field = e.target.value
+                                setSortColumns(next)
+                              }}
+                              size="small"
+                              displayEmpty
+                              sx={{ flex: 1 }}
+                            >
+                              <MenuItem value="">Select field</MenuItem>
+                              {fields.map((field) => (
+                                <MenuItem key={field.id} value={field.name}>
+                                  {field.alias || field.name}
+                                </MenuItem>
+                              ))}
+                            </Select>
+                            <ToggleButtonGroup
+                              value={sortCol.direction}
+                              exclusive
+                              onChange={(_, value) => {
+                                if (value) {
+                                  const next = [...sortColumns]
+                                  next[index].direction = value
+                                  setSortColumns(next)
+                                }
+                              }}
+                              size="small"
+                            >
+                              <ToggleButton value="asc">
+                                <Tooltip title="Ascending">
+                                  <ArrowUpwardIcon fontSize="small" />
+                                </Tooltip>
+                              </ToggleButton>
+                              <ToggleButton value="desc">
+                                <Tooltip title="Descending">
+                                  <ArrowDownwardIcon fontSize="small" />
+                                </Tooltip>
+                              </ToggleButton>
+                            </ToggleButtonGroup>
+                            <IconButton
+                              size="small"
+                              onClick={() => setSortColumns(sortColumns.filter((_, i) => i !== index))}
+                            >
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </Stack>
+                        </Paper>
+                      ))}
+                      <Button
+                        variant="outlined"
+                        startIcon={<AddIcon />}
+                        onClick={() => setSortColumns([...sortColumns, { field: '', direction: 'asc' }])}
+                        sx={{ alignSelf: 'flex-start' }}
+                      >
+                        Add sort level
+                      </Button>
+                    </Stack>
+                  )}
+                </Box>
+
+                <Box
+                  sx={{
+                    px: 2,
+                    py: 1.25,
+                    borderTop: 1,
+                    borderColor: 'divider',
+                    display: 'flex',
+                    gap: 1,
+                    justifyContent: 'flex-end',
+                  }}
+                >
+                  {activeTool === 'query' && (
+                    <Button
+                      variant="contained"
+                      size="small"
+                      onClick={handleApplyQuery}
+                      disabled={queryConditions.every((c) => !c.field)}
+                    >
+                      Apply query
+                    </Button>
+                  )}
+                  {activeTool === 'calculate' && (
+                    <Button
+                      variant="contained"
+                      size="small"
+                      disabled={!calculatorField || !calculatorExpression || saving}
+                      onClick={async () => {
+                        if (!onBulkUpdateRows) {
+                          setLocalError('Bulk update is not available')
+                          return
+                        }
+                        try {
+                          await onBulkUpdateRows({
+                            feature_ids: calculatorApplyToSelected ? selectedFeatureIds : undefined,
+                            calculator: {
+                              type: 'expression',
+                              field: calculatorField,
+                              expression: calculatorExpression,
+                            },
+                          })
+                          setCalculatorField('')
+                          setCalculatorExpression('')
+                          setCalculatorApplyToSelected(false)
+                          setLocalError(null)
+                          setActiveTool(null)
+                          // Refresh the grid so recalculated values appear.
+                          setAppliedFilters((current) => [...current])
+                        } catch (err) {
+                          setLocalError(err instanceof Error ? err.message : 'Field calculator failed')
+                        }
+                      }}
+                    >
+                      {saving ? 'Calculating…' : 'Calculate'}
+                    </Button>
+                  )}
+                  {activeTool === 'format' && (
+                    <Button size="small" color="inherit" onClick={() => setFormatRules([])}>
+                      Clear all rules
+                    </Button>
+                  )}
+                  {activeTool === 'sort' && (
+                    <Button size="small" color="inherit" onClick={() => setSortColumns([])}>
+                      Clear all levels
+                    </Button>
+                  )}
+                </Box>
+              </Paper>
+            )}
           </Box>
 
           <Box sx={{ borderTop: 1, borderColor: 'divider', bgcolor: 'grey.50' }}>
@@ -2362,498 +2819,6 @@ export function AttributeTablePanel({
           ))}
         </Box>
       </Menu>
-
-      {/* Query Builder Dialog */}
-      <Dialog
-        open={showQueryBuilder}
-        onClose={() => setShowQueryBuilder(false)}
-        maxWidth="md"
-        fullWidth
-      >
-        <DialogTitle>
-          Select by Attributes
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-            Build a query to select features based on attribute values
-          </Typography>
-        </DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            {queryConditions.map((condition, index) => (
-              <Box key={index}>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Select
-                    value={condition.field}
-                    onChange={(e) => {
-                      const newConditions = [...queryConditions]
-                      newConditions[index].field = e.target.value
-                      setQueryConditions(newConditions)
-                    }}
-                    size="small"
-                    displayEmpty
-                    sx={{ minWidth: 180 }}
-                  >
-                    <MenuItem value="">Select field</MenuItem>
-                    {fields.map((field) => (
-                      <MenuItem key={field.id} value={field.name}>
-                        {field.alias || field.name}
-                      </MenuItem>
-                    ))}
-                  </Select>
-
-                  <Select
-                    value={condition.operator}
-                    onChange={(e) => {
-                      const newConditions = [...queryConditions]
-                      newConditions[index].operator = e.target.value as FilterOperator
-                      setQueryConditions(newConditions)
-                    }}
-                    size="small"
-                    sx={{ minWidth: 130 }}
-                  >
-                    <MenuItem value="eq">equals</MenuItem>
-                    <MenuItem value="neq">not equals</MenuItem>
-                    <MenuItem value="contains">contains</MenuItem>
-                    <MenuItem value="startswith">starts with</MenuItem>
-                    <MenuItem value="endswith">ends with</MenuItem>
-                    <MenuItem value="gt">&gt;</MenuItem>
-                    <MenuItem value="gte">≥</MenuItem>
-                    <MenuItem value="lt">&lt;</MenuItem>
-                    <MenuItem value="lte">≤</MenuItem>
-                    <MenuItem value="isnull">is null</MenuItem>
-                    <MenuItem value="notnull">is not null</MenuItem>
-                  </Select>
-
-                  {condition.operator !== 'isnull' && condition.operator !== 'notnull' && (
-                    <TextField
-                      value={condition.value}
-                      onChange={(e) => {
-                        const newConditions = [...queryConditions]
-                        newConditions[index].value = e.target.value
-                        setQueryConditions(newConditions)
-                      }}
-                      size="small"
-                      placeholder="Value"
-                      sx={{ flex: 1 }}
-                    />
-                  )}
-
-                  <IconButton
-                    size="small"
-                    onClick={() => {
-                      setQueryConditions(queryConditions.filter((_, i) => i !== index))
-                    }}
-                    disabled={queryConditions.length === 1}
-                  >
-                    <CloseIcon fontSize="small" />
-                  </IconButton>
-                </Stack>
-
-                {index < queryConditions.length - 1 && (
-                  <Box sx={{ my: 1, ml: 2 }}>
-                    <ToggleButtonGroup
-                      value={condition.logicalOp}
-                      exclusive
-                      onChange={(_, value) => {
-                        if (value) {
-                          const newConditions = [...queryConditions]
-                          newConditions[index].logicalOp = value
-                          setQueryConditions(newConditions)
-                        }
-                      }}
-                      size="small"
-                    >
-                      <ToggleButton value="AND">AND</ToggleButton>
-                      <ToggleButton value="OR">OR</ToggleButton>
-                    </ToggleButtonGroup>
-                  </Box>
-                )}
-              </Box>
-            ))}
-
-            <Button
-              variant="outlined"
-              size="small"
-              onClick={() => {
-                setQueryConditions([
-                  ...queryConditions,
-                  { field: '', operator: 'eq', value: '', logicalOp: 'AND' },
-                ])
-              }}
-              sx={{ alignSelf: 'flex-start' }}
-            >
-              Add Condition
-            </Button>
-
-            <Divider />
-
-            <Box>
-              <Typography variant="subtitle2" gutterBottom>
-                Selection Mode:
-              </Typography>
-              <ToggleButtonGroup
-                value={selectionMode}
-                exclusive
-                onChange={(_, value) => value && setSelectionMode(value)}
-                size="small"
-              >
-                <ToggleButton value="new">New Selection</ToggleButton>
-                <ToggleButton value="add">Add to Selection</ToggleButton>
-                <ToggleButton value="remove">Remove from Selection</ToggleButton>
-              </ToggleButtonGroup>
-            </Box>
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setShowQueryBuilder(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={handleApplyQuery}
-            disabled={queryConditions.every((c) => !c.field)}
-          >
-            Apply Query
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Field Calculator Dialog */}
-      <Dialog
-        open={showFieldCalculator}
-        onClose={() => setShowFieldCalculator(false)}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>
-          Field Calculator
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-            Calculate values for a field using expressions
-          </Typography>
-        </DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            <Select
-              value={calculatorField}
-              onChange={(e) => setCalculatorField(e.target.value)}
-              displayEmpty
-              fullWidth
-              size="small"
-            >
-              <MenuItem value="">Select target field</MenuItem>
-              {fields.filter((f) => f.field_type === 'integer' || f.field_type === 'double' || f.field_type === 'string').map((field) => (
-                <MenuItem key={field.id} value={field.name}>
-                  {field.alias || field.name} ({field.field_type})
-                </MenuItem>
-              ))}
-            </Select>
-
-            <TextField
-              label="Expression"
-              value={calculatorExpression}
-              onChange={(e) => setCalculatorExpression(e.target.value)}
-              multiline
-              rows={4}
-              placeholder="Examples:&#10;- Math: Population * 1.5&#10;- Math: (Area / 1000000) * Price&#10;- String: str(FirstName) + ' ' + str(LastName)&#10;- Functions: round(Population / Area, 2)&#10;- Conditional: max(Value1, Value2)"
-              fullWidth
-              size="small"
-              helperText="Use field names directly. Available functions: abs, max, min, round, int, float, str, len"
-            />
-
-            <Box>
-              <Typography variant="caption" fontWeight={600} gutterBottom display="block">
-                Available Fields:
-              </Typography>
-              <Stack direction="row" spacing={0.5} flexWrap="wrap" sx={{ gap: 0.5 }}>
-                {fields.slice(0, 8).map((field) => (
-                  <Chip
-                    key={field.id}
-                    label={field.name}
-                    size="small"
-                    onClick={() => {
-                      setCalculatorExpression((prev) => prev + field.name)
-                    }}
-                    sx={{ cursor: 'pointer' }}
-                  />
-                ))}
-              </Stack>
-            </Box>
-
-            <FormControlLabel
-              control={
-                <Checkbox
-                  checked={calculatorApplyToSelected}
-                  onChange={(e) => setCalculatorApplyToSelected(e.target.checked)}
-                />
-              }
-              label={`Apply to selected only (${selectedFeatureIds.length} features)`}
-              disabled={selectedFeatureIds.length === 0}
-            />
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setShowFieldCalculator(false)}>Cancel</Button>
-          <Button
-            variant="contained"
-            onClick={async () => {
-              if (!onBulkUpdateRows) {
-                alert('Bulk update not available')
-                return
-              }
-
-              try {
-                const payload: BulkUpdatePayload = {
-                  feature_ids: calculatorApplyToSelected ? selectedFeatureIds : undefined,
-                  calculator: {
-                    type: 'expression',
-                    field: calculatorField,
-                    expression: calculatorExpression,
-                  },
-                }
-
-                const result = await onBulkUpdateRows(payload)
-                setShowFieldCalculator(false)
-                setCalculatorField('')
-                setCalculatorExpression('')
-                setCalculatorApplyToSelected(false)
-
-                alert(`Successfully calculated values for ${result.updated_count} feature(s)`)
-              } catch (err) {
-                const errorMsg = err instanceof Error ? err.message : String(err)
-                alert(`Field calculator failed: ${errorMsg}`)
-              }
-            }}
-            disabled={!calculatorField || !calculatorExpression || saving}
-          >
-            {saving ? 'Calculating...' : 'Calculate'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Conditional Formatting Dialog */}
-      <Dialog
-        open={showConditionalFormat}
-        onClose={() => setShowConditionalFormat(false)}
-        maxWidth="md"
-        fullWidth
-      >
-        <DialogTitle>
-          Conditional Formatting
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-            Color-code rows based on attribute values
-          </Typography>
-        </DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            {formatRules.map((rule, index) => (
-              <Paper key={index} variant="outlined" sx={{ p: 2 }}>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Select
-                    value={rule.field}
-                    onChange={(e) => {
-                      const newRules = [...formatRules]
-                      newRules[index].field = e.target.value
-                      setFormatRules(newRules)
-                    }}
-                    size="small"
-                    displayEmpty
-                    sx={{ minWidth: 150 }}
-                  >
-                    <MenuItem value="">Select field</MenuItem>
-                    {fields.map((field) => (
-                      <MenuItem key={field.id} value={field.name}>
-                        {field.alias || field.name}
-                      </MenuItem>
-                    ))}
-                  </Select>
-
-                  <Select
-                    value={rule.operator}
-                    onChange={(e) => {
-                      const newRules = [...formatRules]
-                      newRules[index].operator = e.target.value as FilterOperator
-                      setFormatRules(newRules)
-                    }}
-                    size="small"
-                    sx={{ minWidth: 120 }}
-                  >
-                    <MenuItem value="eq">equals</MenuItem>
-                    <MenuItem value="neq">not equals</MenuItem>
-                    <MenuItem value="contains">contains</MenuItem>
-                    <MenuItem value="gt">&gt;</MenuItem>
-                    <MenuItem value="gte">≥</MenuItem>
-                    <MenuItem value="lt">&lt;</MenuItem>
-                    <MenuItem value="lte">≤</MenuItem>
-                  </Select>
-
-                  {rule.operator !== 'isnull' && rule.operator !== 'notnull' && (
-                    <TextField
-                      value={rule.value}
-                      onChange={(e) => {
-                        const newRules = [...formatRules]
-                        newRules[index].value = e.target.value
-                        setFormatRules(newRules)
-                      }}
-                      size="small"
-                      placeholder="Value"
-                      sx={{ flex: 1 }}
-                    />
-                  )}
-
-                  <TextField
-                    type="color"
-                    value={rule.color}
-                    onChange={(e) => {
-                      const newRules = [...formatRules]
-                      newRules[index].color = e.target.value
-                      setFormatRules(newRules)
-                    }}
-                    size="small"
-                    sx={{ width: 80 }}
-                  />
-
-                  <IconButton
-                    size="small"
-                    onClick={() => {
-                      setFormatRules(formatRules.filter((_, i) => i !== index))
-                    }}
-                  >
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
-                </Stack>
-              </Paper>
-            ))}
-
-            <Button
-              variant="outlined"
-              startIcon={<AddIcon />}
-              onClick={() => {
-                setFormatRules([...formatRules, { field: '', operator: 'eq', value: '', color: '#ffeb3b' }])
-              }}
-              sx={{ alignSelf: 'flex-start' }}
-            >
-              Add Rule
-            </Button>
-
-            <Box>
-              <Typography variant="caption" color="text.secondary">
-                Rules are applied in order. First matching rule wins.
-              </Typography>
-            </Box>
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => {
-            setFormatRules([])
-            setShowConditionalFormat(false)
-          }}>
-            Clear All
-          </Button>
-          <Button onClick={() => setShowConditionalFormat(false)}>Close</Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Multi-Column Sort Dialog */}
-      <Dialog
-        open={showSortDialog}
-        onClose={() => setShowSortDialog(false)}
-        maxWidth="sm"
-        fullWidth
-      >
-        <DialogTitle>
-          Multi-Column Sort
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
-            Sort by multiple columns in sequence
-          </Typography>
-        </DialogTitle>
-        <DialogContent>
-          <Stack spacing={2} sx={{ mt: 1 }}>
-            {sortColumns.map((sortCol, index) => (
-              <Paper key={index} variant="outlined" sx={{ p: 1.5 }}>
-                <Stack direction="row" spacing={1} alignItems="center">
-                  <Typography variant="caption" color="text.secondary" sx={{ minWidth: 20 }}>
-                    {index + 1}.
-                  </Typography>
-                  <Select
-                    value={sortCol.field}
-                    onChange={(e) => {
-                      const newSorts = [...sortColumns]
-                      newSorts[index].field = e.target.value
-                      setSortColumns(newSorts)
-                    }}
-                    size="small"
-                    displayEmpty
-                    sx={{ flex: 1 }}
-                  >
-                    <MenuItem value="">Select field</MenuItem>
-                    {fields.map((field) => (
-                      <MenuItem key={field.id} value={field.name}>
-                        {field.alias || field.name}
-                      </MenuItem>
-                    ))}
-                  </Select>
-
-                  <ToggleButtonGroup
-                    value={sortCol.direction}
-                    exclusive
-                    onChange={(_, value) => {
-                      if (value) {
-                        const newSorts = [...sortColumns]
-                        newSorts[index].direction = value
-                        setSortColumns(newSorts)
-                      }
-                    }}
-                    size="small"
-                  >
-                    <ToggleButton value="asc">
-                      <Tooltip title="Ascending">
-                        <ArrowUpwardIcon fontSize="small" />
-                      </Tooltip>
-                    </ToggleButton>
-                    <ToggleButton value="desc">
-                      <Tooltip title="Descending">
-                        <ArrowDownwardIcon fontSize="small" />
-                      </Tooltip>
-                    </ToggleButton>
-                  </ToggleButtonGroup>
-
-                  <IconButton
-                    size="small"
-                    onClick={() => {
-                      setSortColumns(sortColumns.filter((_, i) => i !== index))
-                    }}
-                  >
-                    <DeleteIcon fontSize="small" />
-                  </IconButton>
-                </Stack>
-              </Paper>
-            ))}
-
-            <Button
-              variant="outlined"
-              startIcon={<AddIcon />}
-              onClick={() => {
-                setSortColumns([...sortColumns, { field: '', direction: 'asc' }])
-              }}
-              sx={{ alignSelf: 'flex-start' }}
-            >
-              Add Sort Level
-            </Button>
-
-            <Box>
-              <Typography variant="caption" color="text.secondary">
-                Rows are sorted by the first level, then by subsequent levels for tied values.
-              </Typography>
-            </Box>
-          </Stack>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => {
-            setSortColumns([])
-            setShowSortDialog(false)
-          }}>
-            Clear All
-          </Button>
-          <Button onClick={() => setShowSortDialog(false)}>Close</Button>
-        </DialogActions>
-      </Dialog>
 
       {/* Context Menu */}
       <Menu
@@ -2938,7 +2903,7 @@ export function AttributeTablePanel({
       >
         <MenuItem
           onClick={() => {
-            setShowFieldCalculator(true)
+            setActiveTool('calculate')
             setToolsMenuAnchor(null)
           }}
         >
@@ -2947,7 +2912,7 @@ export function AttributeTablePanel({
         </MenuItem>
         <MenuItem
           onClick={() => {
-            setShowConditionalFormat(true)
+            setActiveTool('format')
             setToolsMenuAnchor(null)
           }}
         >
@@ -2959,7 +2924,7 @@ export function AttributeTablePanel({
         </MenuItem>
         <MenuItem
           onClick={() => {
-            setShowSortDialog(true)
+            setActiveTool('sort')
             setToolsMenuAnchor(null)
           }}
         >
