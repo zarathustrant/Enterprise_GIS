@@ -26,6 +26,8 @@ The documentation here is organized around that goal:
 
 - [engineering/architecture.md](./engineering/architecture.md)
 - [engineering/frontend-map-editing.md](./engineering/frontend-map-editing.md)
+- [engineering/cartography.md](./engineering/cartography.md)
+- [engineering/attribute-table.md](./engineering/attribute-table.md)
 
 ### Operations
 
@@ -34,6 +36,7 @@ The documentation here is organized around that goal:
 ### Roadmap
 
 - [roadmap/next-focus.md](./roadmap/next-focus.md)
+- [roadmap/look-ahead.md](./roadmap/look-ahead.md)
 
 ## Existing planning and analysis docs
 

@@ -77,7 +77,15 @@ function paperStyle(mode: LegendMode) {
 }
 
 function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: string) {
-  if (model.geometryFamily === 'point' && model.pointShape === 'icon' && iconId) {
+  const patchFamily = model.legendPatchShape === 'line'
+    ? 'line'
+    : model.legendPatchShape === 'area'
+      ? 'polygon'
+      : model.legendPatchShape === 'circle' || model.legendPatchShape === 'square'
+        ? 'point'
+        : model.geometryFamily
+
+  if (patchFamily === 'point' && model.pointShape === 'icon' && iconId && model.legendPatchShape === 'auto') {
     return (
       <Box
         component="img"
@@ -88,15 +96,18 @@ function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: str
     )
   }
 
-  if (model.geometryFamily === 'line') {
+  if (patchFamily === 'line') {
     return (
       <Box
         sx={{
           width: 18,
-          height: 3,
+          height: model.lineCasingEnabled ? 7 : 3,
           borderRadius: 999,
           bgcolor: color,
-          border: '1px solid #111827',
+          border: model.lineCasingEnabled
+            ? `${Math.max(1, Math.min(3, model.lineCasingWidth))}px solid ${model.lineCasingColor}`
+            : '1px solid #111827',
+          boxShadow: model.lineCasingEnabled ? '0 0 0 1px rgba(15,23,42,0.35)' : 'none',
           flexShrink: 0,
         }}
       />
@@ -104,7 +115,7 @@ function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: str
   }
 
   const polygonPatternStyle =
-    model.geometryFamily === 'polygon'
+    patchFamily === 'polygon'
       ? polygonPatternCss(
         model.polygonPatternLibrary,
         model.polygonPattern,
@@ -118,7 +129,11 @@ function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: str
       sx={{
         width: 16,
         height: 16,
-        borderRadius: model.geometryFamily === 'point' && model.pointShape === 'circle' ? '50%' : '4px',
+        borderRadius:
+          model.legendPatchShape === 'circle' ||
+          (model.legendPatchShape === 'auto' && model.geometryFamily === 'point' && model.pointShape === 'circle')
+            ? '50%'
+            : '4px',
         bgcolor: color,
         backgroundImage: polygonPatternStyle.backgroundImage,
         backgroundSize: polygonPatternStyle.backgroundSize,
@@ -264,7 +279,7 @@ export function LayerLegend({
   onResetLegendFilters,
 }: LayerLegendProps) {
   const visibleLayers = layers.filter((layer) => visibleByLayerId[layer.id] ?? true)
-  const models = visibleLayers.map((layer) => buildLayerLegendModel(layer, featureCollections[layer.id]))
+  const models = visibleLayers.map((layer) => buildLayerLegendModel(layer, featureCollections[layer.id], mapZoom))
 
   if (!models.length) {
     return null

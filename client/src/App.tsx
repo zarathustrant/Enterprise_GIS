@@ -82,6 +82,7 @@ import {
   createShareLink,
   createView,
   createFeature,
+  splitFeatures,
   createLayerDomain,
   createLayerField,
   createLayer as createLayerApi,
@@ -99,8 +100,10 @@ import {
   deleteFeatureWithSession,
   deleteLayer as deleteLayerApi,
   exportLayerGeoJson,
+  exportFeatureRows,
   fetchAsyncJobs,
   fetchCurrentUser,
+  fetchFeatureStatistics,
   fetchEditSessionChanges,
   fetchEditSessions,
   // fetchFeatureHistory,
@@ -119,6 +122,7 @@ import {
   fetchUtilityNetworkSummary,
   fetchViews,
   queryLayerFeatures,
+  selectFeatures,
   // rollbackFeature,
   runBufferAnalysis,
   runIntersectAnalysis,
@@ -434,6 +438,24 @@ const DEFAULT_STYLE_DRAFT: LayerStyleDraft = {
   opacity: 0.8,
   strokeColor: '#0f4c5c',
   strokeWidth: 2,
+  lineCasingEnabled: false,
+  lineCasingColor: '#ffffff',
+  lineCasingWidth: 2,
+  scaleOverrides: [],
+  symbolLevel: 0,
+  lineSymbolLayers: [],
+  lineMarkerEnabled: false,
+  lineMarkerLibrary: 'maki',
+  lineMarkerIcon: 'arrow',
+  lineMarkerSpacingMeters: 500,
+  lineMarkerSize: 18,
+  lineMarkerRotateWithLine: true,
+  polygonMarkerEnabled: false,
+  polygonMarkerPlacement: 'interior',
+  polygonMarkerLibrary: 'maki',
+  polygonMarkerIcon: 'marker',
+  polygonMarkerSize: 18,
+  legendPatchShape: 'auto',
   pointRadius: 6,
   lineDashArray: [1, 0],
   pointShape: 'circle',
@@ -455,6 +477,13 @@ const DEFAULT_STYLE_DRAFT: LayerStyleDraft = {
   labelPriorityField: '',
   labelAnchor: 'center',
   labelMaxCount: 2000,
+  labelCollisionEnabled: true,
+  labelWrapLength: 0,
+  labelMaxLength: 0,
+  labelClasses: [],
+  labelRepeatDistanceMeters: 0,
+  labelRotateWithLine: true,
+  labelPolygonFitEnabled: false,
   labelTextExpression: '',
   sizeField: '',
   sizeMin: 4,
@@ -478,10 +507,14 @@ const DEFAULT_STYLE_DRAFT: LayerStyleDraft = {
   uniqueValueStops: [],
   uniqueDefaultColor: '#3f88c5',
   uniqueDefaultOpacity: 0.75,
+  uniqueNullColor: '#9ca3af',
+  uniqueNullOpacity: 0.75,
   classBreakField: '',
   classBreakStops: [],
   classBreakDefaultColor: '#3f88c5',
   classBreakDefaultOpacity: 0.75,
+  classBreakNullColor: '#9ca3af',
+  classBreakNullOpacity: 0.75,
 }
 
 function readStyle(layer: Layer): LayerStyleDraft {
@@ -535,6 +568,81 @@ function readStyle(layer: Layer): LayerStyleDraft {
       .filter((stop): stop is { min: number; max: number; color: string; opacity: number } => Boolean(stop))
     : []
 
+  const scaleOverrides = Array.isArray(style?.scaleOverrides)
+    ? style.scaleOverrides
+      .map((item) => {
+        if (!item || typeof item !== 'object') {
+          return null
+        }
+        const rule = item as Record<string, unknown>
+        if (
+          typeof rule.minZoom !== 'number' ||
+          typeof rule.maxZoom !== 'number' ||
+          typeof rule.color !== 'string'
+        ) {
+          return null
+        }
+        return {
+          minZoom: Math.max(0, Math.min(24, rule.minZoom)),
+          maxZoom: Math.max(0, Math.min(24, rule.maxZoom)),
+          color: rule.color,
+          opacity: typeof rule.opacity === 'number' ? Math.max(0, Math.min(1, rule.opacity)) : 0.8,
+          strokeWidth: typeof rule.strokeWidth === 'number' ? Math.max(1, rule.strokeWidth) : 2,
+          pointRadius: typeof rule.pointRadius === 'number' ? Math.max(1, rule.pointRadius) : 6,
+        }
+      })
+      .filter((item): item is LayerStyleDraft['scaleOverrides'][number] => Boolean(item))
+    : []
+
+  const lineSymbolLayers = Array.isArray(style?.lineSymbolLayers)
+    ? style.lineSymbolLayers
+      .map((item, index) => {
+        if (!item || typeof item !== 'object') {
+          return null
+        }
+        const symbol = item as Record<string, unknown>
+        const dash = Array.isArray(symbol.dashArray) ? symbol.dashArray : [1, 0]
+        if (typeof symbol.color !== 'string') {
+          return null
+        }
+        return {
+          id: typeof symbol.id === 'string' ? symbol.id : `line-symbol-${index + 1}`,
+          color: symbol.color,
+          opacity: typeof symbol.opacity === 'number' ? Math.max(0, Math.min(1, symbol.opacity)) : 1,
+          width: typeof symbol.width === 'number' ? Math.max(0.5, symbol.width) : 2,
+          dashArray: [
+            typeof dash[0] === 'number' ? Math.max(0, dash[0]) : 1,
+            typeof dash[1] === 'number' ? Math.max(0, dash[1]) : 0,
+          ] as [number, number],
+          level: typeof symbol.level === 'number' ? symbol.level : 0,
+        }
+      })
+      .filter((item): item is LayerStyleDraft['lineSymbolLayers'][number] => Boolean(item))
+    : []
+
+  const labelClasses = Array.isArray(style?.labelClasses)
+    ? style.labelClasses
+      .map((item, index) => {
+        if (!item || typeof item !== 'object') {
+          return null
+        }
+        const rule = item as Record<string, unknown>
+        return {
+          id: typeof rule.id === 'string' ? rule.id : `label-class-${index + 1}`,
+          name: typeof rule.name === 'string' ? rule.name : `Class ${index + 1}`,
+          filterField: typeof rule.filterField === 'string' ? rule.filterField : '',
+          filterValue: typeof rule.filterValue === 'string' ? rule.filterValue : '',
+          labelField: typeof rule.labelField === 'string' ? rule.labelField : '',
+          color: typeof rule.color === 'string' ? rule.color : '#1b1f24',
+          size: typeof rule.size === 'number' ? Math.max(8, rule.size) : 14,
+          minZoom: typeof rule.minZoom === 'number' ? Math.max(0, rule.minZoom) : 0,
+          maxZoom: typeof rule.maxZoom === 'number' ? Math.min(24, rule.maxZoom) : 24,
+          priority: typeof rule.priority === 'number' ? rule.priority : 0,
+        }
+      })
+      .filter((item): item is LayerStyleDraft['labelClasses'][number] => Boolean(item))
+    : []
+
   return {
     ...DEFAULT_STYLE_DRAFT,
     rendererType,
@@ -542,6 +650,64 @@ function readStyle(layer: Layer): LayerStyleDraft {
     opacity: typeof style?.opacity === 'number' ? style.opacity : DEFAULT_STYLE_DRAFT.opacity,
     strokeColor: typeof style?.strokeColor === 'string' ? style.strokeColor : DEFAULT_STYLE_DRAFT.strokeColor,
     strokeWidth: typeof style?.strokeWidth === 'number' ? style.strokeWidth : DEFAULT_STYLE_DRAFT.strokeWidth,
+    lineCasingEnabled:
+      typeof style?.lineCasingEnabled === 'boolean'
+        ? style.lineCasingEnabled
+        : DEFAULT_STYLE_DRAFT.lineCasingEnabled,
+    lineCasingColor:
+      typeof style?.lineCasingColor === 'string'
+        ? style.lineCasingColor
+        : DEFAULT_STYLE_DRAFT.lineCasingColor,
+    lineCasingWidth:
+      typeof style?.lineCasingWidth === 'number'
+        ? Math.max(0, style.lineCasingWidth)
+        : DEFAULT_STYLE_DRAFT.lineCasingWidth,
+    scaleOverrides,
+    symbolLevel: typeof style?.symbolLevel === 'number' ? style.symbolLevel : DEFAULT_STYLE_DRAFT.symbolLevel,
+    lineSymbolLayers,
+    lineMarkerEnabled: style?.lineMarkerEnabled === true,
+    lineMarkerLibrary:
+      style?.lineMarkerLibrary === 'tabler' ||
+      style?.lineMarkerLibrary === 'lucide' ||
+      style?.lineMarkerLibrary === 'heroicons_outline' ||
+      style?.lineMarkerLibrary === 'heroicons_solid' ||
+      style?.lineMarkerLibrary === 'material_symbols' ||
+      style?.lineMarkerLibrary === 'iconify'
+        ? style.lineMarkerLibrary
+        : 'maki',
+    lineMarkerIcon: typeof style?.lineMarkerIcon === 'string' ? style.lineMarkerIcon : DEFAULT_STYLE_DRAFT.lineMarkerIcon,
+    lineMarkerSpacingMeters:
+      typeof style?.lineMarkerSpacingMeters === 'number'
+        ? Math.max(1, style.lineMarkerSpacingMeters)
+        : DEFAULT_STYLE_DRAFT.lineMarkerSpacingMeters,
+    lineMarkerSize:
+      typeof style?.lineMarkerSize === 'number' ? Math.max(4, style.lineMarkerSize) : DEFAULT_STYLE_DRAFT.lineMarkerSize,
+    lineMarkerRotateWithLine:
+      typeof style?.lineMarkerRotateWithLine === 'boolean'
+        ? style.lineMarkerRotateWithLine
+        : DEFAULT_STYLE_DRAFT.lineMarkerRotateWithLine,
+    polygonMarkerEnabled: style?.polygonMarkerEnabled === true,
+    polygonMarkerPlacement: style?.polygonMarkerPlacement === 'centroid' ? 'centroid' : 'interior',
+    polygonMarkerLibrary:
+      style?.polygonMarkerLibrary === 'tabler' ||
+      style?.polygonMarkerLibrary === 'lucide' ||
+      style?.polygonMarkerLibrary === 'heroicons_outline' ||
+      style?.polygonMarkerLibrary === 'heroicons_solid' ||
+      style?.polygonMarkerLibrary === 'material_symbols' ||
+      style?.polygonMarkerLibrary === 'iconify'
+        ? style.polygonMarkerLibrary
+        : 'maki',
+    polygonMarkerIcon:
+      typeof style?.polygonMarkerIcon === 'string' ? style.polygonMarkerIcon : DEFAULT_STYLE_DRAFT.polygonMarkerIcon,
+    polygonMarkerSize:
+      typeof style?.polygonMarkerSize === 'number' ? Math.max(4, style.polygonMarkerSize) : DEFAULT_STYLE_DRAFT.polygonMarkerSize,
+    legendPatchShape:
+      style?.legendPatchShape === 'circle' ||
+      style?.legendPatchShape === 'square' ||
+      style?.legendPatchShape === 'line' ||
+      style?.legendPatchShape === 'area'
+        ? style.legendPatchShape
+        : 'auto',
     pointRadius: typeof style?.pointRadius === 'number' ? style.pointRadius : DEFAULT_STYLE_DRAFT.pointRadius,
     lineDashArray:
       Array.isArray(style?.lineDashArray) &&
@@ -602,6 +768,25 @@ function readStyle(layer: Layer): LayerStyleDraft {
       typeof style?.labelMaxCount === 'number'
         ? Math.max(10, Math.min(20_000, Math.round(style.labelMaxCount)))
         : DEFAULT_STYLE_DRAFT.labelMaxCount,
+    labelCollisionEnabled:
+      typeof style?.labelCollisionEnabled === 'boolean'
+        ? style.labelCollisionEnabled
+        : DEFAULT_STYLE_DRAFT.labelCollisionEnabled,
+    labelWrapLength:
+      typeof style?.labelWrapLength === 'number' ? Math.max(0, style.labelWrapLength) : DEFAULT_STYLE_DRAFT.labelWrapLength,
+    labelMaxLength:
+      typeof style?.labelMaxLength === 'number' ? Math.max(0, style.labelMaxLength) : DEFAULT_STYLE_DRAFT.labelMaxLength,
+    labelClasses,
+    labelRepeatDistanceMeters:
+      typeof style?.labelRepeatDistanceMeters === 'number'
+        ? Math.max(0, style.labelRepeatDistanceMeters)
+        : DEFAULT_STYLE_DRAFT.labelRepeatDistanceMeters,
+    labelRotateWithLine:
+      typeof style?.labelRotateWithLine === 'boolean' ? style.labelRotateWithLine : DEFAULT_STYLE_DRAFT.labelRotateWithLine,
+    labelPolygonFitEnabled:
+      typeof style?.labelPolygonFitEnabled === 'boolean'
+        ? style.labelPolygonFitEnabled
+        : DEFAULT_STYLE_DRAFT.labelPolygonFitEnabled,
     labelTextExpression: expressionToString(style?.labelTextExpression),
     sizeField: typeof style?.sizeField === 'string' ? style.sizeField : '',
     sizeMin: typeof style?.sizeMin === 'number' ? style.sizeMin : DEFAULT_STYLE_DRAFT.sizeMin,
@@ -654,6 +839,10 @@ function readStyle(layer: Layer): LayerStyleDraft {
       typeof style?.uniqueDefaultOpacity === 'number'
         ? style.uniqueDefaultOpacity
         : DEFAULT_STYLE_DRAFT.uniqueDefaultOpacity,
+    uniqueNullColor:
+      typeof style?.uniqueNullColor === 'string' ? style.uniqueNullColor : DEFAULT_STYLE_DRAFT.uniqueNullColor,
+    uniqueNullOpacity:
+      typeof style?.uniqueNullOpacity === 'number' ? style.uniqueNullOpacity : DEFAULT_STYLE_DRAFT.uniqueNullOpacity,
     classBreakField: typeof style?.classBreakField === 'string' ? style.classBreakField : '',
     classBreakStops,
     classBreakDefaultColor:
@@ -664,6 +853,10 @@ function readStyle(layer: Layer): LayerStyleDraft {
       typeof style?.classBreakDefaultOpacity === 'number'
         ? style.classBreakDefaultOpacity
         : DEFAULT_STYLE_DRAFT.classBreakDefaultOpacity,
+    classBreakNullColor:
+      typeof style?.classBreakNullColor === 'string' ? style.classBreakNullColor : DEFAULT_STYLE_DRAFT.classBreakNullColor,
+    classBreakNullOpacity:
+      typeof style?.classBreakNullOpacity === 'number' ? style.classBreakNullOpacity : DEFAULT_STYLE_DRAFT.classBreakNullOpacity,
   }
 }
 
@@ -674,6 +867,24 @@ function toStylePayload(style: LayerStyleDraft): Record<string, unknown> {
     opacity: style.opacity,
     strokeColor: style.strokeColor,
     strokeWidth: style.strokeWidth,
+    lineCasingEnabled: style.lineCasingEnabled,
+    lineCasingColor: style.lineCasingColor,
+    lineCasingWidth: style.lineCasingWidth,
+    scaleOverrides: style.scaleOverrides,
+    symbolLevel: style.symbolLevel,
+    lineSymbolLayers: style.lineSymbolLayers,
+    lineMarkerEnabled: style.lineMarkerEnabled,
+    lineMarkerLibrary: style.lineMarkerLibrary,
+    lineMarkerIcon: style.lineMarkerIcon,
+    lineMarkerSpacingMeters: style.lineMarkerSpacingMeters,
+    lineMarkerSize: style.lineMarkerSize,
+    lineMarkerRotateWithLine: style.lineMarkerRotateWithLine,
+    polygonMarkerEnabled: style.polygonMarkerEnabled,
+    polygonMarkerPlacement: style.polygonMarkerPlacement,
+    polygonMarkerLibrary: style.polygonMarkerLibrary,
+    polygonMarkerIcon: style.polygonMarkerIcon,
+    polygonMarkerSize: style.polygonMarkerSize,
+    legendPatchShape: style.legendPatchShape,
     pointRadius: style.pointRadius,
     lineDashArray: style.lineDashArray,
     pointShape: style.pointShape,
@@ -695,6 +906,13 @@ function toStylePayload(style: LayerStyleDraft): Record<string, unknown> {
     labelPriorityField: style.labelPriorityField,
     labelAnchor: style.labelAnchor,
     labelMaxCount: style.labelMaxCount,
+    labelCollisionEnabled: style.labelCollisionEnabled,
+    labelWrapLength: style.labelWrapLength,
+    labelMaxLength: style.labelMaxLength,
+    labelClasses: style.labelClasses,
+    labelRepeatDistanceMeters: style.labelRepeatDistanceMeters,
+    labelRotateWithLine: style.labelRotateWithLine,
+    labelPolygonFitEnabled: style.labelPolygonFitEnabled,
     labelTextExpression: style.labelTextExpression,
     sizeField: style.sizeField,
     sizeMin: style.sizeMin,
@@ -718,10 +936,14 @@ function toStylePayload(style: LayerStyleDraft): Record<string, unknown> {
     uniqueValueStops: style.uniqueValueStops,
     uniqueDefaultColor: style.uniqueDefaultColor,
     uniqueDefaultOpacity: style.uniqueDefaultOpacity,
+    uniqueNullColor: style.uniqueNullColor,
+    uniqueNullOpacity: style.uniqueNullOpacity,
     classBreakField: style.classBreakField,
     classBreakStops: style.classBreakStops,
     classBreakDefaultColor: style.classBreakDefaultColor,
     classBreakDefaultOpacity: style.classBreakDefaultOpacity,
+    classBreakNullColor: style.classBreakNullColor,
+    classBreakNullOpacity: style.classBreakNullOpacity,
   }
 }
 
@@ -2296,12 +2518,40 @@ export default function App() {
     setLayerOpsOpen(true)
   }
 
-  const handleQueryTableRows = async (payload: FeaturesQueryPayload): Promise<FeaturesQueryResponse> => {
+  const handleQueryTableRows = useCallback(async (payload: FeaturesQueryPayload): Promise<FeaturesQueryResponse> => {
     if (!tableLayer) {
       throw new Error('No table layer selected')
     }
     return queryLayerFeatures(tableLayer.id, payload, token)
-  }
+  }, [tableLayer, token])
+
+  const handleSelectTableRows = useCallback(async (payload: { filters?: FeaturesQueryPayload['filters']; limit?: number }) => {
+    if (!tableLayer) {
+      throw new Error('No table layer selected')
+    }
+    return selectFeatures(tableLayer.id, payload, token)
+  }, [tableLayer, token])
+
+  const handleFetchTableStatistics = useCallback(async (payload: {
+    filters?: FeaturesQueryPayload['filters']
+    feature_ids?: string[]
+  }) => {
+    if (!tableLayer) {
+      throw new Error('No table layer selected')
+    }
+    return fetchFeatureStatistics(tableLayer.id, payload, token)
+  }, [tableLayer, token])
+
+  const handleExportTableRows = useCallback(async (payload: {
+    format: 'csv' | 'json'
+    filters?: FeaturesQueryPayload['filters']
+    feature_ids?: string[]
+  }) => {
+    if (!tableLayer) {
+      throw new Error('No table layer selected')
+    }
+    return exportFeatureRows(tableLayer.id, payload, token)
+  }, [tableLayer, token])
 
   const handleBulkTableUpdate = async (payload: BulkUpdatePayload): Promise<{ updated_count: number; message?: string }> => {
     if (!tableLayer) {
@@ -3884,6 +4134,20 @@ export default function App() {
 
               deleteFeatureMutation.mutate({ layerId, featureId })
             }}
+            onFeaturesSplit={async (layerId, featureIds, splitLine) => {
+              const targetLayer = layerById[layerId]
+              if (!targetLayer || !canManageLayer(ownerName, targetLayer)) {
+                throw new Error('You cannot edit this layer')
+              }
+              if (!token) {
+                throw new Error('You must be signed in to split features.')
+              }
+
+              const result = await splitFeatures(layerId, featureIds, splitLine, token)
+              await queryClient.invalidateQueries({ queryKey: ['layer-features', layerId] })
+              await queryClient.invalidateQueries({ queryKey: ['layers'] })
+              return result.features
+            }}
             onEditValidationError={(message) => {
               notify(message, 'warning')
             }}
@@ -3913,6 +4177,9 @@ export default function App() {
               }}
               onSaveProperties={handleSaveProperties}
               onQueryRows={handleQueryTableRows}
+              onSelectRows={handleSelectTableRows}
+              onFetchStatistics={handleFetchTableStatistics}
+              onExportRows={handleExportTableRows}
               onBulkUpdateRows={handleBulkTableUpdate}
               onFeatureSelectionChange={(featureIds) => {
                 if (tableLayer) {

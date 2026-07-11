@@ -9,6 +9,7 @@ from field_schema import (
     validate_properties_with_fields,
 )
 from enterprise_utils import add_feature_history, invalidate_layer_tile_cache, log_audit
+from spatial_validation import GeometryValidationError, validate_geojson_geometry
 
 ingestion_bp = Blueprint('ingestion', __name__)
 
@@ -62,6 +63,9 @@ def upload_geojson(layer_id):
         return jsonify({'error': 'Root type must be Feature or FeatureCollection'}), 400
 
     layer_fields = fetch_layer_fields(cur, layer_id)
+    cur.execute('SELECT geometry_type FROM layers WHERE id = %s::uuid', (layer_id,))
+    layer_row = cur.fetchone()
+    expected_family = str((layer_row or {}).get('geometry_type') or '').lower()
     inserted = errors = 0
     for feature in features:
         geom = feature.get('geometry')
@@ -72,12 +76,24 @@ def upload_geojson(layer_id):
 
         try:
             cur.execute("SAVEPOINT sp")
+            normalized_geom = validate_geojson_geometry(cur, geom).geometry
+            actual_type = str(normalized_geom.get('type') or '').lower()
+            if expected_family and expected_family != 'mixed':
+                family_matches = (
+                    ('point' in expected_family and 'point' in actual_type)
+                    or ('line' in expected_family and 'line' in actual_type)
+                    or ('polygon' in expected_family and 'polygon' in actual_type)
+                )
+                if not family_matches:
+                    raise GeometryValidationError(
+                        f'Layer geometry type mismatch: expected {expected_family}, got {actual_type}'
+                    )
             prepared_props = validate_properties_with_fields(layer_fields, props)
             cur.execute("""
                 INSERT INTO features (layer_id, geometry, properties, created_by)
                 VALUES (%s, ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), %s, %s::uuid)
                 RETURNING id, version, ST_AsGeoJSON(geometry) AS geometry, properties
-            """, (layer_id, json.dumps(geom), json.dumps(prepared_props), user_id))
+            """, (layer_id, json.dumps(normalized_geom), json.dumps(prepared_props), user_id))
             inserted_row = cur.fetchone()
             add_feature_history(
                 cur,
@@ -91,7 +107,7 @@ def upload_geojson(layer_id):
             )
             cur.execute("RELEASE SAVEPOINT sp")
             inserted += 1
-        except FieldSchemaError:
+        except (FieldSchemaError, GeometryValidationError):
             cur.execute("ROLLBACK TO SAVEPOINT sp")
             cur.execute("RELEASE SAVEPOINT sp")
             errors += 1

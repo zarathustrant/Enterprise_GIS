@@ -89,6 +89,36 @@ function iconNamePlaceholder(library: LayerStyleDraft['iconLibrary']): string {
   return found ? found.example : 'marker'
 }
 
+function colorChannels(hex: string): [number, number, number] | null {
+  const match = /^#([0-9a-f]{6})$/i.exec(hex)
+  if (!match) return null
+  return [0, 2, 4].map((offset) => Number.parseInt(match[1].slice(offset, offset + 2), 16)) as [number, number, number]
+}
+
+function relativeLuminance(hex: string): number | null {
+  const channels = colorChannels(hex)
+  if (!channels) return null
+  const linear = channels.map((channel) => {
+    const value = channel / 255
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
+  })
+  return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722
+}
+
+function contrastRatio(a: string, b: string): number {
+  const first = relativeLuminance(a)
+  const second = relativeLuminance(b)
+  if (first === null || second === null) return 21
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05)
+}
+
+function colorDistance(a: string, b: string): number {
+  const first = colorChannels(a)
+  const second = colorChannels(b)
+  if (!first || !second) return 255
+  return Math.sqrt(first.reduce((sum, value, index) => sum + (value - second[index]) ** 2, 0))
+}
+
 export function LayerStyleDialog({
   open,
   layerName,
@@ -117,6 +147,19 @@ export function LayerStyleDialog({
   const showPointControls = geometryFamily === 'point' || geometryFamily === 'mixed'
   const showLineControls = geometryFamily === 'line' || geometryFamily === 'polygon' || geometryFamily === 'mixed'
   const showPolygonControls = geometryFamily === 'polygon' || geometryFamily === 'mixed'
+  const accessibilityWarnings: string[] = []
+  if (style.opacity < 0.3) accessibilityWarnings.push('Base symbol opacity is below 30% and may disappear over imagery.')
+  if (showPointControls && style.pointRadius < 4) accessibilityWarnings.push('Point radius below 4 px is difficult to identify and select.')
+  if (showLineControls && style.strokeWidth < 1.5) accessibilityWarnings.push('Line width below 1.5 px may be unclear on high-density displays.')
+  if (contrastRatio(style.labelColor, style.labelHaloColor) < 3) accessibilityWarnings.push('Label and halo colors have low contrast.')
+  const categoryColors = style.rendererType === 'uniqueValue'
+    ? style.uniqueValueStops.map((stop) => stop.color)
+    : style.rendererType === 'classBreaks'
+      ? style.classBreakStops.map((stop) => stop.color)
+      : []
+  if (categoryColors.some((color, index) => categoryColors.slice(index + 1).some((other) => colorDistance(color, other) < 45))) {
+    accessibilityWarnings.push('Some category colors are visually similar; add stronger lightness or hue separation.')
+  }
 
   const applyPreset = (patch: Partial<LayerStyleDraft>) => {
     onStyleChange({
@@ -148,6 +191,14 @@ export function LayerStyleDialog({
           </Typography>
 
           {error && <Alert severity="error">{error}</Alert>}
+          {accessibilityWarnings.length > 0 && (
+            <Alert severity="warning">
+              <Typography variant="caption" component="div" sx={{ fontWeight: 700 }}>Accessibility review</Typography>
+              {accessibilityWarnings.map((warning) => (
+                <Typography key={warning} variant="caption" component="div">• {warning}</Typography>
+              ))}
+            </Alert>
+          )}
 
           <Box display="grid" gap={0.75}>
             <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
@@ -175,6 +226,36 @@ export function LayerStyleDialog({
             <MenuItem value="simple">Simple</MenuItem>
             <MenuItem value="uniqueValue">Unique Values</MenuItem>
             <MenuItem value="classBreaks">Class Breaks</MenuItem>
+          </TextField>
+
+          <TextField
+            label="Symbol level / drawing order"
+            value={style.symbolLevel}
+            onChange={(event) => onStyleChange({ ...style, symbolLevel: Number(event.target.value) || 0 })}
+            size="small"
+            type="number"
+            helperText="Higher levels draw above lower levels, independent of the layer-list order."
+            inputProps={{ step: 1 }}
+            fullWidth
+          />
+
+          <TextField
+            label="Legend patch shape"
+            value={style.legendPatchShape}
+            onChange={(event) => onStyleChange({
+              ...style,
+              legendPatchShape: event.target.value as LayerStyleDraft['legendPatchShape'],
+            })}
+            size="small"
+            select
+            helperText="Auto uses the layer geometry; override for thematic legend conventions."
+            fullWidth
+          >
+            <MenuItem value="auto">Automatic by geometry</MenuItem>
+            <MenuItem value="circle">Circle marker</MenuItem>
+            <MenuItem value="square">Square marker</MenuItem>
+            <MenuItem value="line">Line sample</MenuItem>
+            <MenuItem value="area">Area patch</MenuItem>
           </TextField>
 
           <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(4, minmax(0, 1fr))' }} gap={1.5}>
@@ -400,6 +481,260 @@ export function LayerStyleDialog({
                   fullWidth
                 />
               </Box>
+
+              {(geometryFamily === 'line' || geometryFamily === 'mixed') && (
+              <Box display="grid" gap={1.25} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                  Line Casing
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  Draws a wider solid stroke beneath the line for roads, pipelines, routes, and overlapping networks.
+                </Typography>
+                <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(3, minmax(0, 1fr))' }} gap={1.5}>
+                  <TextField
+                    label="Casing"
+                    value={style.lineCasingEnabled ? 'enabled' : 'disabled'}
+                    onChange={(event) => onStyleChange({ ...style, lineCasingEnabled: event.target.value === 'enabled' })}
+                    size="small"
+                    select
+                    fullWidth
+                  >
+                    <MenuItem value="disabled">Disabled</MenuItem>
+                    <MenuItem value="enabled">Enabled</MenuItem>
+                  </TextField>
+                  <TextField
+                    type="color"
+                    label="Casing color"
+                    value={style.lineCasingColor}
+                    onChange={(event) => onStyleChange({ ...style, lineCasingColor: event.target.value })}
+                    size="small"
+                    fullWidth
+                    disabled={!style.lineCasingEnabled}
+                    InputLabelProps={{ shrink: true }}
+                  />
+                  <TextField
+                    label="Extra width"
+                    value={style.lineCasingWidth}
+                    onChange={(event) => onStyleChange({
+                      ...style,
+                      lineCasingWidth: Math.max(0, Number(event.target.value) || 0),
+                    })}
+                    size="small"
+                    type="number"
+                    inputProps={{ min: 0, max: 24, step: 0.5 }}
+                    fullWidth
+                    disabled={!style.lineCasingEnabled}
+                  />
+                </Box>
+              </Box>
+              )}
+
+              {(geometryFamily === 'line' || geometryFamily === 'mixed') && (
+                <Box display="grid" gap={1.25} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center">
+                    <Box>
+                      <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                        Secondary Line Symbols
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Negative levels draw below the primary stroke; zero and positive levels draw above it.
+                      </Typography>
+                    </Box>
+                    <Button
+                      size="small"
+                      startIcon={<AddIcon fontSize="small" />}
+                      onClick={() => onStyleChange({
+                        ...style,
+                        lineSymbolLayers: [
+                          ...style.lineSymbolLayers,
+                          {
+                            id: `line-symbol-${Date.now()}`,
+                            color: style.strokeColor,
+                            opacity: 1,
+                            width: Math.max(1, style.strokeWidth / 2),
+                            dashArray: [1, 0],
+                            level: 1,
+                          },
+                        ],
+                      })}
+                    >
+                      Add Stroke
+                    </Button>
+                  </Stack>
+
+                  {style.lineSymbolLayers.map((symbol, index) => (
+                    <Box
+                      key={symbol.id}
+                      display="grid"
+                      gridTemplateColumns={{ xs: '1fr 1fr', md: 'repeat(6, minmax(0, 1fr)) auto' }}
+                      gap={1}
+                      alignItems="center"
+                    >
+                      <TextField
+                        type="color"
+                        label="Color"
+                        value={symbol.color}
+                        size="small"
+                        InputLabelProps={{ shrink: true }}
+                        onChange={(event) => {
+                          const next = [...style.lineSymbolLayers]
+                          next[index] = { ...symbol, color: event.target.value }
+                          onStyleChange({ ...style, lineSymbolLayers: next })
+                        }}
+                      />
+                      <TextField
+                        label="Opacity"
+                        value={symbol.opacity}
+                        type="number"
+                        size="small"
+                        inputProps={{ min: 0, max: 1, step: 0.05 }}
+                        onChange={(event) => {
+                          const next = [...style.lineSymbolLayers]
+                          next[index] = { ...symbol, opacity: clamp01(Number(event.target.value) || 0) }
+                          onStyleChange({ ...style, lineSymbolLayers: next })
+                        }}
+                      />
+                      <TextField
+                        label="Width"
+                        value={symbol.width}
+                        type="number"
+                        size="small"
+                        inputProps={{ min: 0.5, max: 48, step: 0.5 }}
+                        onChange={(event) => {
+                          const next = [...style.lineSymbolLayers]
+                          next[index] = { ...symbol, width: Math.max(0.5, Number(event.target.value) || 0.5) }
+                          onStyleChange({ ...style, lineSymbolLayers: next })
+                        }}
+                      />
+                      <TextField
+                        label="Dash on"
+                        value={symbol.dashArray[0]}
+                        type="number"
+                        size="small"
+                        onChange={(event) => {
+                          const next = [...style.lineSymbolLayers]
+                          next[index] = { ...symbol, dashArray: [Math.max(0, Number(event.target.value) || 0), symbol.dashArray[1]] }
+                          onStyleChange({ ...style, lineSymbolLayers: next })
+                        }}
+                      />
+                      <TextField
+                        label="Dash off"
+                        value={symbol.dashArray[1]}
+                        type="number"
+                        size="small"
+                        onChange={(event) => {
+                          const next = [...style.lineSymbolLayers]
+                          next[index] = { ...symbol, dashArray: [symbol.dashArray[0], Math.max(0, Number(event.target.value) || 0)] }
+                          onStyleChange({ ...style, lineSymbolLayers: next })
+                        }}
+                      />
+                      <TextField
+                        label="Level"
+                        value={symbol.level}
+                        type="number"
+                        size="small"
+                        onChange={(event) => {
+                          const next = [...style.lineSymbolLayers]
+                          next[index] = { ...symbol, level: Number(event.target.value) || 0 }
+                          onStyleChange({ ...style, lineSymbolLayers: next })
+                        }}
+                      />
+                      <IconButton
+                        size="small"
+                        color="error"
+                        aria-label={`Delete secondary line symbol ${index + 1}`}
+                        onClick={() => onStyleChange({
+                          ...style,
+                          lineSymbolLayers: style.lineSymbolLayers.filter((_, symbolIndex) => symbolIndex !== index),
+                        })}
+                      >
+                        <DeleteOutlineIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  ))}
+                </Box>
+              )}
+
+              {(geometryFamily === 'line' || geometryFamily === 'mixed') && (
+                <Box display="grid" gap={1.25} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                    Markers Along Line
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Repeats an icon by real-world distance along line and multiline features.
+                  </Typography>
+                  <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(6, minmax(0, 1fr))' }} gap={1}>
+                    <TextField
+                      label="Placement"
+                      value={style.lineMarkerEnabled ? 'enabled' : 'disabled'}
+                      onChange={(event) => onStyleChange({ ...style, lineMarkerEnabled: event.target.value === 'enabled' })}
+                      size="small"
+                      select
+                    >
+                      <MenuItem value="disabled">Disabled</MenuItem>
+                      <MenuItem value="enabled">Enabled</MenuItem>
+                    </TextField>
+                    <TextField
+                      label="Icon library"
+                      value={style.lineMarkerLibrary}
+                      onChange={(event) => onStyleChange({
+                        ...style,
+                        lineMarkerLibrary: event.target.value as LayerStyleDraft['lineMarkerLibrary'],
+                      })}
+                      size="small"
+                      select
+                      disabled={!style.lineMarkerEnabled}
+                    >
+                      {ICON_LIBRARY_DEFINITIONS.map((item) => (
+                        <MenuItem key={`line-marker-${item.value}`} value={item.value}>{item.label}</MenuItem>
+                      ))}
+                    </TextField>
+                    <TextField
+                      label="Icon name"
+                      value={style.lineMarkerIcon}
+                      onChange={(event) => onStyleChange({ ...style, lineMarkerIcon: event.target.value })}
+                      size="small"
+                      disabled={!style.lineMarkerEnabled}
+                    />
+                    <TextField
+                      label="Spacing (m)"
+                      value={style.lineMarkerSpacingMeters}
+                      onChange={(event) => onStyleChange({
+                        ...style,
+                        lineMarkerSpacingMeters: Math.max(1, Number(event.target.value) || 1),
+                      })}
+                      type="number"
+                      size="small"
+                      disabled={!style.lineMarkerEnabled}
+                    />
+                    <TextField
+                      label="Size (px)"
+                      value={style.lineMarkerSize}
+                      onChange={(event) => onStyleChange({
+                        ...style,
+                        lineMarkerSize: Math.max(4, Number(event.target.value) || 4),
+                      })}
+                      type="number"
+                      size="small"
+                      disabled={!style.lineMarkerEnabled}
+                    />
+                    <TextField
+                      label="Rotation"
+                      value={style.lineMarkerRotateWithLine ? 'follow' : 'fixed'}
+                      onChange={(event) => onStyleChange({
+                        ...style,
+                        lineMarkerRotateWithLine: event.target.value === 'follow',
+                      })}
+                      size="small"
+                      select
+                      disabled={!style.lineMarkerEnabled}
+                    >
+                      <MenuItem value="follow">Follow line</MenuItem>
+                      <MenuItem value="fixed">Fixed upright</MenuItem>
+                    </TextField>
+                  </Box>
+                </Box>
+              )}
             </>
           )}
 
@@ -488,6 +823,73 @@ export function LayerStyleDialog({
               <Typography variant="caption" color="text.secondary">
                 Choose from built-in hatch styles or Hero Patterns (free MIT library), with live visual browser.
               </Typography>
+              <Box display="grid" gap={1.25} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                  Polygon Marker
+                </Typography>
+                <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(5, minmax(0, 1fr))' }} gap={1}>
+                  <TextField
+                    label="Marker"
+                    value={style.polygonMarkerEnabled ? 'enabled' : 'disabled'}
+                    onChange={(event) => onStyleChange({ ...style, polygonMarkerEnabled: event.target.value === 'enabled' })}
+                    size="small"
+                    select
+                  >
+                    <MenuItem value="disabled">Disabled</MenuItem>
+                    <MenuItem value="enabled">Enabled</MenuItem>
+                  </TextField>
+                  <TextField
+                    label="Placement"
+                    value={style.polygonMarkerPlacement}
+                    onChange={(event) => onStyleChange({
+                      ...style,
+                      polygonMarkerPlacement: event.target.value as LayerStyleDraft['polygonMarkerPlacement'],
+                    })}
+                    size="small"
+                    select
+                    disabled={!style.polygonMarkerEnabled}
+                  >
+                    <MenuItem value="interior">Interior point</MenuItem>
+                    <MenuItem value="centroid">Centroid</MenuItem>
+                  </TextField>
+                  <TextField
+                    label="Icon library"
+                    value={style.polygonMarkerLibrary}
+                    onChange={(event) => onStyleChange({
+                      ...style,
+                      polygonMarkerLibrary: event.target.value as LayerStyleDraft['polygonMarkerLibrary'],
+                    })}
+                    size="small"
+                    select
+                    disabled={!style.polygonMarkerEnabled}
+                  >
+                    {ICON_LIBRARY_DEFINITIONS.map((item) => (
+                      <MenuItem key={`polygon-marker-${item.value}`} value={item.value}>{item.label}</MenuItem>
+                    ))}
+                  </TextField>
+                  <TextField
+                    label="Icon name"
+                    value={style.polygonMarkerIcon}
+                    onChange={(event) => onStyleChange({ ...style, polygonMarkerIcon: event.target.value })}
+                    size="small"
+                    disabled={!style.polygonMarkerEnabled}
+                  />
+                  <TextField
+                    label="Size (px)"
+                    value={style.polygonMarkerSize}
+                    onChange={(event) => onStyleChange({
+                      ...style,
+                      polygonMarkerSize: Math.max(4, Number(event.target.value) || 4),
+                    })}
+                    type="number"
+                    size="small"
+                    disabled={!style.polygonMarkerEnabled}
+                  />
+                </Box>
+                <Typography variant="caption" color="text.secondary">
+                  Interior placement keeps markers inside concave polygons and outside interior holes when possible.
+                </Typography>
+              </Box>
             </Box>
           )}
 
@@ -668,6 +1070,80 @@ export function LayerStyleDialog({
                 size="small"
                 type="number"
               />
+              <TextField
+                label="Collision handling"
+                value={style.labelCollisionEnabled ? 'enabled' : 'disabled'}
+                onChange={(event) => onStyleChange({ ...style, labelCollisionEnabled: event.target.value === 'enabled' })}
+                size="small"
+                select
+                helperText="Higher priority values survive collisions."
+              >
+                <MenuItem value="enabled">Avoid overlaps</MenuItem>
+                <MenuItem value="disabled">Allow overlaps</MenuItem>
+              </TextField>
+              <TextField
+                label="Wrap after characters"
+                value={style.labelWrapLength}
+                onChange={(event) => onStyleChange({
+                  ...style,
+                  labelWrapLength: Math.max(0, Math.round(Number(event.target.value) || 0)),
+                })}
+                size="small"
+                type="number"
+                helperText="0 disables wrapping."
+              />
+              <TextField
+                label="Abbreviate after characters"
+                value={style.labelMaxLength}
+                onChange={(event) => onStyleChange({
+                  ...style,
+                  labelMaxLength: Math.max(0, Math.round(Number(event.target.value) || 0)),
+                })}
+                size="small"
+                type="number"
+                helperText="0 keeps the full text."
+              />
+              {(geometryFamily === 'line' || geometryFamily === 'mixed') && (
+                <TextField
+                  label="Line label repeat (m)"
+                  value={style.labelRepeatDistanceMeters}
+                  onChange={(event) => onStyleChange({
+                    ...style,
+                    labelRepeatDistanceMeters: Math.max(0, Number(event.target.value) || 0),
+                  })}
+                  size="small"
+                  type="number"
+                  helperText="0 places one label per feature."
+                />
+              )}
+              {(geometryFamily === 'line' || geometryFamily === 'mixed') && (
+                <TextField
+                  label="Line label rotation"
+                  value={style.labelRotateWithLine ? 'follow' : 'fixed'}
+                  onChange={(event) => onStyleChange({ ...style, labelRotateWithLine: event.target.value === 'follow' })}
+                  size="small"
+                  select
+                >
+                  <MenuItem value="follow">Follow segment</MenuItem>
+                  <MenuItem value="fixed">Fixed upright</MenuItem>
+                </TextField>
+              )}
+              {showPolygonControls && (
+                <TextField
+                  label="Polygon label fitting"
+                  value={style.labelPolygonFitEnabled ? 'enabled' : 'disabled'}
+                  onChange={(event) => onStyleChange({
+                    ...style,
+                    labelPolygonFitEnabled: event.target.value === 'enabled',
+                  })}
+                  size="small"
+                  select
+                  helperText="Suppress labels that do not fit at the current zoom."
+                >
+                  <MenuItem value="enabled">Require fit</MenuItem>
+                  <MenuItem value="disabled">Allow overflow</MenuItem>
+                </TextField>
+              )}
             </Box>
             <TextField
               label='Label expression (JSON, optional) e.g. ["coalesce", ["get","name"], ["get","id"]]'
@@ -678,6 +1154,119 @@ export function LayerStyleDialog({
               multiline
               minRows={2}
             />
+            <Box display="grid" gap={1.25} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Box>
+                  <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Label Classes</Typography>
+                  <Typography variant="caption" color="text.secondary">
+                    Ordered attribute rules; the last matching class wins.
+                  </Typography>
+                </Box>
+                <Button
+                  size="small"
+                  startIcon={<AddIcon fontSize="small" />}
+                  onClick={() => onStyleChange({
+                    ...style,
+                    labelClasses: [
+                      ...style.labelClasses,
+                      {
+                        id: `label-class-${Date.now()}`,
+                        name: `Class ${style.labelClasses.length + 1}`,
+                        filterField: '',
+                        filterValue: '',
+                        labelField: style.labelField,
+                        color: style.labelColor,
+                        size: style.labelSize,
+                        minZoom: style.labelMinZoom,
+                        maxZoom: style.labelMaxZoom,
+                        priority: 0,
+                      },
+                    ],
+                  })}
+                >
+                  Add Class
+                </Button>
+              </Stack>
+              {style.labelClasses.map((labelClass, index) => (
+                <Box key={labelClass.id} display="grid" gap={1} sx={{ p: 1, bgcolor: 'action.hover', borderRadius: 1 }}>
+                  <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(4, minmax(0, 1fr))' }} gap={1}>
+                    <TextField
+                      label="Class name"
+                      value={labelClass.name}
+                      size="small"
+                      onChange={(event) => {
+                        const next = [...style.labelClasses]
+                        next[index] = { ...labelClass, name: event.target.value }
+                        onStyleChange({ ...style, labelClasses: next })
+                      }}
+                    />
+                    <TextField
+                      label="Filter field"
+                      value={labelClass.filterField}
+                      size="small"
+                      select
+                      onChange={(event) => {
+                        const next = [...style.labelClasses]
+                        next[index] = { ...labelClass, filterField: event.target.value }
+                        onStyleChange({ ...style, labelClasses: next })
+                      }}
+                    >
+                      <MenuItem value="">All features</MenuItem>
+                      {allFields.map((field) => <MenuItem key={`class-filter-${field.id}`} value={field.name}>{field.alias || field.name}</MenuItem>)}
+                    </TextField>
+                    <TextField
+                      label="Equals value"
+                      value={labelClass.filterValue}
+                      size="small"
+                      disabled={!labelClass.filterField}
+                      onChange={(event) => {
+                        const next = [...style.labelClasses]
+                        next[index] = { ...labelClass, filterValue: event.target.value }
+                        onStyleChange({ ...style, labelClasses: next })
+                      }}
+                    />
+                    <TextField
+                      label="Label field"
+                      value={labelClass.labelField}
+                      size="small"
+                      select
+                      onChange={(event) => {
+                        const next = [...style.labelClasses]
+                        next[index] = { ...labelClass, labelField: event.target.value }
+                        onStyleChange({ ...style, labelClasses: next })
+                      }}
+                    >
+                      <MenuItem value="">Use base label</MenuItem>
+                      {allFields.map((field) => <MenuItem key={`class-label-${field.id}`} value={field.name}>{field.alias || field.name}</MenuItem>)}
+                    </TextField>
+                  </Box>
+                  <Box display="grid" gridTemplateColumns={{ xs: '1fr 1fr', md: 'repeat(6, minmax(0, 1fr)) auto' }} gap={1} alignItems="center">
+                    <TextField type="color" label="Color" value={labelClass.color} size="small" InputLabelProps={{ shrink: true }} onChange={(event) => {
+                      const next = [...style.labelClasses]; next[index] = { ...labelClass, color: event.target.value }; onStyleChange({ ...style, labelClasses: next })
+                    }} />
+                    <TextField label="Size" value={labelClass.size} type="number" size="small" onChange={(event) => {
+                      const next = [...style.labelClasses]; next[index] = { ...labelClass, size: Math.max(8, Number(event.target.value) || 8) }; onStyleChange({ ...style, labelClasses: next })
+                    }} />
+                    <TextField label="Min zoom" value={labelClass.minZoom} type="number" size="small" onChange={(event) => {
+                      const next = [...style.labelClasses]; next[index] = { ...labelClass, minZoom: Math.max(0, Number(event.target.value) || 0) }; onStyleChange({ ...style, labelClasses: next })
+                    }} />
+                    <TextField label="Max zoom" value={labelClass.maxZoom} type="number" size="small" onChange={(event) => {
+                      const next = [...style.labelClasses]; next[index] = { ...labelClass, maxZoom: Math.min(24, Number(event.target.value) || 24) }; onStyleChange({ ...style, labelClasses: next })
+                    }} />
+                    <TextField label="Priority" value={labelClass.priority} type="number" size="small" onChange={(event) => {
+                      const next = [...style.labelClasses]; next[index] = { ...labelClass, priority: Number(event.target.value) || 0 }; onStyleChange({ ...style, labelClasses: next })
+                    }} />
+                    <Box />
+                    <IconButton size="small" color="error" aria-label={`Delete label class ${index + 1}`} onClick={() => onStyleChange({
+                      ...style,
+                      labelClasses: style.labelClasses.filter((_, classIndex) => classIndex !== index),
+                    })}>
+                      <DeleteOutlineIcon fontSize="small" />
+                    </IconButton>
+                  </Box>
+                </Box>
+              ))}
+            </Box>
           </Box>
 
           <Box display="grid" gap={1.5}>
@@ -731,6 +1320,140 @@ export function LayerStyleDialog({
                 minRows={2}
               />
             </Box>
+          </Box>
+
+          <Box display="grid" gap={1.5} sx={{ p: 1.5, border: '1px solid', borderColor: 'divider', borderRadius: 1.5 }}>
+            <Stack direction="row" justifyContent="space-between" alignItems="center">
+              <Box>
+                <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>
+                  Scale-Dependent Symbols
+                </Typography>
+                <Typography variant="caption" color="text.secondary">
+                  The last matching zoom rule wins when ranges overlap.
+                </Typography>
+              </Box>
+              <Button
+                size="small"
+                startIcon={<AddIcon fontSize="small" />}
+                onClick={() => onStyleChange({
+                  ...style,
+                  scaleOverrides: [
+                    ...style.scaleOverrides,
+                    {
+                      minZoom: 0,
+                      maxZoom: 24,
+                      color: style.color,
+                      opacity: style.opacity,
+                      strokeWidth: style.strokeWidth,
+                      pointRadius: style.pointRadius,
+                    },
+                  ],
+                })}
+              >
+                Add Zoom Rule
+              </Button>
+            </Stack>
+
+            {style.scaleOverrides.length === 0 && (
+              <Typography variant="caption" color="text.secondary">
+                No overrides. The base symbol is used at every visible zoom level.
+              </Typography>
+            )}
+
+            {style.scaleOverrides.map((rule, index) => (
+              <Box
+                key={`scale-rule-${index}`}
+                display="grid"
+                gridTemplateColumns={{ xs: '1fr 1fr', md: 'repeat(6, minmax(0, 1fr)) auto' }}
+                gap={1}
+                alignItems="center"
+              >
+                <TextField
+                  label="Min zoom"
+                  value={rule.minZoom}
+                  type="number"
+                  size="small"
+                  inputProps={{ min: 0, max: 24, step: 0.5 }}
+                  onChange={(event) => {
+                    const next = [...style.scaleOverrides]
+                    next[index] = { ...rule, minZoom: Math.max(0, Math.min(24, Number(event.target.value) || 0)) }
+                    onStyleChange({ ...style, scaleOverrides: next })
+                  }}
+                />
+                <TextField
+                  label="Max zoom"
+                  value={rule.maxZoom}
+                  type="number"
+                  size="small"
+                  inputProps={{ min: 0, max: 24, step: 0.5 }}
+                  error={rule.maxZoom < rule.minZoom}
+                  onChange={(event) => {
+                    const next = [...style.scaleOverrides]
+                    next[index] = { ...rule, maxZoom: Math.max(0, Math.min(24, Number(event.target.value) || 0)) }
+                    onStyleChange({ ...style, scaleOverrides: next })
+                  }}
+                />
+                <TextField
+                  type="color"
+                  label="Color"
+                  value={rule.color}
+                  size="small"
+                  InputLabelProps={{ shrink: true }}
+                  onChange={(event) => {
+                    const next = [...style.scaleOverrides]
+                    next[index] = { ...rule, color: event.target.value }
+                    onStyleChange({ ...style, scaleOverrides: next })
+                  }}
+                />
+                <TextField
+                  label="Opacity"
+                  value={rule.opacity}
+                  type="number"
+                  size="small"
+                  inputProps={{ min: 0, max: 1, step: 0.05 }}
+                  onChange={(event) => {
+                    const next = [...style.scaleOverrides]
+                    next[index] = { ...rule, opacity: clamp01(Number(event.target.value) || 0) }
+                    onStyleChange({ ...style, scaleOverrides: next })
+                  }}
+                />
+                <TextField
+                  label="Line width"
+                  value={rule.strokeWidth}
+                  type="number"
+                  size="small"
+                  inputProps={{ min: 1, max: 48, step: 0.5 }}
+                  onChange={(event) => {
+                    const next = [...style.scaleOverrides]
+                    next[index] = { ...rule, strokeWidth: Math.max(1, Number(event.target.value) || 1) }
+                    onStyleChange({ ...style, scaleOverrides: next })
+                  }}
+                />
+                <TextField
+                  label="Point radius"
+                  value={rule.pointRadius}
+                  type="number"
+                  size="small"
+                  inputProps={{ min: 1, max: 96, step: 0.5 }}
+                  onChange={(event) => {
+                    const next = [...style.scaleOverrides]
+                    next[index] = { ...rule, pointRadius: Math.max(1, Number(event.target.value) || 1) }
+                    onStyleChange({ ...style, scaleOverrides: next })
+                  }}
+                />
+                <IconButton
+                  size="small"
+                  color="error"
+                  aria-label={`Delete zoom rule ${index + 1}`}
+                  onClick={() => onStyleChange({
+                    ...style,
+                    scaleOverrides: style.scaleOverrides.filter((_, ruleIndex) => ruleIndex !== index),
+                  })}
+                >
+                  <DeleteOutlineIcon fontSize="small" />
+                </IconButton>
+              </Box>
+            ))}
           </Box>
 
           <Box display="grid" gap={1.5}>
@@ -863,19 +1586,36 @@ export function LayerStyleDialog({
                 </Stack>
               ))}
 
-              <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }} gap={1.5}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Fallback Symbols</Typography>
+              <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(4, minmax(0, 1fr))' }} gap={1.5}>
                 <TextField
                   type="color"
-                  label="Default Color"
+                  label="All other values"
                   value={style.uniqueDefaultColor}
                   onChange={(event) => onStyleChange({ ...style, uniqueDefaultColor: event.target.value })}
                   size="small"
                   InputLabelProps={{ shrink: true }}
                 />
                 <TextField
-                  label="Default Opacity"
+                  label="Other opacity"
                   value={style.uniqueDefaultOpacity}
                   onChange={(event) => onStyleChange({ ...style, uniqueDefaultOpacity: clamp01(Number(event.target.value) || 0) })}
+                  size="small"
+                  type="number"
+                  inputProps={{ min: 0, max: 1, step: 0.05 }}
+                />
+                <TextField
+                  type="color"
+                  label="Null / empty values"
+                  value={style.uniqueNullColor}
+                  onChange={(event) => onStyleChange({ ...style, uniqueNullColor: event.target.value })}
+                  size="small"
+                  InputLabelProps={{ shrink: true }}
+                />
+                <TextField
+                  label="Null opacity"
+                  value={style.uniqueNullOpacity}
+                  onChange={(event) => onStyleChange({ ...style, uniqueNullOpacity: clamp01(Number(event.target.value) || 0) })}
                   size="small"
                   type="number"
                   inputProps={{ min: 0, max: 1, step: 0.05 }}
@@ -979,19 +1719,36 @@ export function LayerStyleDialog({
                 </Stack>
               ))}
 
-              <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(2, minmax(0, 1fr))' }} gap={1.5}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Fallback Symbols</Typography>
+              <Box display="grid" gridTemplateColumns={{ xs: '1fr', md: 'repeat(4, minmax(0, 1fr))' }} gap={1.5}>
                 <TextField
                   type="color"
-                  label="Default Color"
+                  label="Outside breaks"
                   value={style.classBreakDefaultColor}
                   onChange={(event) => onStyleChange({ ...style, classBreakDefaultColor: event.target.value })}
                   size="small"
                   InputLabelProps={{ shrink: true }}
                 />
                 <TextField
-                  label="Default Opacity"
+                  label="Outside opacity"
                   value={style.classBreakDefaultOpacity}
                   onChange={(event) => onStyleChange({ ...style, classBreakDefaultOpacity: clamp01(Number(event.target.value) || 0) })}
+                  size="small"
+                  type="number"
+                  inputProps={{ min: 0, max: 1, step: 0.05 }}
+                />
+                <TextField
+                  type="color"
+                  label="Null values"
+                  value={style.classBreakNullColor}
+                  onChange={(event) => onStyleChange({ ...style, classBreakNullColor: event.target.value })}
+                  size="small"
+                  InputLabelProps={{ shrink: true }}
+                />
+                <TextField
+                  label="Null opacity"
+                  value={style.classBreakNullOpacity}
+                  onChange={(event) => onStyleChange({ ...style, classBreakNullOpacity: clamp01(Number(event.target.value) || 0) })}
                   size="small"
                   type="number"
                   inputProps={{ min: 0, max: 1, step: 0.05 }}

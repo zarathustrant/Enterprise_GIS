@@ -87,12 +87,61 @@ export interface ClassBreakStop {
   opacity: number
 }
 
+export interface ScaleSymbolOverride {
+  minZoom: number
+  maxZoom: number
+  color: string
+  opacity: number
+  strokeWidth: number
+  pointRadius: number
+}
+
+export interface LineSymbolLayer {
+  id: string
+  color: string
+  opacity: number
+  width: number
+  dashArray: [number, number]
+  level: number
+}
+
+export interface LabelClass {
+  id: string
+  name: string
+  filterField: string
+  filterValue: string
+  labelField: string
+  color: string
+  size: number
+  minZoom: number
+  maxZoom: number
+  priority: number
+}
+
 export interface LayerStyleDraft {
   rendererType: LayerRendererType
   color: string
   opacity: number
   strokeColor: string
   strokeWidth: number
+  lineCasingEnabled: boolean
+  lineCasingColor: string
+  lineCasingWidth: number
+  scaleOverrides: ScaleSymbolOverride[]
+  symbolLevel: number
+  lineSymbolLayers: LineSymbolLayer[]
+  lineMarkerEnabled: boolean
+  lineMarkerLibrary: LayerIconLibrary
+  lineMarkerIcon: string
+  lineMarkerSpacingMeters: number
+  lineMarkerSize: number
+  lineMarkerRotateWithLine: boolean
+  polygonMarkerEnabled: boolean
+  polygonMarkerPlacement: 'centroid' | 'interior'
+  polygonMarkerLibrary: LayerIconLibrary
+  polygonMarkerIcon: string
+  polygonMarkerSize: number
+  legendPatchShape: 'auto' | 'circle' | 'square' | 'line' | 'area'
   pointRadius: number
   lineDashArray: [number, number]
   pointShape: LayerPointSymbol
@@ -114,6 +163,13 @@ export interface LayerStyleDraft {
   labelPriorityField: string
   labelAnchor: 'center' | 'top' | 'bottom' | 'left' | 'right'
   labelMaxCount: number
+  labelCollisionEnabled: boolean
+  labelWrapLength: number
+  labelMaxLength: number
+  labelClasses: LabelClass[]
+  labelRepeatDistanceMeters: number
+  labelRotateWithLine: boolean
+  labelPolygonFitEnabled: boolean
   labelTextExpression: string
   sizeField: string
   sizeMin: number
@@ -137,10 +193,14 @@ export interface LayerStyleDraft {
   uniqueValueStops: UniqueValueStop[]
   uniqueDefaultColor: string
   uniqueDefaultOpacity: number
+  uniqueNullColor: string
+  uniqueNullOpacity: number
   classBreakField: string
   classBreakStops: ClassBreakStop[]
   classBreakDefaultColor: string
   classBreakDefaultOpacity: number
+  classBreakNullColor: string
+  classBreakNullOpacity: number
 }
 
 export type Feature = GeoJsonFeature<Geometry, GeoJsonProperties> & { id?: string }

@@ -27,6 +27,10 @@ export interface LayerLegendModel {
   layerName: string
   geometryFamily: GeometryFamily
   renderer: LayerRendererType
+  lineCasingEnabled: boolean
+  lineCasingColor: string
+  lineCasingWidth: number
+  legendPatchShape: 'auto' | 'circle' | 'square' | 'line' | 'area'
   field?: string
   pointShape: 'circle' | 'square' | 'icon'
   iconLibrary: LayerIconLibrary
@@ -59,9 +63,15 @@ interface ParsedStyle {
   uniqueField: string
   uniqueStops: ParsedUniqueStop[]
   uniqueDefaultColor: string
+  uniqueNullColor: string
   classBreakField: string
   classBreakStops: ParsedClassBreakStop[]
   classBreakDefaultColor: string
+  classBreakNullColor: string
+  lineCasingEnabled: boolean
+  lineCasingColor: string
+  lineCasingWidth: number
+  legendPatchShape: 'auto' | 'circle' | 'square' | 'line' | 'area'
   pointShape: 'circle' | 'square' | 'icon'
   iconLibrary: LayerIconLibrary
   iconName: string
@@ -72,8 +82,29 @@ interface ParsedStyle {
   polygonPatternOpacity: number
 }
 
-function asStyle(layer: Layer): Record<string, unknown> {
-  return (layer.style ?? {}) as Record<string, unknown>
+function asStyle(layer: Layer, mapZoom?: number | null): Record<string, unknown> {
+  const base = (layer.style ?? {}) as Record<string, unknown>
+  if (typeof mapZoom !== 'number') {
+    return base
+  }
+  return (Array.isArray(base.scaleOverrides) ? base.scaleOverrides : []).reduce<Record<string, unknown>>(
+    (resolved, item) => {
+      if (!item || typeof item !== 'object') {
+        return resolved
+      }
+      const rule = item as Record<string, unknown>
+      if (
+        typeof rule.minZoom === 'number' &&
+        typeof rule.maxZoom === 'number' &&
+        mapZoom >= rule.minZoom &&
+        mapZoom <= rule.maxZoom
+      ) {
+        return { ...resolved, ...rule }
+      }
+      return resolved
+    },
+    { ...base },
+  )
 }
 
 export function normalizeColor(value: unknown, fallback: string): string {
@@ -120,8 +151,8 @@ function clamp01(value: unknown, fallback: number): number {
   return Math.max(0, Math.min(1, value))
 }
 
-function parseStyle(layer: Layer): ParsedStyle {
-  const style = asStyle(layer)
+function parseStyle(layer: Layer, mapZoom?: number | null): ParsedStyle {
+  const style = asStyle(layer, mapZoom)
 
   const uniqueStops: ParsedUniqueStop[] = (Array.isArray(style.uniqueValueStops) ? style.uniqueValueStops : [])
     .map((item) => {
@@ -174,9 +205,21 @@ function parseStyle(layer: Layer): ParsedStyle {
     uniqueField: typeof style.uniqueValueField === 'string' ? style.uniqueValueField : '',
     uniqueStops,
     uniqueDefaultColor: normalizeColor(style.uniqueDefaultColor, '#3f88c5'),
+    uniqueNullColor: normalizeColor(style.uniqueNullColor, '#9ca3af'),
     classBreakField: typeof style.classBreakField === 'string' ? style.classBreakField : '',
     classBreakStops,
     classBreakDefaultColor: normalizeColor(style.classBreakDefaultColor, '#3f88c5'),
+    classBreakNullColor: normalizeColor(style.classBreakNullColor, '#9ca3af'),
+    lineCasingEnabled: style.lineCasingEnabled === true,
+    lineCasingColor: normalizeColor(style.lineCasingColor, '#ffffff'),
+    lineCasingWidth: typeof style.lineCasingWidth === 'number' ? Math.max(0, style.lineCasingWidth) : 2,
+    legendPatchShape:
+      style.legendPatchShape === 'circle' ||
+      style.legendPatchShape === 'square' ||
+      style.legendPatchShape === 'line' ||
+      style.legendPatchShape === 'area'
+        ? style.legendPatchShape
+        : 'auto',
     pointShape: normalizePointShape(style.pointShape),
     iconLibrary: normalizeIconLibrary(style.iconLibrary),
     iconName: typeof style.iconName === 'string' ? style.iconName : 'marker',
@@ -196,9 +239,12 @@ function featureProperty(feature: GeoJsonFeature, field: string): unknown {
 }
 
 function classifyClassBreak(style: ParsedStyle, value: unknown): string {
+  if (value === undefined || value === null || value === '') {
+    return 'cb:__null'
+  }
   const numeric = typeof value === 'number' ? value : Number(value)
   if (!Number.isFinite(numeric)) {
-    return 'cb:__default'
+    return 'cb:__other'
   }
 
   const breaks = style.classBreakStops
@@ -210,7 +256,7 @@ function classifyClassBreak(style: ParsedStyle, value: unknown): string {
     }
   }
 
-  return 'cb:__default'
+  return 'cb:__other'
 }
 
 export function getFeatureLegendKey(layer: Layer, feature: GeoJsonFeature): string {
@@ -218,20 +264,20 @@ export function getFeatureLegendKey(layer: Layer, feature: GeoJsonFeature): stri
 
   if (style.renderer === 'uniqueValue') {
     if (!style.uniqueField) {
-      return 'uv:__default'
+      return 'uv:__other'
     }
     const raw = featureProperty(feature, style.uniqueField)
     if (raw === undefined || raw === null || raw === '') {
-      return 'uv:__default'
+      return 'uv:__null'
     }
     const key = `uv:${String(raw)}`
     const exists = style.uniqueStops.some((item) => item.key === key)
-    return exists ? key : key
+    return exists ? key : 'uv:__other'
   }
 
   if (style.renderer === 'classBreaks') {
     if (!style.classBreakField) {
-      return 'cb:__default'
+      return 'cb:__other'
     }
     return classifyClassBreak(style, featureProperty(feature, style.classBreakField))
   }
@@ -259,8 +305,12 @@ export function filterFeatureCollectionByLegend(
   }
 }
 
-export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollection): LayerLegendModel {
-  const style = parseStyle(layer)
+export function buildLayerLegendModel(
+  layer: Layer,
+  collection?: FeatureCollection,
+  mapZoom?: number | null,
+): LayerLegendModel {
+  const style = parseStyle(layer, mapZoom)
   const features = collection?.features ?? []
   const geometryFamily = geometryFamilyFromType(layer.geometry_type)
   const iconId = resolveIconId(style.iconName, style.iconLibrary, style.iconifyPrefix)
@@ -298,10 +348,18 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
       })
     }
 
-    itemsByKey.set('uv:__default', {
-      key: 'uv:__default',
-      label: 'Other / empty',
+    itemsByKey.set('uv:__other', {
+      key: 'uv:__other',
+      label: 'All other values',
       color: style.uniqueDefaultColor,
+      count: 0,
+      isDefault: true,
+      iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
+    })
+    itemsByKey.set('uv:__null', {
+      key: 'uv:__null',
+      label: 'Null / empty',
+      color: style.uniqueNullColor,
       count: 0,
       isDefault: true,
       iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
@@ -317,10 +375,18 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
       })
     }
 
-    itemsByKey.set('cb:__default', {
-      key: 'cb:__default',
+    itemsByKey.set('cb:__other', {
+      key: 'cb:__other',
       label: 'Outside breaks',
       color: style.classBreakDefaultColor,
+      count: 0,
+      isDefault: true,
+      iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
+    })
+    itemsByKey.set('cb:__null', {
+      key: 'cb:__null',
+      label: 'Null / empty',
+      color: style.classBreakNullColor,
       count: 0,
       isDefault: true,
       iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
@@ -330,18 +396,7 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
   for (const feature of features) {
     const key = getFeatureLegendKey(layer, feature)
     if (!itemsByKey.has(key)) {
-      if (style.renderer === 'uniqueValue') {
-        const valueLabel = key.startsWith('uv:') ? key.slice(3) : key
-        itemsByKey.set(key, {
-          key,
-          label: valueLabel || 'Other / empty',
-          color: style.uniqueDefaultColor,
-          count: 0,
-          iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
-        })
-      } else {
-        continue
-      }
+      continue
     }
 
     const item = itemsByKey.get(key)
@@ -405,6 +460,10 @@ export function buildLayerLegendModel(layer: Layer, collection?: FeatureCollecti
     layerName: layer.name,
     geometryFamily,
     renderer: style.renderer,
+    lineCasingEnabled: style.lineCasingEnabled,
+    lineCasingColor: style.lineCasingColor,
+    lineCasingWidth: style.lineCasingWidth,
+    legendPatchShape: style.legendPatchShape,
     field: style.renderer === 'uniqueValue' ? style.uniqueField : style.renderer === 'classBreaks' ? style.classBreakField : undefined,
     pointShape: style.pointShape,
     iconLibrary: style.iconLibrary,

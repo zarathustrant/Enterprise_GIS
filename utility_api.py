@@ -5,6 +5,7 @@ from flask import Blueprint, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from db import get_db
+from spatial_validation import GeometryValidationError, validate_geojson_geometry
 from enterprise_utils import log_audit
 
 utility_bp = Blueprint('utilities', __name__)
@@ -144,14 +145,13 @@ def _owner_required(cur, network_id: str, user_id: str | None):
     return None
 
 
-def _parse_geometry_payload(expected_type: str) -> str:
+def _parse_geometry_payload(cur, expected_type: str) -> str:
     geometry = request.get_json(silent=True) or {}
     raw_geometry = geometry.get('geometry')
     if not isinstance(raw_geometry, dict):
         raise ValueError('geometry is required')
-    if raw_geometry.get('type') != expected_type:
-        raise ValueError(f'geometry.type must be {expected_type}')
-    return json.dumps(raw_geometry)
+    result = validate_geojson_geometry(cur, raw_geometry, expected_type=expected_type)
+    return json.dumps(result.geometry)
 
 
 def _parse_bbox(value: str | None) -> tuple[float, float, float, float] | None:
@@ -372,8 +372,8 @@ def create_node(network_id: str):
         return denied
 
     try:
-        geometry_geojson = _parse_geometry_payload('Point')
-    except ValueError as exc:
+        geometry_geojson = _parse_geometry_payload(cur, 'Point')
+    except (ValueError, GeometryValidationError) as exc:
         return jsonify({'error': str(exc)}), 400
 
     cur.execute(
@@ -482,8 +482,8 @@ def create_edge(network_id: str):
         return denied
 
     try:
-        geometry_geojson = _parse_geometry_payload('LineString')
-    except ValueError as exc:
+        geometry_geojson = _parse_geometry_payload(cur, 'LineString')
+    except (ValueError, GeometryValidationError) as exc:
         return jsonify({'error': str(exc)}), 400
 
     from_node_id = data.get('from_node_id')
@@ -599,8 +599,8 @@ def create_service_point(network_id: str):
         return denied
 
     try:
-        geometry_geojson = _parse_geometry_payload('Point')
-    except ValueError as exc:
+        geometry_geojson = _parse_geometry_payload(cur, 'Point')
+    except (ValueError, GeometryValidationError) as exc:
         return jsonify({'error': str(exc)}), 400
 
     node_id = data.get('node_id')

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import * as XLSX from 'xlsx'
-import type { BulkUpdatePayload, FeaturesQueryPayload, FeaturesQueryResponse } from '../api/services'
+import type { BulkUpdatePayload, FeatureStatisticsResponse, FeaturesQueryPayload, FeaturesQueryResponse } from '../api/services'
 import { fetchLayerRelationships, fetchRelatedRecords } from '../api/services'
 import type { FeatureCollection, LayerField, LayerRelationship, QueryResultRow } from '../types/gis'
 import {
@@ -82,6 +82,19 @@ interface AttributeTablePanelProps {
   onClose: () => void
   onSaveProperties: (featureId: string, properties: Record<string, unknown>, version?: number) => void
   onQueryRows?: (payload: FeaturesQueryPayload) => Promise<FeaturesQueryResponse>
+  onSelectRows?: (payload: { filters?: FeaturesQueryPayload['filters']; limit?: number }) => Promise<{
+    feature_ids: string[]
+    count: number
+    total: number
+    truncated: boolean
+    limit: number
+  }>
+  onFetchStatistics?: (payload: { filters?: FeaturesQueryPayload['filters']; feature_ids?: string[] }) => Promise<FeatureStatisticsResponse>
+  onExportRows?: (payload: {
+    format: 'csv' | 'json'
+    filters?: FeaturesQueryPayload['filters']
+    feature_ids?: string[]
+  }) => Promise<Blob>
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   onBulkUpdateRows?: (payload: BulkUpdatePayload) => Promise<{ updated_count: number; message?: string }>
   onFeatureSelectionChange?: (featureIds: string[]) => void
@@ -169,8 +182,11 @@ function parseTypedField(field: LayerField, raw: string): unknown {
   }
 
   if (field.field_type === 'integer') {
+    if (!/^[+-]?\d+$/.test(value)) {
+      throw new Error(`Field "${field.name}" expects a whole integer`)
+    }
     const parsed = Number.parseInt(value, 10)
-    if (!Number.isFinite(parsed)) {
+    if (!Number.isSafeInteger(parsed)) {
       throw new Error(`Field "${field.name}" expects an integer`)
     }
     return parsed
@@ -209,6 +225,9 @@ export function AttributeTablePanel({
   onClose,
   onSaveProperties,
   onQueryRows,
+  onSelectRows,
+  onFetchStatistics,
+  onExportRows,
   onBulkUpdateRows,
   onFeatureSelectionChange,
   onZoomToFeature,
@@ -226,7 +245,10 @@ export function AttributeTablePanel({
   // Phase 2: Selection tools
   // const [showSelectionTools, setShowSelectionTools] = useState(false)
   const [showSelectionStats, setShowSelectionStats] = useState(false)
+  const [serverStats, setServerStats] = useState<FeatureStatisticsResponse | null>(null)
+  const [statisticsLoading, setStatisticsLoading] = useState(false)
   const [selectionMode, setSelectionMode] = useState<'new' | 'add' | 'remove'>('new')
+  const [operationScope, setOperationScope] = useState<'current_page' | 'filtered' | 'selected' | 'all'>('current_page')
   const [showQueryBuilder, setShowQueryBuilder] = useState(false)
   const [queryConditions, setQueryConditions] = useState<Array<{
     field: string
@@ -279,9 +301,11 @@ export function AttributeTablePanel({
   const [page, setPage] = useState(0)
   const [pageSize, setPageSize] = useState(10)
 
-  // const [querying, setQuerying] = useState(false)
-  const [queryRows] = useState<FeaturesQueryResponse['rows'] | null>(null)
-  const [queryTotal] = useState(0)
+  const [querying, setQuerying] = useState(false)
+  const [queryRows, setQueryRows] = useState<FeaturesQueryResponse['rows'] | null>(null)
+  const [queryTotal, setQueryTotal] = useState(0)
+  const [queryError, setQueryError] = useState<string | null>(null)
+  const [appliedFilters, setAppliedFilters] = useState<NonNullable<FeaturesQueryPayload['filters']>>([])
 
   // Use selectedFeatureIds from props (global state) instead of local state
 
@@ -307,8 +331,8 @@ export function AttributeTablePanel({
     })
   }, [features])
 
-  const rows = queryRows ?? localRows
-  const totalRows = queryRows ? queryTotal : rows.length
+  const rows = onQueryRows ? queryRows ?? [] : localRows
+  const totalRows = onQueryRows ? queryTotal : rows.length
 
   const allColumns = useMemo(() => {
     if (hasSchema) {
@@ -330,11 +354,54 @@ export function AttributeTablePanel({
   }, [fields, hasSchema, rows])
 
   // Initialize visible columns with all columns on first load or when columns change
-  useMemo(() => {
+  useEffect(() => {
     if (allColumns.length > 0 && visibleColumns.size === 0) {
       setVisibleColumns(new Set(allColumns.map((col) => col.name)))
     }
   }, [allColumns, visibleColumns.size])
+
+  useEffect(() => {
+    setPage(0)
+    setQueryRows(null)
+    setQueryTotal(0)
+    setQueryError(null)
+    setSelectedFeatureId(null)
+  }, [layerId])
+
+  useEffect(() => {
+    if (!onQueryRows || !layerId) {
+      return
+    }
+
+    let active = true
+    const primarySort = sortColumns[0] ?? { field: 'created_at', direction: 'desc' as const }
+    setQuerying(true)
+    setQueryError(null)
+
+    void onQueryRows({
+      page: page + 1,
+      page_size: pageSize,
+      sort: primarySort,
+      sorts: sortColumns.length ? sortColumns : [primarySort],
+      filters: appliedFilters,
+    })
+      .then((response) => {
+        if (!active) return
+        setQueryRows(response.rows)
+        setQueryTotal(response.total)
+      })
+      .catch((queryFailure: unknown) => {
+        if (!active) return
+        setQueryError(queryFailure instanceof Error ? queryFailure.message : 'Failed to query layer records')
+      })
+      .finally(() => {
+        if (active) setQuerying(false)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [onQueryRows, layerId, page, pageSize, sortColumns, appliedFilters])
 
   // Filter columns based on visibility
   const columns = useMemo(() => {
@@ -445,15 +512,37 @@ export function AttributeTablePanel({
 
   const paginatedRows = useMemo(() => {
     if (onQueryRows) {
-      return sortedRows
+      return queryRows ?? []
     }
     const start = page * pageSize
     return sortedRows.slice(start, start + pageSize)
-  }, [sortedRows, page, pageSize, onQueryRows])
+  }, [sortedRows, page, pageSize, onQueryRows, queryRows])
 
   // Phase 2: Selection operations
-  const handleSelectAll = () => {
-    onFeatureSelectionChange?.(rows.map((row) => row.id))
+  const handleSelectAll = async () => {
+    if (operationScope === 'selected') {
+      setLocalError('Selected-record scope already contains the current selection.')
+      return
+    }
+    if (operationScope === 'current_page' || !onSelectRows) {
+      onFeatureSelectionChange?.(rows.map((row) => row.id))
+      return
+    }
+
+    try {
+      const result = await onSelectRows({
+        filters: operationScope === 'filtered' ? appliedFilters : [],
+        limit: 10_000,
+      })
+      onFeatureSelectionChange?.(result.feature_ids)
+      setLocalError(
+        result.truncated
+          ? `Selected ${result.count.toLocaleString()} of ${result.total.toLocaleString()} matching records. Narrow the filter to stay below the ${result.limit.toLocaleString()} selection limit.`
+          : null,
+      )
+    } catch (selectionError) {
+      setLocalError(selectionError instanceof Error ? selectionError.message : 'Failed to select records')
+    }
   }
 
   const handleClearSelection = () => {
@@ -461,6 +550,10 @@ export function AttributeTablePanel({
   }
 
   const handleSwitchSelection = () => {
+    if (operationScope !== 'current_page') {
+      setLocalError('Switch selection currently requires Current page scope.')
+      return
+    }
     const allIds = rows.map((row) => row.id)
     const newSelection = allIds.filter((id) => !selectedFeatureIds.includes(id))
     onFeatureSelectionChange?.(newSelection)
@@ -469,7 +562,7 @@ export function AttributeTablePanel({
   const handleApplyQuery = () => {
     // Filter rows based on query conditions
     const matchingIds = rows.filter((row) => {
-      return queryConditions.every((condition, index) => {
+      const evaluateCondition = (condition: typeof queryConditions[number]) => {
         if (!condition.field) return true
 
         const value = row.properties[condition.field]
@@ -512,12 +605,15 @@ export function AttributeTablePanel({
             break
         }
 
-        // Handle logical operators between conditions
-        if (index > 0 && queryConditions[index - 1].logicalOp === 'OR') {
-          return matches // OR logic handled differently
-        }
         return matches
-      })
+      }
+
+      let result = evaluateCondition(queryConditions[0])
+      for (let index = 1; index < queryConditions.length; index += 1) {
+        const next = evaluateCondition(queryConditions[index])
+        result = queryConditions[index - 1].logicalOp === 'OR' ? result || next : result && next
+      }
+      return result
     }).map((row) => row.id)
 
     // Apply selection based on mode
@@ -537,10 +633,11 @@ export function AttributeTablePanel({
   }
 
   // Calculate selection statistics
-  const selectionStats = useMemo(() => {
-    if (!selectedFeatureIds.length) return null
-
-    const selectedRows = rows.filter((row) => selectedFeatureIds.includes(row.id))
+  const localSelectionStats = useMemo(() => {
+    const selectedRows = operationScope === 'selected'
+      ? rows.filter((row) => selectedFeatureIds.includes(row.id))
+      : rows
+    if (!selectedRows.length) return null
     const numericFields = fields.filter((f) => f.field_type === 'integer' || f.field_type === 'double')
 
     const stats: Record<string, { sum: number; avg: number; min: number; max: number }> = {}
@@ -562,10 +659,40 @@ export function AttributeTablePanel({
     })
 
     return {
-      count: selectedFeatureIds.length,
+      count: selectedRows.length,
       fields: stats,
     }
-  }, [selectedFeatureIds, rows, fields])
+  }, [selectedFeatureIds, rows, fields, operationScope])
+
+  const selectionStats = serverStats ?? localSelectionStats
+
+  const handleToggleStatistics = async () => {
+    if (showSelectionStats) {
+      setShowSelectionStats(false)
+      return
+    }
+    setShowSelectionStats(true)
+    setServerStats(null)
+    if (operationScope === 'current_page' || !onFetchStatistics) {
+      return
+    }
+    if (operationScope === 'selected' && !selectedFeatureIds.length) {
+      setLocalError('Select one or more records before requesting selected-record statistics.')
+      return
+    }
+    setStatisticsLoading(true)
+    try {
+      const result = await onFetchStatistics({
+        filters: operationScope === 'filtered' ? appliedFilters : [],
+        feature_ids: operationScope === 'selected' ? selectedFeatureIds : undefined,
+      })
+      setServerStats(result)
+    } catch (statisticsError) {
+      setLocalError(statisticsError instanceof Error ? statisticsError.message : 'Failed to calculate statistics')
+    } finally {
+      setStatisticsLoading(false)
+    }
+  }
 
   // Phase 3: Fetch relationships for the layer
   useEffect(() => {
@@ -644,10 +771,37 @@ export function AttributeTablePanel({
   }, [selectedFeatureIds, rows])
 
   // Phase 6: Export helper functions
-  const exportToCSV = () => {
+  const downloadBlob = (blob: Blob, extension: string) => {
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.href = url
+    link.download = `${layerName || 'table'}_${new Date().toISOString().split('T')[0]}.${extension}`
+    link.click()
+    URL.revokeObjectURL(url)
+    setExportMenuAnchor(null)
+  }
+
+  const serverExportPayload = (format: 'csv' | 'json') => ({
+    format,
+    filters: operationScope === 'filtered' ? appliedFilters : [],
+    feature_ids: operationScope === 'selected' ? selectedFeatureIds : undefined,
+  })
+
+  const exportToCSV = async () => {
+    if (operationScope !== 'current_page' && onExportRows) {
+      if (operationScope === 'selected' && !selectedFeatureIds.length) {
+        setLocalError('Select one or more records before exporting selected records.')
+        return
+      }
+      try {
+        downloadBlob(await onExportRows(serverExportPayload('csv')), 'csv')
+      } catch (exportError) {
+        setLocalError(exportError instanceof Error ? exportError.message : 'CSV export failed')
+      }
+      return
+    }
     const exportRows = selectedFeatureIds.length > 0
-      ? rows.filter((row) => selectedFeatureIds.includes(row.id))
-      : rows
+      && operationScope === 'selected' ? rows.filter((row) => selectedFeatureIds.includes(row.id)) : rows
 
     const headers = columns.map((col) => col.alias)
     const csvContent = [
@@ -671,10 +825,21 @@ export function AttributeTablePanel({
     setExportMenuAnchor(null)
   }
 
-  const exportToJSON = () => {
+  const exportToJSON = async () => {
+    if (operationScope !== 'current_page' && onExportRows) {
+      if (operationScope === 'selected' && !selectedFeatureIds.length) {
+        setLocalError('Select one or more records before exporting selected records.')
+        return
+      }
+      try {
+        downloadBlob(await onExportRows(serverExportPayload('json')), 'json')
+      } catch (exportError) {
+        setLocalError(exportError instanceof Error ? exportError.message : 'JSON export failed')
+      }
+      return
+    }
     const exportRows = selectedFeatureIds.length > 0
-      ? rows.filter((row) => selectedFeatureIds.includes(row.id))
-      : rows
+      && operationScope === 'selected' ? rows.filter((row) => selectedFeatureIds.includes(row.id)) : rows
 
     const data = exportRows.map((row) => ({
       id: row.id,
@@ -690,6 +855,11 @@ export function AttributeTablePanel({
   }
 
   const exportToExcel = () => {
+    if (operationScope === 'filtered' || operationScope === 'all') {
+      setLocalError('Filtered-result and entire-layer Excel exports require the asynchronous workbook export job.')
+      setExportMenuAnchor(null)
+      return
+    }
     const exportRows = selectedFeatureIds.length > 0
       ? rows.filter((row) => selectedFeatureIds.includes(row.id))
       : rows
@@ -888,10 +1058,11 @@ export function AttributeTablePanel({
 
       {!collapsed && (
         <Box sx={{ height: 400, display: 'flex', flexDirection: 'column' }}>
-          {(error || localError) && (
+          {(error || localError || queryError) && (
             <Box sx={{ px: 2, pt: 1 }}>
               {error && <Alert severity="error" sx={{ mb: 1 }}>{error}</Alert>}
               {localError && <Alert severity="error">{localError}</Alert>}
+              {queryError && <Alert severity="error">{queryError}</Alert>}
             </Box>
           )}
 
@@ -942,9 +1113,28 @@ export function AttributeTablePanel({
                   variant="outlined"
                   startIcon={<RefreshIcon />}
                   size="small"
+                  disabled={!filterField || querying}
+                  onClick={() => {
+                    setPage(0)
+                    setAppliedFilters(filterField ? [{ field: filterField, op: filterOp, value: filterValue }] : [])
+                  }}
                 >
                   Apply
                 </Button>
+                {appliedFilters.length > 0 && (
+                  <Button
+                    size="small"
+                    color="inherit"
+                    onClick={() => {
+                      setFilterField('')
+                      setFilterValue('')
+                      setAppliedFilters([])
+                      setPage(0)
+                    }}
+                  >
+                    Clear
+                  </Button>
+                )}
               </Stack>
             </Box>
           )}
@@ -952,6 +1142,19 @@ export function AttributeTablePanel({
           {/* Phase 2: Selection Tools Toolbar */}
           <Box sx={{ px: 2, py: 1, bgcolor: 'grey.100', borderBottom: 1, borderColor: 'divider' }}>
             <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+              <TextField
+                label="Operation scope"
+                value={operationScope}
+                onChange={(event) => setOperationScope(event.target.value as typeof operationScope)}
+                size="small"
+                select
+                sx={{ minWidth: 170 }}
+              >
+                <MenuItem value="current_page">Current page ({rows.length})</MenuItem>
+                <MenuItem value="filtered">Filtered result ({queryTotal})</MenuItem>
+                <MenuItem value="selected">Selected records ({selectedFeatureIds.length})</MenuItem>
+                <MenuItem value="all">Entire layer</MenuItem>
+              </TextField>
               <Tooltip title="Select all features">
                 <Button
                   size="small"
@@ -1043,10 +1246,10 @@ export function AttributeTablePanel({
                   size="small"
                   variant={showSelectionStats ? 'contained' : 'outlined'}
                   startIcon={<BarChartIcon />}
-                  onClick={() => setShowSelectionStats(!showSelectionStats)}
-                  disabled={selectedFeatureIds.length === 0}
+                  onClick={() => void handleToggleStatistics()}
+                  disabled={statisticsLoading || (operationScope === 'selected' && selectedFeatureIds.length === 0)}
                 >
-                  Stats
+                  {statisticsLoading ? 'Calculating…' : 'Stats'}
                 </Button>
               </Tooltip>
 
@@ -1106,6 +1309,7 @@ export function AttributeTablePanel({
                   sx={{ ml: 'auto' }}
                 />
               )}
+              {querying && <CircularProgress size={18} sx={{ ml: selectedFeatureIds.length ? 0 : 'auto' }} />}
             </Stack>
           </Box>
 
@@ -1132,7 +1336,11 @@ export function AttributeTablePanel({
                             {field?.alias || fieldName}:
                           </Typography>
                           <Typography variant="body2" sx={{ fontSize: '0.85rem' }}>
-                            Sum: {stats.sum.toLocaleString()} | Avg: {stats.avg.toFixed(2)} | Min: {stats.min.toLocaleString()} | Max: {stats.max.toLocaleString()}
+                            Valid: {'valid_count' in stats ? stats.valid_count.toLocaleString() : selectionStats.count.toLocaleString()} |{' '}
+                            Sum: {stats.sum == null ? '—' : stats.sum.toLocaleString()} |{' '}
+                            Avg: {stats.avg == null ? '—' : stats.avg.toFixed(2)} |{' '}
+                            Min: {stats.min == null ? '—' : stats.min.toLocaleString()} |{' '}
+                            Max: {stats.max == null ? '—' : stats.max.toLocaleString()}
                           </Typography>
                         </Box>
                       )
@@ -1315,7 +1523,7 @@ export function AttributeTablePanel({
                   {editPanelTab === 'attributes' && (
                     <>
                       <Stack spacing={1.5}>
-                        {fields.slice(0, 10).map((field) => {
+                        {fields.map((field) => {
                           // Determine input type based on field type
                           let inputType = 'text'
                           if (field.field_type === 'integer' || field.field_type === 'double') {
@@ -1325,6 +1533,13 @@ export function AttributeTablePanel({
                           } else if (field.field_type === 'datetime') {
                             inputType = 'datetime-local'
                           }
+                          const codedValues = field.domain?.domain_type === 'codedValue'
+                            ? field.domain.coded_values ?? []
+                            : []
+                          const usesSelect = codedValues.length > 0 || field.field_type === 'boolean'
+                          const rangeInputProps = field.domain?.domain_type === 'range'
+                            ? { min: field.domain.min_value ?? undefined, max: field.domain.max_value ?? undefined }
+                            : undefined
 
                           return (
                             <TextField
@@ -1336,12 +1551,27 @@ export function AttributeTablePanel({
                               }}
                               size="small"
                               type={inputType}
+                              select={usesSelect}
                               fullWidth
                               placeholder={field.field_type}
+                              inputProps={rangeInputProps}
                               InputLabelProps={{
                                 shrink: inputType === 'date' || inputType === 'datetime-local' ? true : undefined,
                               }}
-                            />
+                            >
+                              {field.nullable && <MenuItem value="">— Null —</MenuItem>}
+                              {field.field_type === 'boolean' && [
+                                <MenuItem key="true" value="true">Yes</MenuItem>,
+                                <MenuItem key="false" value="false">No</MenuItem>,
+                              ]}
+                              {codedValues.map((entry, optionIndex) => {
+                                const code = typeof entry === 'object' && entry !== null && 'code' in entry ? entry.code : entry
+                                const label = typeof entry === 'object' && entry !== null && 'label' in entry && entry.label
+                                  ? entry.label
+                                  : String(code)
+                                return <MenuItem key={`${String(code)}-${optionIndex}`} value={String(code)}>{String(label)}</MenuItem>
+                              })}
+                            </TextField>
                           )
                         })}
                       </Stack>

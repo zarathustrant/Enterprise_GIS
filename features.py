@@ -1,15 +1,234 @@
+import csv
+import io
 import json
 import uuid
 from typing import Any
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from db import get_db
 from enterprise_utils import add_feature_history, invalidate_layer_tile_cache, log_audit
+from expression_evaluator import ExpressionEvaluationError, evaluate_expression
+from query_filters import build_filter_sql as _build_filter_sql
 from field_schema import FieldSchemaError, parse_layer_access, validate_properties_against_schema
+from spatial_validation import GeometryValidationError, validate_geojson_geometry
 
 features_bp = Blueprint('features', __name__)
+
+
+@features_bp.route('/<layer_id>/geometry/validate', methods=['POST'])
+@jwt_required()
+def validate_feature_geometry(layer_id):
+    user_id = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    geometry = data.get('geometry')
+    db = get_db()
+    cur = db.cursor()
+
+    if not _layer_accessible(cur, layer_id, user_id):
+        return jsonify({'error': 'Layer not found'}), 404
+
+    try:
+        result = validate_geojson_geometry(cur, geometry)
+        _enforce_layer_geometry_type(cur, layer_id, result.geometry)
+        _enforce_topology_rules(
+            cur,
+            layer_id,
+            result.geometry,
+            feature_id=data.get('feature_id'),
+        )
+    except (FieldSchemaError, GeometryValidationError) as exc:
+        return jsonify({'valid': False, 'error': str(exc)}), 400
+
+    return jsonify({
+        'valid': True,
+        'geometry_type': result.geometry_type,
+        'geometry': result.geometry,
+    })
+
+
+@features_bp.route('/<layer_id>/features/split', methods=['POST'])
+@jwt_required()
+def split_features(layer_id):
+    user_id = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+    raw_feature_ids = data.get('feature_ids')
+    split_line = data.get('split_line')
+    preview = bool(data.get('preview', False))
+
+    if not isinstance(raw_feature_ids, list) or not raw_feature_ids:
+        return jsonify({'error': 'feature_ids must be a non-empty array'}), 400
+
+    try:
+        feature_ids = [str(uuid.UUID(str(value))) for value in raw_feature_ids]
+    except (TypeError, ValueError) as exc:
+        return jsonify({'error': 'feature_ids must contain valid UUIDs'}), 400
+
+    if len(set(feature_ids)) != len(feature_ids):
+        return jsonify({'error': 'feature_ids must not contain duplicates'}), 400
+    if len(feature_ids) > 100:
+        return jsonify({'error': 'A split operation is limited to 100 features'}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    if not _layer_accessible(cur, layer_id, user_id):
+        return jsonify({'error': 'Layer not found'}), 404
+    if not preview and not _layer_can_write(cur, layer_id, user_id):
+        return jsonify({'error': 'Layer not found or permission denied'}), 404
+
+    try:
+        blade = validate_geojson_geometry(cur, split_line, expected_type='LineString').geometry
+        cur.execute(
+            """
+            SELECT id, version, properties, created_by,
+                   ST_AsGeoJSON(geometry) AS geometry,
+                   GeometryType(geometry) AS geometry_type
+            FROM features
+            WHERE layer_id = %s::uuid
+              AND id = ANY(%s::uuid[])
+            FOR UPDATE
+            """,
+            (layer_id, feature_ids),
+        )
+        source_rows = [dict(row) for row in cur.fetchall()]
+        if len(source_rows) != len(feature_ids):
+            raise GeometryValidationError('One or more split targets were not found in this layer')
+
+        parts_by_source: dict[str, list[dict[str, Any]]] = {}
+        for source in source_rows:
+            source_type = str(source.get('geometry_type') or '')
+            if source_type not in {'LINESTRING', 'MULTILINESTRING', 'POLYGON', 'MULTIPOLYGON'}:
+                raise GeometryValidationError(
+                    f'Feature {source["id"]} has unsupported split geometry type {source_type}'
+                )
+
+            cur.execute(
+                """
+                WITH input AS (
+                    SELECT
+                        ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326) AS source,
+                        ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326) AS blade
+                ),
+                pieces AS (
+                    SELECT (ST_Dump(ST_Split(source, blade))).geom AS geom, source
+                    FROM input
+                )
+                SELECT ST_AsGeoJSON(geom) AS geometry
+                FROM pieces
+                WHERE NOT ST_IsEmpty(geom)
+                  AND ST_Dimension(geom) = ST_Dimension(source)
+                  AND ST_IsValid(geom)
+                ORDER BY ST_Area(geom::geography) DESC, ST_Length(geom::geography) DESC
+                """,
+                (source['geometry'], json.dumps(blade)),
+            )
+            part_rows = [dict(row) for row in cur.fetchall()]
+            if len(part_rows) < 2:
+                raise GeometryValidationError(
+                    f'Split line does not cut feature {source["id"]} into at least two parts'
+                )
+
+            parts_by_source[str(source['id'])] = part_rows
+
+        result_features: list[dict[str, Any]] = []
+        if preview:
+            for source in source_rows:
+                source_id = str(source['id'])
+                for index, part in enumerate(parts_by_source[source_id], start=1):
+                    result_features.append({
+                        'type': 'Feature',
+                        'id': f'preview:{source_id}:{index}',
+                        'geometry': json.loads(part['geometry']),
+                        'properties': {
+                            **(source.get('properties') or {}),
+                            '_split_source_id': source_id,
+                        },
+                    })
+            db.rollback()
+            return jsonify({
+                'preview': True,
+                'source_count': len(source_rows),
+                'part_count': len(result_features),
+                'features': {'type': 'FeatureCollection', 'features': result_features},
+            })
+
+        for source in source_rows:
+            source_id = str(source['id'])
+            add_feature_history(
+                cur,
+                feature_id=source_id,
+                layer_id=layer_id,
+                version=int(source['version']),
+                geometry_geojson=source['geometry'],
+                properties=source.get('properties') or {},
+                change_type='delete',
+                changed_by=user_id,
+            )
+            cur.execute(
+                'DELETE FROM features WHERE id = %s::uuid AND layer_id = %s::uuid',
+                (source_id, layer_id),
+            )
+
+            for part in parts_by_source[source_id]:
+                normalized_part = validate_geojson_geometry(
+                    cur,
+                    json.loads(part['geometry']),
+                ).geometry
+                cur.execute(
+                    """
+                    INSERT INTO features (layer_id, geometry, properties, created_by)
+                    VALUES (%s::uuid, ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326), %s::jsonb, %s::uuid)
+                    RETURNING id, ST_AsGeoJSON(geometry) AS geometry, properties,
+                              version, created_at, updated_at
+                    """,
+                    (
+                        layer_id,
+                        json.dumps(normalized_part),
+                        json.dumps(source.get('properties') or {}),
+                        user_id,
+                    ),
+                )
+                inserted = dict(cur.fetchone())
+                add_feature_history(
+                    cur,
+                    feature_id=str(inserted['id']),
+                    layer_id=layer_id,
+                    version=int(inserted['version']),
+                    geometry_geojson=inserted['geometry'],
+                    properties=inserted['properties'],
+                    change_type='create',
+                    changed_by=user_id,
+                )
+                result_features.append(_serialize_feature(inserted))
+
+        invalidate_layer_tile_cache(cur, layer_id)
+        log_audit(
+            cur,
+            user_id=user_id,
+            action='features_split',
+            entity_type='layer',
+            entity_id=layer_id,
+            layer_id=layer_id,
+            payload={
+                'source_feature_ids': feature_ids,
+                'source_count': len(source_rows),
+                'part_count': len(result_features),
+            },
+        )
+        db.commit()
+        return jsonify({
+            'preview': False,
+            'source_count': len(source_rows),
+            'part_count': len(result_features),
+            'features': {'type': 'FeatureCollection', 'features': result_features},
+        })
+    except (FieldSchemaError, GeometryValidationError) as exc:
+        db.rollback()
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        db.rollback()
+        return jsonify({'error': f'Split failed: {exc}'}), 400
 
 
 def _layer_accessible(cur, layer_id: str, user_id: str | None, share_token: str | None = None) -> bool:
@@ -327,7 +546,7 @@ def _parse_filters(raw: Any) -> list[dict[str, Any]]:
     return normalized
 
 
-def _build_filter_sql(filters: list[dict[str, Any]]) -> tuple[list[str], list[Any]]:
+def _build_filter_sql_legacy(filters: list[dict[str, Any]]) -> tuple[list[str], list[Any]]:
     clauses: list[str] = []
     params: list[Any] = []
 
@@ -362,6 +581,101 @@ def _build_filter_sql(filters: list[dict[str, Any]]) -> tuple[list[str], list[An
             clauses.append(f'({expr_text} IS NULL)')
         elif op == 'notnull':
             clauses.append(f'({expr_text} IS NOT NULL)')
+        else:
+            raise FieldSchemaError(f'Unsupported filter operator: {op}')
+
+    return clauses, params
+
+
+def _build_filter_sql_inline(cur, layer_id: str, filters: list[dict[str, Any]]) -> tuple[list[str], list[Any]]:
+    cur.execute('SELECT name, field_type FROM layer_fields WHERE layer_id = %s::uuid', (layer_id,))
+    field_types = {row['name']: row['field_type'] for row in cur.fetchall()}
+    clauses: list[str] = []
+    params: list[Any] = []
+
+    for item in filters:
+        field = item['field']
+        op = item['op']
+        value = item.get('value')
+        field_type = field_types.get(field, 'string')
+        raw_expression = 'f.properties ->> %s'
+
+        def typed_expression() -> tuple[str, list[Any]]:
+            if field_type == 'integer':
+                return (
+                    "CASE WHEN (f.properties ->> %s) ~ '^[+-]?[0-9]+$' THEN (f.properties ->> %s)::bigint END",
+                    [field, field],
+                )
+            if field_type == 'double':
+                return (
+                    "CASE WHEN (f.properties ->> %s) ~ '^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$' "
+                    'THEN (f.properties ->> %s)::double precision END',
+                    [field, field],
+                )
+            if field_type == 'boolean':
+                return (
+                    "CASE WHEN lower(f.properties ->> %s) IN ('true', 'false') THEN (f.properties ->> %s)::boolean END",
+                    [field, field],
+                )
+            if field_type == 'date':
+                return (
+                    "CASE WHEN pg_input_is_valid(f.properties ->> %s, 'date') THEN (f.properties ->> %s)::date END",
+                    [field, field],
+                )
+            if field_type == 'datetime':
+                return (
+                    "CASE WHEN pg_input_is_valid(f.properties ->> %s, 'timestamp with time zone') "
+                    'THEN (f.properties ->> %s)::timestamptz END',
+                    [field, field],
+                )
+            return raw_expression, [field]
+
+        def typed_value() -> Any:
+            try:
+                if field_type == 'integer':
+                    return int(value)
+                if field_type == 'double':
+                    return float(value)
+                if field_type == 'boolean':
+                    token = str(value).strip().lower()
+                    if token not in {'true', 'false', '1', '0'}:
+                        raise ValueError
+                    return token in {'true', '1'}
+                return value
+            except (TypeError, ValueError) as exc:
+                raise FieldSchemaError(f'Invalid {field_type} filter value for field "{field}"') from exc
+
+        if op in {'eq', 'neq'} and field_type != 'string':
+            expression, expression_params = typed_expression()
+            operator = '=' if op == 'eq' else '<>'
+            cast = {
+                'integer': 'bigint', 'double': 'double precision', 'boolean': 'boolean',
+                'date': 'date', 'datetime': 'timestamptz',
+            }[field_type]
+            clauses.append(f'{expression} {operator} %s::{cast}')
+            params.extend([*expression_params, typed_value()])
+        elif op in {'eq', 'neq'}:
+            operator = '=' if op == 'eq' else '<>'
+            clauses.append(f"COALESCE({raw_expression}, '') {operator} %s")
+            params.extend([field, str(value) if value is not None else ''])
+        elif op in {'contains', 'startswith', 'endswith'}:
+            pattern = {'contains': f'%{value}%', 'startswith': f'{value}%', 'endswith': f'%{value}'}[op]
+            clauses.append(f"COALESCE({raw_expression}, '') ILIKE %s")
+            params.extend([field, pattern])
+        elif op in {'gt', 'gte', 'lt', 'lte'}:
+            if field_type not in {'integer', 'double', 'date', 'datetime'}:
+                raise FieldSchemaError(f'Operator {op} requires a numeric or date field')
+            expression, expression_params = typed_expression()
+            operator = {'gt': '>', 'gte': '>=', 'lt': '<', 'lte': '<='}[op]
+            cast = {'integer': 'bigint', 'double': 'double precision', 'date': 'date', 'datetime': 'timestamptz'}[field_type]
+            clauses.append(f'{expression} {operator} %s::{cast}')
+            params.extend([*expression_params, typed_value()])
+        elif op == 'isnull':
+            clauses.append(f'({raw_expression} IS NULL)')
+            params.append(field)
+        elif op == 'notnull':
+            clauses.append(f'({raw_expression} IS NOT NULL)')
+            params.append(field)
         else:
             raise FieldSchemaError(f'Unsupported filter operator: {op}')
 
@@ -439,6 +753,7 @@ def _query_feature_rows(
     offset: int,
     sort_by: str,
     sort_dir: str,
+    sorts: list[dict[str, Any]] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
     where = ['f.layer_id = %s::uuid']
     params: list[Any] = [layer_id]
@@ -461,28 +776,57 @@ def _query_feature_rows(
         where.append('ST_Intersects(f.geometry, ST_SetSRID(ST_GeomFromGeoJSON(%s), 4326))')
         params.append(intersects)
 
-    filter_sql, filter_params = _build_filter_sql(filters)
+    filter_sql, filter_params = _build_filter_sql(cur, layer_id, filters)
     where.extend(filter_sql)
     params.extend(filter_params)
 
-    sort_dir = 'DESC' if sort_dir.lower() == 'desc' else 'ASC'
-    if sort_by in {'created_at', 'updated_at', 'version'}:
-        order_expr = f'f.{sort_by}'
-    else:
-        order_expr = 'f.properties ->> %s'
-        params.append(sort_by)
+    requested_sorts = (sorts or [{'field': sort_by, 'direction': sort_dir}])[:5]
+    order_params: list[Any] = []
+    order_parts: list[str] = []
+    for sort_item in requested_sorts:
+        current_field = str(sort_item.get('field', 'created_at')).strip() or 'created_at'
+        current_direction = 'DESC' if str(sort_item.get('direction', 'asc')).lower() == 'desc' else 'ASC'
+        if current_field in {'created_at', 'updated_at', 'version'}:
+            order_parts.append(f'f.{current_field} {current_direction}')
+            continue
+
+        cur.execute(
+            'SELECT field_type FROM layer_fields WHERE layer_id = %s::uuid AND name = %s',
+            (layer_id, current_field),
+        )
+        sort_field = cur.fetchone()
+        field_type = sort_field['field_type'] if sort_field else 'string'
+        if field_type == 'integer':
+            expression = (
+                "CASE WHEN (f.properties ->> %s) ~ '^[+-]?[0-9]+$' "
+                'THEN (f.properties ->> %s)::bigint END'
+            )
+            order_params.extend([current_field, current_field])
+        elif field_type == 'double':
+            expression = (
+                "CASE WHEN (f.properties ->> %s) ~ '^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$' "
+                'THEN (f.properties ->> %s)::double precision END'
+            )
+            order_params.extend([current_field, current_field])
+        else:
+            expression = 'f.properties ->> %s'
+            order_params.append(current_field)
+        order_parts.append(f'{expression} {current_direction} NULLS LAST')
+
+    order_parts.extend(['f.created_at DESC', 'f.id ASC'])
+    order_sql = ', '.join(order_parts)
 
     where_sql = ' AND '.join(where)
 
     # Total count
     cur.execute(
         f"SELECT COUNT(*) AS count FROM features f WHERE {where_sql}",
-        tuple(params[:-1] if order_expr == 'f.properties ->> %s' else params),
+        tuple(params),
     )
     total = int(cur.fetchone()['count'])
 
     # Data rows
-    query_params = list(params)
+    query_params = [*params, *order_params]
     query = f"""
         SELECT f.id,
                f.layer_id,
@@ -493,7 +837,7 @@ def _query_feature_rows(
                f.updated_at
         FROM features f
         WHERE {where_sql}
-        ORDER BY {order_expr} {sort_dir}, f.created_at DESC
+        ORDER BY {order_sql}
         LIMIT %s OFFSET %s
     """
     query_params.extend([limit, offset])
@@ -553,42 +897,18 @@ def _apply_bulk_calculator(properties: dict[str, Any], calculator: dict[str, Any
         if not expression:
             raise FieldSchemaError('calculator.expression is required for expression type')
 
-        # Create a safe namespace with properties as variables
-        safe_namespace = {
-            # Allow basic math operations
-            '__builtins__': {
-                'abs': abs,
-                'max': max,
-                'min': min,
-                'round': round,
-                'int': int,
-                'float': float,
-                'str': str,
-                'len': len,
-            }
-        }
-
-        # Add all property values to namespace
+        expression_values: dict[str, Any] = {}
         for key, value in properties.items():
-            # Convert to appropriate Python type
             if isinstance(value, (int, float, str, bool, type(None))):
-                safe_namespace[key] = value
+                expression_values[key] = value
             else:
-                safe_namespace[key] = str(value)
+                expression_values[key] = str(value)
 
         try:
-            # Evaluate the expression in the safe namespace
-            result = eval(expression, {"__builtins__": {}}, safe_namespace)
-            output[field] = result
+            output[field] = evaluate_expression(expression, expression_values)
             return output
-        except NameError as exc:
-            raise FieldSchemaError(f'Field not found in expression: {exc}')
-        except SyntaxError as exc:
-            raise FieldSchemaError(f'Invalid expression syntax: {exc}')
-        except ZeroDivisionError:
-            raise FieldSchemaError('Division by zero in expression')
-        except Exception as exc:
-            raise FieldSchemaError(f'Expression evaluation failed: {exc}')
+        except ExpressionEvaluationError as exc:
+            raise FieldSchemaError(str(exc)) from exc
 
     raise FieldSchemaError('calculator.type must be one of copy, concat, math, expression')
 
@@ -668,6 +988,12 @@ def query_features(layer_id):
     sort = data.get('sort') or {}
     sort_by = str(sort.get('field', 'created_at')).strip() or 'created_at'
     sort_dir = str(sort.get('direction', 'desc')).strip().lower()
+    sorts = data.get('sorts')
+    if sorts is not None and (
+        not isinstance(sorts, list) or
+        any(not isinstance(item, dict) for item in sorts)
+    ):
+        return jsonify({'error': 'sorts must be an array of sort objects'}), 400
 
     try:
         filters = _parse_filters(data.get('filters'))
@@ -681,6 +1007,7 @@ def query_features(layer_id):
             offset=offset,
             sort_by=sort_by,
             sort_dir=sort_dir,
+            sorts=sorts,
         )
     except FieldSchemaError as exc:
         return jsonify({'error': str(exc)}), 400
@@ -704,6 +1031,7 @@ def query_features(layer_id):
         'page': page,
         'page_size': page_size,
         'sort': {'field': sort_by, 'direction': sort_dir},
+        'sorts': sorts or [{'field': sort_by, 'direction': sort_dir}],
         'filters': filters,
     })
 
@@ -721,13 +1049,14 @@ def select_features(layer_id):
 
     try:
         filters = _parse_filters(data.get('filters'))
-        rows, _ = _query_feature_rows(
+        selection_limit = min(max(int(data.get('limit', 5000)), 1), 10000)
+        rows, total = _query_feature_rows(
             cur,
             layer_id=layer_id,
             bbox=data.get('bbox'),
             intersects=json.dumps(data.get('polygon')) if data.get('polygon') else None,
             filters=filters,
-            limit=min(max(int(data.get('limit', 2000)), 1), 5000),
+            limit=selection_limit,
             offset=0,
             sort_by='created_at',
             sort_dir='desc',
@@ -740,8 +1069,175 @@ def select_features(layer_id):
     return jsonify({
         'feature_ids': feature_ids,
         'count': len(feature_ids),
+        'total': total,
+        'truncated': total > len(feature_ids),
+        'limit': selection_limit,
         'features': [_serialize_feature(row) for row in rows] if data.get('include_features') else None,
     })
+
+
+@features_bp.route('/<layer_id>/features/statistics', methods=['POST'])
+@jwt_required(optional=True)
+def feature_statistics(layer_id):
+    user_id = get_jwt_identity()
+    data = request.get_json() or {}
+    db = get_db()
+    cur = db.cursor()
+
+    if not _layer_accessible(cur, layer_id, user_id, data.get('share_token')):
+        return jsonify({'error': 'Layer not found'}), 404
+
+    try:
+        filters = _parse_filters(data.get('filters'))
+        where = ['f.layer_id = %s::uuid']
+        where_params: list[Any] = [layer_id]
+        feature_ids = data.get('feature_ids')
+        if feature_ids is not None:
+            if not isinstance(feature_ids, list) or not feature_ids:
+                raise FieldSchemaError('feature_ids must be a non-empty array when provided')
+            if len(feature_ids) > 10_000:
+                raise FieldSchemaError('Statistics are limited to 10,000 explicit feature IDs')
+            where.append('f.id = ANY(%s::uuid[])')
+            where_params.append(feature_ids)
+
+        filter_sql, filter_params = _build_filter_sql(cur, layer_id, filters)
+        where.extend(filter_sql)
+        where_params.extend(filter_params)
+        where_sql = ' AND '.join(where)
+
+        cur.execute(f'SELECT COUNT(*) AS count FROM features f WHERE {where_sql}', tuple(where_params))
+        count = int(cur.fetchone()['count'])
+
+        cur.execute(
+            "SELECT name, field_type FROM layer_fields WHERE layer_id = %s::uuid "
+            "AND field_type IN ('integer', 'double') ORDER BY sort_order, name LIMIT 100",
+            (layer_id,),
+        )
+        numeric_fields = [dict(row) for row in cur.fetchall()]
+        field_stats: dict[str, Any] = {}
+        for field in numeric_fields:
+            name = field['name']
+            if field['field_type'] == 'integer':
+                expression = (
+                    "CASE WHEN (f.properties ->> %s) ~ '^[+-]?[0-9]+$' "
+                    'THEN (f.properties ->> %s)::bigint END'
+                )
+            else:
+                expression = (
+                    "CASE WHEN (f.properties ->> %s) ~ '^[+-]?([0-9]+([.][0-9]*)?|[.][0-9]+)([eE][+-]?[0-9]+)?$' "
+                    'THEN (f.properties ->> %s)::double precision END'
+                )
+            expression_params = [name, name] * 5
+            cur.execute(
+                f"""
+                SELECT COUNT({expression}) AS valid_count,
+                       SUM({expression}) AS sum,
+                       AVG({expression}) AS avg,
+                       MIN({expression}) AS min,
+                       MAX({expression}) AS max
+                FROM features f
+                WHERE {where_sql}
+                """,
+                tuple([*expression_params, *where_params]),
+            )
+            row = cur.fetchone()
+            field_stats[name] = {
+                'valid_count': int(row['valid_count']),
+                'sum': float(row['sum']) if row['sum'] is not None else None,
+                'avg': float(row['avg']) if row['avg'] is not None else None,
+                'min': float(row['min']) if row['min'] is not None else None,
+                'max': float(row['max']) if row['max'] is not None else None,
+            }
+
+        return jsonify({'count': count, 'fields': field_stats, 'filters': filters})
+    except FieldSchemaError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        return jsonify({'error': f'Statistics failed: {exc}'}), 400
+
+
+@features_bp.route('/<layer_id>/features/export', methods=['POST'])
+@jwt_required(optional=True)
+def export_feature_rows(layer_id):
+    user_id = get_jwt_identity()
+    data = request.get_json() or {}
+    export_format = str(data.get('format', 'csv')).lower()
+    if export_format not in {'csv', 'json'}:
+        return jsonify({'error': 'format must be csv or json'}), 400
+
+    db = get_db()
+    cur = db.cursor()
+    if not _layer_accessible(cur, layer_id, user_id, data.get('share_token')):
+        return jsonify({'error': 'Layer not found'}), 404
+
+    try:
+        filters = _parse_filters(data.get('filters'))
+        where = ['f.layer_id = %s::uuid']
+        params: list[Any] = [layer_id]
+        feature_ids = data.get('feature_ids')
+        if feature_ids is not None:
+            if not isinstance(feature_ids, list) or not feature_ids:
+                raise FieldSchemaError('feature_ids must be a non-empty array when provided')
+            if len(feature_ids) > 10_000:
+                raise FieldSchemaError('Synchronous selected-record export is limited to 10,000 IDs')
+            where.append('f.id = ANY(%s::uuid[])')
+            params.append(feature_ids)
+
+        filter_sql, filter_params = _build_filter_sql(cur, layer_id, filters)
+        where.extend(filter_sql)
+        params.extend(filter_params)
+        where_sql = ' AND '.join(where)
+
+        cur.execute(f'SELECT COUNT(*) AS count FROM features f WHERE {where_sql}', tuple(params))
+        total = int(cur.fetchone()['count'])
+        if total > 100_000:
+            return jsonify({
+                'error': 'Synchronous export is limited to 100,000 rows. Use an asynchronous export job.',
+                'total': total,
+            }), 413
+
+        cur.execute(
+            f'SELECT f.id, f.properties FROM features f WHERE {where_sql} ORDER BY f.created_at, f.id',
+            tuple(params),
+        )
+        rows = [dict(row) for row in cur.fetchall()]
+        cur.execute(
+            'SELECT name, COALESCE(alias, name) AS alias FROM layer_fields '
+            'WHERE layer_id = %s::uuid ORDER BY sort_order, name',
+            (layer_id,),
+        )
+        field_rows = [dict(row) for row in cur.fetchall()]
+        field_names = [row['name'] for row in field_rows]
+        if not field_names:
+            field_names = sorted({key for row in rows for key in (row.get('properties') or {}).keys()})
+            field_rows = [{'name': name, 'alias': name} for name in field_names]
+
+        if export_format == 'json':
+            payload = [
+                {'id': str(row['id']), **{name: (row.get('properties') or {}).get(name) for name in field_names}}
+                for row in rows
+            ]
+            return Response(
+                json.dumps(payload, ensure_ascii=False, default=str),
+                mimetype='application/json',
+                headers={'Content-Disposition': f'attachment; filename="layer-{layer_id}.json"'},
+            )
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(['ID', *[row['alias'] for row in field_rows]])
+        for row in rows:
+            properties = row.get('properties') or {}
+            writer.writerow([str(row['id']), *[properties.get(name) for name in field_names]])
+        return Response(
+            output.getvalue(),
+            mimetype='text/csv',
+            headers={'Content-Disposition': f'attachment; filename="layer-{layer_id}.csv"'},
+        )
+    except FieldSchemaError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except Exception as exc:
+        return jsonify({'error': f'Export failed: {exc}'}), 400
 
 
 @features_bp.route('/<layer_id>/features/bulk-update', methods=['POST'])
@@ -777,7 +1273,7 @@ def bulk_update_features(layer_id):
         where.append('id = ANY(%s::uuid[])')
         params.append(feature_ids)
 
-    filter_sql, filter_params = _build_filter_sql(filters)
+    filter_sql, filter_params = _build_filter_sql(cur, layer_id, filters)
     where.extend(filter_sql)
     params.extend(filter_params)
 
@@ -898,8 +1394,10 @@ def create_feature(layer_id):
             user_id=user_id,
             payload=data,
         )
+        geometry = validate_geojson_geometry(cur, geometry).geometry
         _enforce_layer_geometry_type(cur, layer_id, geometry)
         snapped_geometry = _apply_snapping(cur, layer_id, geometry)
+        snapped_geometry = validate_geojson_geometry(cur, snapped_geometry).geometry
         _enforce_topology_rules(cur, layer_id, snapped_geometry)
         prepared_properties = validate_properties_against_schema(cur, layer_id, data.get('properties', {}))
 
@@ -949,7 +1447,7 @@ def create_feature(layer_id):
             layer_id=layer_id,
         )
         db.commit()
-    except FieldSchemaError as exc:
+    except (FieldSchemaError, GeometryValidationError) as exc:
         db.rollback()
         return jsonify({'error': str(exc)}), 400
     except Exception as exc:
@@ -1003,8 +1501,10 @@ def update_feature(layer_id, feature_id):
             payload=data,
         )
         if geometry is not None:
+            geometry = validate_geojson_geometry(cur, geometry).geometry
             _enforce_layer_geometry_type(cur, layer_id, geometry)
             geometry = _apply_snapping(cur, layer_id, geometry)
+            geometry = validate_geojson_geometry(cur, geometry).geometry
             _enforce_topology_rules(cur, layer_id, geometry, feature_id=feature_id)
 
         prepared_properties = (
@@ -1082,7 +1582,7 @@ def update_feature(layer_id, feature_id):
             layer_id=layer_id,
         )
         db.commit()
-    except FieldSchemaError as exc:
+    except (FieldSchemaError, GeometryValidationError) as exc:
         db.rollback()
         return jsonify({'error': str(exc)}), 400
     except Exception as exc:
@@ -1267,6 +1767,12 @@ def rollback_feature(layer_id, feature_id):
         return jsonify({'error': 'Snapshot does not include geometry'}), 400
 
     try:
+        snapshot_geometry = validate_geojson_geometry(
+            cur,
+            json.loads(snapshot['geometry']) if isinstance(snapshot['geometry'], str) else snapshot['geometry'],
+        ).geometry
+        _enforce_layer_geometry_type(cur, layer_id, snapshot_geometry)
+        _enforce_topology_rules(cur, layer_id, snapshot_geometry, feature_id=feature_id)
         validated_props = validate_properties_against_schema(cur, layer_id, snapshot.get('properties') or {})
 
         cur.execute(
@@ -1290,7 +1796,7 @@ def rollback_feature(layer_id, feature_id):
                 WHERE id = %s::uuid AND layer_id = %s::uuid
                 RETURNING id, version, ST_AsGeoJSON(geometry) AS geometry, properties, created_at, updated_at
                 """,
-                (snapshot['geometry'], json.dumps(validated_props), feature_id, layer_id),
+                (json.dumps(snapshot_geometry), json.dumps(validated_props), feature_id, layer_id),
             )
         else:
             cur.execute(
@@ -1306,7 +1812,7 @@ def rollback_feature(layer_id, feature_id):
                 )
                 RETURNING id, version, ST_AsGeoJSON(geometry) AS geometry, properties, created_at, updated_at
                 """,
-                (feature_id, layer_id, snapshot['geometry'], json.dumps(validated_props), user_id),
+                (feature_id, layer_id, json.dumps(snapshot_geometry), json.dumps(validated_props), user_id),
             )
 
         row = cur.fetchone()
@@ -1332,7 +1838,7 @@ def rollback_feature(layer_id, feature_id):
             payload={'snapshot_id': str(snapshot['id']), 'snapshot_version': snapshot['version']},
         )
         db.commit()
-    except FieldSchemaError as exc:
+    except (FieldSchemaError, GeometryValidationError) as exc:
         db.rollback()
         return jsonify({'error': str(exc)}), 400
     except Exception as exc:

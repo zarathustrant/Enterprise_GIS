@@ -8,7 +8,7 @@ import maplibregl from 'maplibre-gl'
 import MapboxDraw from '@mapbox/mapbox-gl-draw'
 import { GeoJsonLayer, IconLayer, TextLayer } from '@deck.gl/layers'
 import { MapboxOverlay } from '@deck.gl/mapbox'
-import { FillStyleExtension, PathStyleExtension } from '@deck.gl/extensions'
+import { CollisionFilterExtension, FillStyleExtension, PathStyleExtension } from '@deck.gl/extensions'
 import type { Feature as GeoJsonFeature, FeatureCollection as GeoJsonFeatureCollection, Geometry } from 'geojson'
 import type { FeatureCollection, Layer, LayerIconLibrary, PolygonPatternLibrary } from '../types/gis'
 import { iconifySvgUrl, resolveIconId } from '../utils/iconLibrary'
@@ -144,6 +144,7 @@ interface MapCanvasProps {
     version?: number,
   ) => void
   onFeatureDeleted?: (layerId: string, featureId: string) => void
+  onFeaturesSplit?: (layerId: string, featureIds: string[], splitLine: Geometry) => Promise<FeatureCollection>
   onEditValidationError?: (message: string) => void
   onEditInfo?: (message: string, severity?: 'info' | 'success' | 'warning' | 'error') => void
   onEditStateChange?: (state: EditState) => void
@@ -223,6 +224,27 @@ interface LayerStyleEvaluator {
   getIconSize: (feature: unknown) => number
   getIconRotation: (feature: unknown) => number
   getLineWidth: (feature: unknown) => number
+  lineCasingEnabled: boolean
+  lineCasingColor: RgbaColor
+  getLineCasingWidth: (feature: unknown) => number
+  lineSymbolLayers: Array<{
+    id: string
+    color: RgbaColor
+    width: number
+    dashArray: [number, number]
+    level: number
+  }>
+  lineMarkerEnabled: boolean
+  lineMarkerLibrary: LayerIconLibrary
+  lineMarkerIcon: string
+  lineMarkerSpacingMeters: number
+  lineMarkerSize: number
+  lineMarkerRotateWithLine: boolean
+  polygonMarkerEnabled: boolean
+  polygonMarkerPlacement: 'centroid' | 'interior'
+  polygonMarkerLibrary: LayerIconLibrary
+  polygonMarkerIcon: string
+  polygonMarkerSize: number
   getDashArray: () => [number, number]
   lineDashEnabled: boolean
   polygonPatternLibrary: PolygonPatternLibrary
@@ -231,6 +253,8 @@ interface LayerStyleEvaluator {
   polygonPatternColor: RgbaColor
   getLabelText: (feature: GeoJsonFeature) => string | null
   getLabelPriority: (feature: GeoJsonFeature) => number
+  getLabelColor: (feature: GeoJsonFeature) => RgbaColor
+  getLabelSize: (feature: GeoJsonFeature) => number
   labelColor: RgbaColor
   labelSize: number
   labelHaloColor: RgbaColor
@@ -240,6 +264,10 @@ interface LayerStyleEvaluator {
   labelTextAnchor: 'start' | 'middle' | 'end'
   labelAlignmentBaseline: 'top' | 'center' | 'bottom'
   labelMaxCount: number
+  labelCollisionEnabled: boolean
+  labelRepeatDistanceMeters: number
+  labelRotateWithLine: boolean
+  labelPolygonFitEnabled: boolean
 }
 
 function clampOpacity(value: unknown, fallback = 0.8): number {
@@ -790,9 +818,22 @@ function drawControlsForGeometryFamily(family: GeometryFamily): {
   return { point: true, line_string: true, polygon: true, trash: true }
 }
 
-function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
+function resolveLayerStyle(layer: Layer, index: number, mapZoom: number): LayerStyleEvaluator {
   const fallbackColor = palette[index % palette.length]
-  const style = (layer.style ?? {}) as Record<string, unknown>
+  const baseStyle = (layer.style ?? {}) as Record<string, unknown>
+  const matchingScaleOverrides = (Array.isArray(baseStyle.scaleOverrides) ? baseStyle.scaleOverrides : [])
+    .filter((item): item is Record<string, unknown> => {
+      if (!item || typeof item !== 'object') {
+        return false
+      }
+      const rule = item as Record<string, unknown>
+      return typeof rule.minZoom === 'number' && typeof rule.maxZoom === 'number'
+        && mapZoom >= rule.minZoom && mapZoom <= rule.maxZoom
+    })
+  const style = matchingScaleOverrides.reduce<Record<string, unknown>>(
+    (resolved, rule) => ({ ...resolved, ...rule }),
+    { ...baseStyle },
+  )
   const rendererType = style.rendererType === 'uniqueValue' || style.rendererType === 'classBreaks'
     ? style.rendererType
     : 'simple'
@@ -801,6 +842,50 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
   const baseOpacity = clampOpacity(style.opacity, 0.8)
   const strokeColorHex = asHexColor(style.strokeColor, baseColorHex)
   const lineWidth = Math.max(1, asNumber(style.strokeWidth, 2))
+  const lineCasingEnabled = style.lineCasingEnabled === true
+  const lineCasingColor = withAlpha(hexToRgb(asHexColor(style.lineCasingColor, '#ffffff')), 1)
+  const lineCasingWidth = Math.max(0, asNumber(style.lineCasingWidth, 2))
+  const lineSymbolLayers = (Array.isArray(style.lineSymbolLayers) ? style.lineSymbolLayers : [])
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') {
+        return null
+      }
+      const symbol = item as Record<string, unknown>
+      const dash = Array.isArray(symbol.dashArray) ? symbol.dashArray : [1, 0]
+      return {
+        id: typeof symbol.id === 'string' ? symbol.id : `line-symbol-${index + 1}`,
+        color: withAlpha(
+          hexToRgb(asHexColor(symbol.color, strokeColorHex)),
+          clampOpacity(symbol.opacity, 1),
+        ),
+        width: Math.max(0.5, asNumber(symbol.width, lineWidth)),
+        dashArray: [
+          typeof dash[0] === 'number' ? Math.max(0, dash[0]) : 1,
+          typeof dash[1] === 'number' ? Math.max(0, dash[1]) : 0,
+        ] as [number, number],
+        level: asNumber(symbol.level, 0),
+      }
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    .sort((a, b) => a.level - b.level)
+  const lineMarkerLibrary: LayerIconLibrary =
+    style.lineMarkerLibrary === 'tabler' ||
+    style.lineMarkerLibrary === 'lucide' ||
+    style.lineMarkerLibrary === 'heroicons_outline' ||
+    style.lineMarkerLibrary === 'heroicons_solid' ||
+    style.lineMarkerLibrary === 'material_symbols' ||
+    style.lineMarkerLibrary === 'iconify'
+      ? style.lineMarkerLibrary
+      : 'maki'
+  const polygonMarkerLibrary: LayerIconLibrary =
+    style.polygonMarkerLibrary === 'tabler' ||
+    style.polygonMarkerLibrary === 'lucide' ||
+    style.polygonMarkerLibrary === 'heroicons_outline' ||
+    style.polygonMarkerLibrary === 'heroicons_solid' ||
+    style.polygonMarkerLibrary === 'material_symbols' ||
+    style.polygonMarkerLibrary === 'iconify'
+      ? style.polygonMarkerLibrary
+      : 'maki'
   const pointRadius = Math.max(2, asNumber(style.pointRadius, 6))
   const pointShape =
     style.pointShape === 'square' || style.pointShape === 'icon'
@@ -863,6 +948,9 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
       ? style.labelAnchor
       : 'center'
   const labelMaxCount = Math.max(10, Math.min(20_000, asNumber(style.labelMaxCount, 2000)))
+  const labelCollisionEnabled = style.labelCollisionEnabled !== false
+  const labelWrapLength = Math.max(0, Math.round(asNumber(style.labelWrapLength, 0)))
+  const labelMaxLength = Math.max(0, Math.round(asNumber(style.labelMaxLength, 0)))
   const labelColor = withAlpha(hexToRgb(asHexColor(style.labelColor, '#1b1f24')), 1)
   const labelSize = Math.max(8, asNumber(style.labelSize, 14))
   const labelHaloColor = withAlpha(hexToRgb(asHexColor(style.labelHaloColor, '#ffffff')), 1)
@@ -873,6 +961,40 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
     labelAnchor === 'left' ? 'end' : labelAnchor === 'right' ? 'start' : 'middle'
   const labelAlignmentBaseline: 'top' | 'center' | 'bottom' =
     labelAnchor === 'top' ? 'bottom' : labelAnchor === 'bottom' ? 'top' : 'center'
+  const labelClasses = (Array.isArray(style.labelClasses) ? style.labelClasses : [])
+    .map((item, index) => {
+      if (!item || typeof item !== 'object') {
+        return null
+      }
+      const rule = item as Record<string, unknown>
+      return {
+        id: typeof rule.id === 'string' ? rule.id : `label-class-${index + 1}`,
+        filterField: typeof rule.filterField === 'string' ? rule.filterField : '',
+        filterValue: typeof rule.filterValue === 'string' ? rule.filterValue : '',
+        labelField: typeof rule.labelField === 'string' ? rule.labelField : '',
+        color: withAlpha(hexToRgb(asHexColor(rule.color, '#1b1f24')), 1),
+        size: Math.max(8, asNumber(rule.size, labelSize)),
+        minZoom: Math.max(0, asNumber(rule.minZoom, 0)),
+        maxZoom: Math.min(24, asNumber(rule.maxZoom, 24)),
+        priority: asNumber(rule.priority, 0),
+      }
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+
+  const getActiveLabelClass = (feature: GeoJsonFeature) => {
+    let matched: typeof labelClasses[number] | null = null
+    for (const rule of labelClasses) {
+      if (mapZoom < rule.minZoom || mapZoom > rule.maxZoom) {
+        continue
+      }
+      const filterMatches = !rule.filterField
+        || String(featureProperty(feature, rule.filterField) ?? '') === rule.filterValue
+      if (filterMatches) {
+        matched = rule
+      }
+    }
+    return matched
+  }
 
   const baseRgb = hexToRgb(baseColorHex)
   const strokeRgb = hexToRgb(strokeColorHex)
@@ -929,30 +1051,57 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
   }
 
   const getLabelText = (feature: GeoJsonFeature): string | null => {
-    if (labelTextExpression) {
-      const value = evaluateExpression(labelTextExpression, feature)
-      if (value === null || value === undefined || value === '') {
+    const format = (raw: unknown): string | null => {
+      if (raw === null || raw === undefined || raw === '') {
         return null
       }
-      return String(value)
+      let text = String(raw)
+      if (labelMaxLength > 0 && text.length > labelMaxLength) {
+        text = `${text.slice(0, Math.max(1, labelMaxLength - 1)).trimEnd()}…`
+      }
+      if (labelWrapLength > 0 && text.length > labelWrapLength) {
+        const words = text.split(/\s+/)
+        const lines: string[] = []
+        let line = ''
+        for (const word of words) {
+          if (line && `${line} ${word}`.length > labelWrapLength) {
+            lines.push(line)
+            line = word
+          } else {
+            line = line ? `${line} ${word}` : word
+          }
+        }
+        if (line) {
+          lines.push(line)
+        }
+        text = lines.join('\n')
+      }
+      return text
+    }
+    const activeClass = getActiveLabelClass(feature)
+    if (labelClasses.length && !activeClass) {
+      return null
+    }
+    if (activeClass?.labelField) {
+      return format(featureProperty(feature, activeClass.labelField))
+    }
+    if (labelTextExpression) {
+      return format(evaluateExpression(labelTextExpression, feature))
     }
 
     if (!labelField) {
       return null
     }
-    const value = (feature.properties ?? {})[labelField]
-    if (value === null || value === undefined || value === '') {
-      return null
-    }
-    return String(value)
+    return format((feature.properties ?? {})[labelField])
   }
 
   const getLabelPriority = (feature: GeoJsonFeature): number => {
+    const classPriority = getActiveLabelClass(feature)?.priority ?? 0
     if (!labelPriorityField) {
-      return 0
+      return classPriority
     }
     const value = Number((feature.properties ?? {})[labelPriorityField])
-    return Number.isFinite(value) ? value : 0
+    return (Number.isFinite(value) ? value : 0) + classPriority
   }
 
   const buildEvaluator = (getBaseSymbol: (feature: unknown) => { color: RgbColor; opacity: number }): LayerStyleEvaluator => ({
@@ -991,6 +1140,21 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
       return Number.isFinite(fromField) ? fromField : iconRotation
     },
     getLineWidth: () => lineWidth,
+    lineCasingEnabled,
+    lineCasingColor,
+    getLineCasingWidth: () => lineWidth + lineCasingWidth * 2,
+    lineSymbolLayers,
+    lineMarkerEnabled: style.lineMarkerEnabled === true,
+    lineMarkerLibrary,
+    lineMarkerIcon: typeof style.lineMarkerIcon === 'string' ? style.lineMarkerIcon : 'arrow',
+    lineMarkerSpacingMeters: Math.max(1, asNumber(style.lineMarkerSpacingMeters, 500)),
+    lineMarkerSize: Math.max(4, asNumber(style.lineMarkerSize, 18)),
+    lineMarkerRotateWithLine: style.lineMarkerRotateWithLine !== false,
+    polygonMarkerEnabled: style.polygonMarkerEnabled === true,
+    polygonMarkerPlacement: style.polygonMarkerPlacement === 'centroid' ? 'centroid' : 'interior',
+    polygonMarkerLibrary,
+    polygonMarkerIcon: typeof style.polygonMarkerIcon === 'string' ? style.polygonMarkerIcon : 'marker',
+    polygonMarkerSize: Math.max(4, asNumber(style.polygonMarkerSize, 18)),
     getDashArray: () => lineDashArray,
     lineDashEnabled: lineDashArray[1] > 0,
     polygonPatternLibrary,
@@ -999,6 +1163,8 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
     polygonPatternColor: withUnitAlpha(polygonPatternRgb, polygonPatternOpacity),
     getLabelText,
     getLabelPriority,
+    getLabelColor: (feature) => getActiveLabelClass(feature)?.color ?? labelColor,
+    getLabelSize: (feature) => getActiveLabelClass(feature)?.size ?? labelSize,
     labelColor,
     labelSize,
     labelHaloColor,
@@ -1008,12 +1174,18 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
     labelTextAnchor,
     labelAlignmentBaseline,
     labelMaxCount,
+    labelCollisionEnabled,
+    labelRepeatDistanceMeters: Math.max(0, asNumber(style.labelRepeatDistanceMeters, 0)),
+    labelRotateWithLine: style.labelRotateWithLine !== false,
+    labelPolygonFitEnabled: style.labelPolygonFitEnabled === true,
   })
 
   if (rendererType === 'uniqueValue') {
     const field = typeof style.uniqueValueField === 'string' ? style.uniqueValueField : ''
     const defaultColor = hexToRgb(asHexColor(style.uniqueDefaultColor, baseColorHex))
     const defaultOpacity = clampOpacity(style.uniqueDefaultOpacity, baseOpacity)
+    const nullColor = hexToRgb(asHexColor(style.uniqueNullColor, '#9ca3af'))
+    const nullOpacity = clampOpacity(style.uniqueNullOpacity, baseOpacity)
     const stopMap = new Map<string, { color: RgbColor; opacity: number }>()
 
     const stops = Array.isArray(style.uniqueValueStops) ? style.uniqueValueStops : []
@@ -1034,7 +1206,11 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
     }
 
     return buildEvaluator((feature) => {
-      const key = String(featureProperty(feature, field) ?? '')
+      const rawValue = featureProperty(feature, field)
+      if (rawValue === null || rawValue === undefined || rawValue === '') {
+        return { color: nullColor, opacity: nullOpacity }
+      }
+      const key = String(rawValue)
       const matched = stopMap.get(key)
       return {
         color: matched?.color ?? defaultColor,
@@ -1047,6 +1223,8 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
     const field = typeof style.classBreakField === 'string' ? style.classBreakField : ''
     const defaultColor = hexToRgb(asHexColor(style.classBreakDefaultColor, baseColorHex))
     const defaultOpacity = clampOpacity(style.classBreakDefaultOpacity, baseOpacity)
+    const nullColor = hexToRgb(asHexColor(style.classBreakNullColor, '#9ca3af'))
+    const nullOpacity = clampOpacity(style.classBreakNullOpacity, baseOpacity)
     const breaks = (Array.isArray(style.classBreakStops) ? style.classBreakStops : [])
       .map((stop) => {
         if (typeof stop !== 'object' || stop === null) {
@@ -1070,6 +1248,9 @@ function resolveLayerStyle(layer: Layer, index: number): LayerStyleEvaluator {
 
     return buildEvaluator((feature) => {
       const rawValue = featureProperty(feature, field)
+      if (rawValue === null || rawValue === undefined || rawValue === '') {
+        return { color: nullColor, opacity: nullOpacity }
+      }
       const numeric = typeof rawValue === 'number' ? rawValue : Number(rawValue)
       if (!Number.isFinite(numeric)) {
         return { color: defaultColor, opacity: defaultOpacity }
@@ -1142,6 +1323,100 @@ function centroidFromPolygonCoordinates(coordinates: unknown): [number, number] 
     return null
   }
   return [sumX / count, sumY / count]
+}
+
+function pointInRing(point: [number, number], ring: Position[]): boolean {
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const a = ring[i]
+    const b = ring[j]
+    const intersects = ((a[1] > point[1]) !== (b[1] > point[1]))
+      && point[0] < ((b[0] - a[0]) * (point[1] - a[1])) / ((b[1] - a[1]) || 1e-12) + a[0]
+    if (intersects) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+function pointInPolygonRings(point: [number, number], rings: Position[][]): boolean {
+  return Boolean(rings[0]?.length) && pointInRing(point, rings[0]) && !rings.slice(1).some((ring) => pointInRing(point, ring))
+}
+
+function polygonRingArea(ring: Position[]): number {
+  let area = 0
+  for (let index = 0; index < ring.length - 1; index += 1) {
+    area += ring[index][0] * ring[index + 1][1] - ring[index + 1][0] * ring[index][1]
+  }
+  return area / 2
+}
+
+function polygonMarkerPosition(geometry: Geometry, placement: 'centroid' | 'interior'): [number, number] | null {
+  const polygons = geometry.type === 'Polygon'
+    ? [geometry.coordinates.map((ring) => toPositionArray(ring))]
+    : geometry.type === 'MultiPolygon'
+      ? geometry.coordinates.map((polygon) => polygon.map((ring) => toPositionArray(ring)))
+      : []
+  const rings = polygons
+    .filter((polygon) => polygon[0]?.length >= 4)
+    .sort((a, b) => Math.abs(polygonRingArea(b[0])) - Math.abs(polygonRingArea(a[0])))[0]
+  if (!rings) {
+    return null
+  }
+
+  const centroid = centroidFromPolygonCoordinates(rings)
+  if (placement === 'centroid' || (centroid && pointInPolygonRings(centroid, rings))) {
+    return centroid
+  }
+
+  const bbox = bboxFromGeometry({ type: 'Polygon', coordinates: rings })
+  if (!bbox) {
+    return null
+  }
+  let best: [number, number] | null = null
+  let bestClearance = -1
+  for (let row = 1; row < 12; row += 1) {
+    for (let column = 1; column < 12; column += 1) {
+      const candidate: [number, number] = [
+        bbox.minX + (bbox.maxX - bbox.minX) * column / 12,
+        bbox.minY + (bbox.maxY - bbox.minY) * row / 12,
+      ]
+      if (!pointInPolygonRings(candidate, rings)) {
+        continue
+      }
+      const clearance = Math.min(...rings[0].map((vertex) => (
+        (vertex[0] - candidate[0]) ** 2 + (vertex[1] - candidate[1]) ** 2
+      )))
+      if (clearance > bestClearance) {
+        best = candidate
+        bestClearance = clearance
+      }
+    }
+  }
+  return best ?? centroid
+}
+
+function polygonLabelFits(
+  map: maplibregl.Map | null,
+  geometry: Geometry,
+  text: string,
+  fontSize: number,
+): boolean {
+  if (!map || !isPolygonGeometryType(geometry.type)) {
+    return true
+  }
+  const bbox = bboxFromGeometry(geometry)
+  if (!bbox) {
+    return false
+  }
+  const topLeft = map.project([bbox.minX, bbox.maxY])
+  const bottomRight = map.project([bbox.maxX, bbox.minY])
+  const availableWidth = Math.abs(bottomRight.x - topLeft.x) * 0.82
+  const availableHeight = Math.abs(bottomRight.y - topLeft.y) * 0.82
+  const lines = text.split('\n')
+  const estimatedWidth = Math.max(...lines.map((line) => line.length), 1) * fontSize * 0.58
+  const estimatedHeight = lines.length * fontSize * 1.25
+  return estimatedWidth <= availableWidth && estimatedHeight <= availableHeight
 }
 
 function labelPosition(feature: GeoJsonFeature): [number, number] | null {
@@ -1582,6 +1857,60 @@ function metersToDegreeSteps(meters: number, latitude: number): { lngStep: numbe
   const cosLat = Math.max(0.08, Math.abs(Math.cos(toRadians(latitude))))
   const lngStep = safeMeters / (111_320 * cosLat)
   return { lngStep, latStep }
+}
+
+function markerSegmentDistanceMeters(a: Position, b: Position): number {
+  const lat1 = toRadians(a[1])
+  const lat2 = toRadians(b[1])
+  const deltaLat = toRadians(b[1] - a[1])
+  const deltaLng = toRadians(b[0] - a[0])
+  const haversine = Math.sin(deltaLat / 2) ** 2
+    + Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) ** 2
+  return 6_371_008.8 * 2 * Math.atan2(Math.sqrt(haversine), Math.sqrt(Math.max(0, 1 - haversine)))
+}
+
+function segmentBearingDegrees(a: Position, b: Position): number {
+  const lat1 = toRadians(a[1])
+  const lat2 = toRadians(b[1])
+  const deltaLng = toRadians(b[0] - a[0])
+  const y = Math.sin(deltaLng) * Math.cos(lat2)
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLng)
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360
+}
+
+function sampleLineMarkers(geometry: Geometry, spacingMeters: number): Array<{ position: [number, number]; angle: number }> {
+  const lines = geometry.type === 'LineString'
+    ? [toPositionArray(geometry.coordinates)]
+    : geometry.type === 'MultiLineString'
+      ? geometry.coordinates.map((line) => toPositionArray(line))
+      : []
+  const spacing = Math.max(1, spacingMeters)
+  const markers: Array<{ position: [number, number]; angle: number }> = []
+
+  for (const line of lines) {
+    let distanceUntilMarker = spacing / 2
+    for (let index = 1; index < line.length; index += 1) {
+      const start = line[index - 1]
+      const end = line[index]
+      const segmentLength = markerSegmentDistanceMeters(start, end)
+      if (segmentLength <= 0) {
+        continue
+      }
+      while (distanceUntilMarker <= segmentLength) {
+        const ratio = distanceUntilMarker / segmentLength
+        markers.push({
+          position: [
+            start[0] + (end[0] - start[0]) * ratio,
+            start[1] + (end[1] - start[1]) * ratio,
+          ],
+          angle: segmentBearingDegrees(start, end),
+        })
+        distanceUntilMarker += spacing
+      }
+      distanceUntilMarker -= segmentLength
+    }
+  }
+  return markers
 }
 
 function snapToStep(value: number, step: number): number {
@@ -2039,204 +2368,6 @@ function reshapeGeometry(geometry: Geometry, strength: number): Geometry {
   return geometry
 }
 
-function verticalIntersection(a: Position, b: Position, xBoundary: number): Position {
-  const dx = b[0] - a[0]
-  if (Math.abs(dx) < 1e-12) {
-    return [xBoundary, a[1]]
-  }
-  const t = (xBoundary - a[0]) / dx
-  return [xBoundary, a[1] + t * (b[1] - a[1])]
-}
-
-function clipRingByVerticalBoundary(points: Position[], xBoundary: number, keepLeft: boolean): Position[] {
-  if (points.length < 3) {
-    return []
-  }
-
-  const ring = closeRing(points)
-  const openRing = ring.length > 1 ? ring.slice(0, -1) : ring
-  if (openRing.length < 3) {
-    return []
-  }
-
-  const inside = (point: Position) => (keepLeft ? point[0] <= xBoundary : point[0] >= xBoundary)
-  const output: Position[] = []
-
-  for (let index = 0; index < openRing.length; index += 1) {
-    const current = openRing[index]
-    const previous = openRing[(index - 1 + openRing.length) % openRing.length]
-    const currentInside = inside(current)
-    const previousInside = inside(previous)
-
-    if (currentInside) {
-      if (!previousInside) {
-        output.push(verticalIntersection(previous, current, xBoundary))
-      }
-      output.push(current)
-    } else if (previousInside) {
-      output.push(verticalIntersection(previous, current, xBoundary))
-    }
-  }
-
-  const closed = closeRing(output)
-  return closed.length >= 4 ? closed : []
-}
-
-function ringArea(points: Position[]): number {
-  if (points.length < 4) {
-    return 0
-  }
-  let area = 0
-  for (let index = 0; index < points.length - 1; index += 1) {
-    const a = points[index]
-    const b = points[index + 1]
-    area += a[0] * b[1] - b[0] * a[1]
-  }
-  return Math.abs(area / 2)
-}
-
-function largestPolygonRing(geometry: Geometry): Position[] | null {
-  if (geometry.type === 'Polygon') {
-    const ring = closeRing(toPositionArray(geometry.coordinates[0] ?? []))
-    return ring.length >= 4 ? ring : null
-  }
-
-  if (geometry.type !== 'MultiPolygon') {
-    return null
-  }
-
-  let best: Position[] | null = null
-  let bestArea = 0
-  for (const polygon of geometry.coordinates) {
-    const ring = closeRing(toPositionArray(polygon[0] ?? []))
-    if (ring.length < 4) {
-      continue
-    }
-    const area = ringArea(ring)
-    if (area > bestArea) {
-      bestArea = area
-      best = ring
-    }
-  }
-  return best
-}
-
-function splitLineGeometry(geometry: Geometry): Geometry[] | null {
-  const splitCoords = (coords: Position[]): Geometry[] | null => {
-    if (coords.length < 3) {
-      return null
-    }
-    const splitIndex = Math.max(1, Math.min(coords.length - 2, Math.floor(coords.length / 2)))
-    const first = coords.slice(0, splitIndex + 1)
-    const second = coords.slice(splitIndex)
-    if (first.length < 2 || second.length < 2) {
-      return null
-    }
-    return [
-      { type: 'LineString', coordinates: first },
-      { type: 'LineString', coordinates: second },
-    ]
-  }
-
-  if (geometry.type === 'LineString') {
-    return splitCoords(toPositionArray(geometry.coordinates))
-  }
-
-  if (geometry.type !== 'MultiLineString') {
-    return null
-  }
-
-  const candidates = geometry.coordinates
-    .map((line) => toPositionArray(line))
-    .filter((line) => line.length >= 3)
-    .sort((a, b) => b.length - a.length)
-
-  if (!candidates.length) {
-    return null
-  }
-
-  return splitCoords(candidates[0])
-}
-
-function splitPolygonGeometry(geometry: Geometry): Geometry[] | null {
-  const ring = largestPolygonRing(geometry)
-  if (!ring) {
-    return null
-  }
-
-  const bbox = bboxFromGeometry(geometry)
-  if (!bbox) {
-    return null
-  }
-
-  const splitX = (bbox.minX + bbox.maxX) / 2
-  const leftRing = clipRingByVerticalBoundary(ring, splitX, true)
-  const rightRing = clipRingByVerticalBoundary(ring, splitX, false)
-  if (leftRing.length < 4 || rightRing.length < 4) {
-    return null
-  }
-
-  return [
-    { type: 'Polygon', coordinates: [leftRing] },
-    { type: 'Polygon', coordinates: [rightRing] },
-  ]
-}
-
-function splitGeometryByFamily(geometry: Geometry): Geometry[] | null {
-  if (isLineGeometryType(geometry.type)) {
-    return splitLineGeometry(geometry)
-  }
-  if (isPolygonGeometryType(geometry.type)) {
-    return splitPolygonGeometry(geometry)
-  }
-  return null
-}
-
-/**
- * Split geometry using a drawn line
- * TODO: Implement proper line-based splitting using turf.js lineSplit/polygonCut
- * For now, this is a placeholder that validates the split line exists
- * and falls back to midpoint splitting with user notification
- */
-function splitGeometryByLine(geometry: Geometry, splitLine: Geometry): Geometry[] | null {
-  // Validate we have a line to split with
-  if (!isLineGeometryType(splitLine.type)) {
-    console.warn('[Split] Invalid split line geometry type:', splitLine.type)
-    return splitGeometryByFamily(geometry)
-  }
-
-  // Extract line coordinates
-  const lineCoords = splitLine.type === 'LineString'
-    ? toPositionArray(splitLine.coordinates)
-    : splitLine.type === 'MultiLineString' && Array.isArray(splitLine.coordinates) && splitLine.coordinates.length > 0
-    ? toPositionArray(splitLine.coordinates[0])
-    : []
-
-  if (lineCoords.length < 2) {
-    console.warn('[Split] Split line has insufficient points:', lineCoords.length)
-    return splitGeometryByFamily(geometry)
-  }
-
-  console.info(`[Split] Attempting to split ${geometry.type} with line of ${lineCoords.length} points`)
-
-  // TODO: Implement actual geometric split using the line
-  // For proper implementation, we need to:
-  // 1. Find intersection points between split line and feature geometry
-  // 2. Cut the geometry at those intersection points
-  // 3. Group the resulting segments into separate geometries
-  //
-  // Libraries that can do this:
-  // - @turf/line-split (for LineStrings)
-  // - @turf/polygon-split or custom polygon cutting algorithm (for Polygons)
-  // -  martinez-polygon-clipping (for complex polygon operations)
-  //
-  // For now, fall back to midpoint splitting
-  console.warn('[Split] Line-based splitting not yet implemented - using fallback midpoint split')
-  console.warn('[Split] To fix: Install @turf/turf and implement geometric intersection logic')
-
-  return splitGeometryByFamily(geometry)
-}
-
 function alignFeatureGeometries(
   features: Array<{ id: string; geometry: Geometry }>,
   alignTarget: AlignTarget,
@@ -2339,6 +2470,7 @@ export function MapCanvas({
   onFeatureCreated,
   onFeatureUpdated,
   onFeatureDeleted,
+  onFeaturesSplit,
   onEditValidationError,
   onEditInfo,
   onEditStateChange,
@@ -2402,6 +2534,7 @@ export function MapCanvas({
   const onFeatureCreatedRef = useRef(onFeatureCreated)
   const onFeatureUpdatedRef = useRef(onFeatureUpdated)
   const onFeatureDeletedRef = useRef(onFeatureDeleted)
+  const onFeaturesSplitRef = useRef(onFeaturesSplit)
   const onEditValidationErrorRef = useRef(onEditValidationError)
   const onEditInfoRef = useRef(onEditInfo)
   const onEditStateChangeRef = useRef(onEditStateChange)
@@ -2441,6 +2574,7 @@ export function MapCanvas({
     onFeatureCreatedRef.current = onFeatureCreated
     onFeatureUpdatedRef.current = onFeatureUpdated
     onFeatureDeletedRef.current = onFeatureDeleted
+    onFeaturesSplitRef.current = onFeaturesSplit
     onEditValidationErrorRef.current = onEditValidationError
     onEditInfoRef.current = onEditInfo
     onEditStateChangeRef.current = onEditStateChange
@@ -2457,6 +2591,7 @@ export function MapCanvas({
     onFeatureCreated,
     onFeatureUpdated,
     onFeatureDeleted,
+    onFeaturesSplit,
     onEditValidationError,
     onEditInfo,
     onEditStateChange,
@@ -2792,56 +2927,39 @@ export function MapCanvas({
     const map = mapRef.current
 
     if (mode === 'split') {
-      applyCollectionMutation(
-        (collection) => {
-          const selectedSet = new Set(selectedEditFeatureIdsRef.current)
-          const nextFeatures: GeoJsonFeature[] = []
-          let createdCount = 0
-          let deletedCount = 0
+      const layerId = activeEditLayerIdRef.current
+      const splitLine = splitLineGeometryRef.current
+      const selectedIds = selectedEditFeatureIdsRef.current.filter((id) => !isTempFeatureId(id))
+      const splitHandler = onFeaturesSplitRef.current
+      if (!layerId || !splitLine || !selectedIds.length || !splitHandler) {
+        onEditInfoRef.current?.('Select one or more saved line/polygon features, then draw a split line.', 'warning')
+        return
+      }
 
-          for (const feature of collection.features) {
-            const featureId = normalizeFeatureId(feature)
-            if (!featureId || !selectedSet.has(featureId)) {
-              nextFeatures.push(feature)
-              continue
-            }
-
-            const splitLine = splitLineGeometryRef.current
-            const splitGeometries = splitLine
-              ? splitGeometryByLine(feature.geometry, splitLine)
-              : splitGeometryByFamily(feature.geometry)
-            if (!splitGeometries || splitGeometries.length < 2) {
-              nextFeatures.push(feature)
-              continue
-            }
-
-            deletedCount += 1
-            splitGeometries.forEach((geometry, index) => {
-              createdCount += 1
-              const candidateProperties = cloneProperties((feature.properties ?? {}) as Record<string, unknown>) ?? {}
-              delete candidateProperties._version
-              nextFeatures.push({
-                type: 'Feature',
-                id: `${TEMP_FEATURE_ID_PREFIX}${Date.now()}-${createdCount}-${index}`,
-                properties: candidateProperties,
-                geometry,
-              })
-            })
-          }
-
-          if (!createdCount || !deletedCount) {
-            return null
-          }
-
-          selectedEditFeatureIdsRef.current = []
-          return {
+      const before = getCurrentDrawCollection()
+      const selectedSet = new Set(selectedIds)
+      onEditInfoRef.current?.('Calculating authoritative split…', 'info')
+      void splitHandler(layerId, selectedIds, cloneGeometry(splitLine))
+        .then((result) => {
+          const next: GeoJsonFeatureCollection = {
             type: 'FeatureCollection',
-            features: nextFeatures,
+            features: [
+              ...before.features.filter((feature) => {
+                const id = normalizeFeatureId(feature)
+                return !id || !selectedSet.has(id)
+              }),
+              ...result.features,
+            ],
           }
-        },
-        'Split complete.',
-        'Select one or more line/polygon features to split.',
-      )
+          selectedEditFeatureIdsRef.current = []
+          setDrawCollection(next)
+          resetHistory(next)
+          onEditInfoRef.current?.(`Split complete: ${result.features.length} parts created.`, 'success')
+        })
+        .catch((error: unknown) => {
+          const message = error instanceof Error ? error.message : 'Split failed'
+          onEditValidationErrorRef.current?.(message)
+        })
       return
     }
 
@@ -3406,7 +3524,16 @@ export function MapCanvas({
   const deckLayers = useMemo(() => {
     const builtLayers: Array<GeoJsonLayer | IconLayer | TextLayer> = []
 
-    for (const [index, layer] of layers.entries()) {
+    const orderedLayers = layers
+      .map((layer, index) => ({ layer, index }))
+      .sort((a, b) => {
+        const aStyle = (a.layer.style ?? {}) as Record<string, unknown>
+        const bStyle = (b.layer.style ?? {}) as Record<string, unknown>
+        const levelDifference = asNumber(aStyle.symbolLevel, 0) - asNumber(bStyle.symbolLevel, 0)
+        return levelDifference || a.index - b.index
+      })
+
+    for (const { layer, index } of orderedLayers) {
       if (!visibleByLayerId[layer.id]) {
         continue
       }
@@ -3425,9 +3552,56 @@ export function MapCanvas({
         continue
       }
 
-      const evaluator = resolveLayerStyle(layer, index)
+      const evaluator = resolveLayerStyle(layer, index, mapZoom)
       const dashExtensions = evaluator.lineDashEnabled ? [new PathStyleExtension({ dash: true })] : []
       const iconMode = evaluator.pointShape === 'icon'
+      const lineFeatures = filteredData.features.filter((feature) => {
+        const geometry = feature.geometry
+        return geometry ? isLineGeometryType(geometry.type) : false
+      })
+      const pushSecondaryLineSymbols = (symbols: LayerStyleEvaluator['lineSymbolLayers']) => {
+        if (!lineFeatures.length) {
+          return
+        }
+        for (const symbol of symbols) {
+          const dashed = symbol.dashArray[1] > 0
+          builtLayers.push(new GeoJsonLayer({
+            id: `layer-${layer.id}-secondary-${symbol.id}`,
+            data: { ...filteredData, features: lineFeatures },
+            pickable: false,
+            stroked: true,
+            filled: false,
+            lineWidthUnits: 'pixels',
+            lineWidthMinPixels: 1,
+            getLineColor: symbol.color,
+            getLineWidth: symbol.width,
+            getDashArray: symbol.dashArray,
+            dashJustified: true,
+            extensions: dashed ? [new PathStyleExtension({ dash: true })] : [],
+            parameters: { depthTest: false },
+          }))
+        }
+      }
+
+      if (evaluator.lineCasingEnabled) {
+        if (lineFeatures.length) {
+          builtLayers.push(
+            new GeoJsonLayer({
+              id: `layer-${layer.id}-line-casing`,
+              data: { ...filteredData, features: lineFeatures },
+              pickable: false,
+              stroked: true,
+              filled: false,
+              lineWidthUnits: 'pixels',
+              lineWidthMinPixels: 1,
+              getLineColor: evaluator.lineCasingColor,
+              getLineWidth: evaluator.getLineCasingWidth,
+              parameters: { depthTest: false },
+            }),
+          )
+        }
+      }
+      pushSecondaryLineSymbols(evaluator.lineSymbolLayers.filter((symbol) => symbol.level < 0))
 
       if (iconMode) {
         const nonPointFeatures = filteredData.features.filter((feature) => {
@@ -3552,6 +3726,48 @@ export function MapCanvas({
         )
       }
 
+      pushSecondaryLineSymbols(evaluator.lineSymbolLayers.filter((symbol) => symbol.level >= 0))
+
+      if (evaluator.lineMarkerEnabled && lineFeatures.length) {
+        const markerData = lineFeatures.flatMap((feature) => {
+          if (!feature.geometry) {
+            return []
+          }
+          return sampleLineMarkers(feature.geometry, evaluator.lineMarkerSpacingMeters).map((marker) => ({
+            ...marker,
+            feature,
+          }))
+        }).slice(0, 5000)
+
+        if (markerData.length) {
+          const markerIconId = resolveIconId(
+            evaluator.lineMarkerIcon,
+            evaluator.lineMarkerLibrary,
+            evaluator.iconifyPrefix,
+          )
+          builtLayers.push(new IconLayer({
+            id: `layer-${layer.id}-line-markers`,
+            data: markerData,
+            pickable: false,
+            billboard: true,
+            sizeUnits: 'pixels',
+            getPosition: (item) => item.position,
+            getColor: (item) => evaluator.getLineColor(item.feature),
+            getSize: evaluator.lineMarkerSize,
+            getAngle: (item) => evaluator.lineMarkerRotateWithLine ? item.angle : 0,
+            getIcon: () => ({
+              url: iconifySvgUrl(markerIconId),
+              width: 128,
+              height: 128,
+              anchorY: 64,
+              mask: true,
+            }),
+            alphaCutoff: 0.05,
+            parameters: { depthTest: false },
+          }))
+        }
+      }
+
       const polygonPatternAtlas = getPatternAtlasSpec(evaluator.polygonPatternLibrary, evaluator.polygonPattern)
       const polygonPatternDisabled = evaluator.polygonPatternLibrary === 'builtin' && evaluator.polygonPattern === 'solid'
       if (polygonPatternAtlas && !polygonPatternDisabled) {
@@ -3586,26 +3802,101 @@ export function MapCanvas({
         }
       }
 
+      if (evaluator.polygonMarkerEnabled) {
+        const polygonMarkerData = filteredData.features
+          .map((feature) => {
+            if (!feature.geometry || !isPolygonGeometryType(feature.geometry.type)) {
+              return null
+            }
+            const position = polygonMarkerPosition(feature.geometry, evaluator.polygonMarkerPlacement)
+            return position ? { feature, position } : null
+          })
+          .filter((item): item is { feature: GeoJsonFeature; position: [number, number] } => Boolean(item))
+          .slice(0, 5000)
+
+        if (polygonMarkerData.length) {
+          const polygonMarkerIconId = resolveIconId(
+            evaluator.polygonMarkerIcon,
+            evaluator.polygonMarkerLibrary,
+            evaluator.iconifyPrefix,
+          )
+          builtLayers.push(new IconLayer({
+            id: `layer-${layer.id}-polygon-markers`,
+            data: polygonMarkerData,
+            pickable: false,
+            billboard: true,
+            sizeUnits: 'pixels',
+            getPosition: (item) => item.position,
+            getColor: (item) => evaluator.getPointColor(item.feature),
+            getSize: evaluator.polygonMarkerSize,
+            getIcon: () => ({
+              url: iconifySvgUrl(polygonMarkerIconId),
+              width: 128,
+              height: 128,
+              anchorY: 64,
+              mask: true,
+            }),
+            alphaCutoff: 0.05,
+            parameters: { depthTest: false },
+          }))
+        }
+      }
+
       if (mapZoom >= evaluator.labelMinZoom && mapZoom <= evaluator.labelMaxZoom) {
         const labelData = filteredData.features
-          .map((feature) => {
+          .flatMap((feature) => {
             const text = evaluator.getLabelText(feature)
             if (!text) {
-              return null
+              return []
+            }
+
+            const common = {
+              text,
+              priority: evaluator.getLabelPriority(feature),
+              color: evaluator.getLabelColor(feature),
+              size: evaluator.getLabelSize(feature),
+            }
+
+            if (
+              evaluator.labelPolygonFitEnabled &&
+              feature.geometry &&
+              isPolygonGeometryType(feature.geometry.type) &&
+              !polygonLabelFits(mapRef.current, feature.geometry, text, common.size)
+            ) {
+              return []
+            }
+
+            if (
+              evaluator.labelRepeatDistanceMeters > 0 &&
+              feature.geometry &&
+              isLineGeometryType(feature.geometry.type)
+            ) {
+              return sampleLineMarkers(feature.geometry, evaluator.labelRepeatDistanceMeters).map((marker) => ({
+                ...common,
+                position: marker.position,
+                angle: evaluator.labelRotateWithLine ? marker.angle : 0,
+              }))
             }
 
             const position = labelPosition(feature)
             if (!position) {
-              return null
+              return []
             }
 
-            return {
-              text,
+            return [{
+              ...common,
               position,
-              priority: evaluator.getLabelPriority(feature),
-            }
+              angle: 0,
+            }]
           })
-          .filter((item): item is { text: string; position: [number, number]; priority: number } => Boolean(item))
+          .filter((item): item is {
+            text: string
+            position: [number, number]
+            priority: number
+            color: RgbaColor
+            size: number
+            angle: number
+          } => Boolean(item))
           .sort((a, b) => b.priority - a.priority)
           .slice(0, evaluator.labelMaxCount)
 
@@ -3618,14 +3909,19 @@ export function MapCanvas({
               billboard: true,
               getPosition: (d) => d.position,
               getText: (d) => d.text,
-              getColor: evaluator.labelColor,
-              getSize: evaluator.labelSize,
+              getColor: (d) => d.color,
+              getSize: (d) => d.size,
+              getAngle: (d) => d.angle,
               getTextAnchor: evaluator.labelTextAnchor,
               getAlignmentBaseline: evaluator.labelAlignmentBaseline,
               getOutlineColor: evaluator.labelHaloColor,
               getOutlineWidth: evaluator.labelHaloWidth,
               outlineWidthMaxPixels: 3,
               characterSet: 'auto',
+              collisionEnabled: evaluator.labelCollisionEnabled,
+              collisionGroup: `labels-${layer.id}`,
+              getCollisionPriority: (d: { priority: number }) => d.priority,
+              extensions: evaluator.labelCollisionEnabled ? [new CollisionFilterExtension()] : [],
             }),
           )
         }

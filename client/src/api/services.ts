@@ -68,10 +68,24 @@ export interface UpdateFeaturePayload {
   session_id?: string
 }
 
+export interface GeometryValidationResult {
+  valid: boolean
+  geometry_type: string
+  geometry: Geometry
+}
+
+export interface SplitFeaturesResult {
+  preview: boolean
+  source_count: number
+  part_count: number
+  features: FeatureCollection
+}
+
 export interface FeaturesQueryPayload {
   page?: number
   page_size?: number
   sort?: { field: string; direction?: 'asc' | 'desc' }
+  sorts?: Array<{ field: string; direction: 'asc' | 'desc' }>
   filters?: QueryFilter[]
   bbox?: string
   polygon?: Geometry
@@ -84,6 +98,7 @@ export interface FeaturesQueryResponse {
   page: number
   page_size: number
   sort: { field: string; direction: string }
+  sorts?: Array<{ field: string; direction: string }>
   filters: QueryFilter[]
 }
 
@@ -572,6 +587,39 @@ export function createFeature(
   )
 }
 
+export function validateFeatureGeometry(
+  layerId: string,
+  geometry: Geometry,
+  token: string,
+  featureId?: string,
+): Promise<GeometryValidationResult> {
+  return apiRequest<GeometryValidationResult>(
+    `/layers/${layerId}/geometry/validate`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ geometry, feature_id: featureId }),
+    },
+    token,
+  )
+}
+
+export function splitFeatures(
+  layerId: string,
+  featureIds: string[],
+  splitLine: Geometry,
+  token: string,
+  preview = false,
+): Promise<SplitFeaturesResult> {
+  return apiRequest<SplitFeaturesResult>(
+    `/layers/${layerId}/features/split`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ feature_ids: featureIds, split_line: splitLine, preview }),
+    },
+    token,
+  )
+}
+
 export function updateFeature(
   layerId: string,
   featureId: string,
@@ -613,13 +661,63 @@ export function selectFeatures(
     limit?: number
   },
   token?: string | null,
-): Promise<{ feature_ids: string[]; count: number; features?: FeatureCollection['features'] | null }> {
-  return apiRequest<{ feature_ids: string[]; count: number; features?: FeatureCollection['features'] | null }>(
+): Promise<{
+  feature_ids: string[]
+  count: number
+  total: number
+  truncated: boolean
+  limit: number
+  features?: FeatureCollection['features'] | null
+}> {
+  return apiRequest<{
+    feature_ids: string[]
+    count: number
+    total: number
+    truncated: boolean
+    limit: number
+    features?: FeatureCollection['features'] | null
+  }>(
     `/layers/${layerId}/features/select`,
     {
       method: 'POST',
       body: JSON.stringify(payload),
     },
+    token,
+  )
+}
+
+export interface FeatureStatisticsResponse {
+  count: number
+  fields: Record<string, {
+    valid_count: number
+    sum: number | null
+    avg: number | null
+    min: number | null
+    max: number | null
+  }>
+  filters: QueryFilter[]
+}
+
+export function fetchFeatureStatistics(
+  layerId: string,
+  payload: { filters?: QueryFilter[]; feature_ids?: string[] },
+  token?: string | null,
+): Promise<FeatureStatisticsResponse> {
+  return apiRequest<FeatureStatisticsResponse>(
+    `/layers/${layerId}/features/statistics`,
+    { method: 'POST', body: JSON.stringify(payload) },
+    token,
+  )
+}
+
+export function exportFeatureRows(
+  layerId: string,
+  payload: { format: 'csv' | 'json'; filters?: QueryFilter[]; feature_ids?: string[] },
+  token?: string | null,
+): Promise<Blob> {
+  return apiBlobRequest(
+    `/layers/${layerId}/features/export`,
+    { method: 'POST', body: JSON.stringify(payload) },
     token,
   )
 }
