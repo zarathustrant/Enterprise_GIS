@@ -26,7 +26,9 @@ Implemented capabilities:
 - layer visibility toggles
 - layer zoom-to-extent
 - export GeoJSON
-- upload GeoJSON into a layer
+- import GeoJSON, KML/KMZ, zipped Shapefile, CSV, GeoPackage, GML, GPX,
+  FlatGeobuf, DXF, SpatiaLite, zipped FileGDB, and other zipped OGR vector datasets
+- detect source CRS metadata or accept an explicit CRS override, then reproject vectors to EPSG:4326
 
 Key modules:
 

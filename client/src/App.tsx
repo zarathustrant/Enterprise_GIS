@@ -2182,12 +2182,21 @@ export default function App() {
   })
 
   const uploadLayerMutation = useMutation({
-    mutationFn: async (payload: { layerId: string; file: File; layerName: string }) => {
+    mutationFn: async (payload: {
+      layerId: string
+      file: File
+      layerName: string
+      sourceCrs?: string
+      sourceLayer?: string
+    }) => {
       if (!token) {
-        throw new Error('You must be signed in to upload GeoJSON.')
+        throw new Error('You must be signed in to import spatial data.')
       }
 
-      const result = await uploadLayerGeoJson(payload.layerId, payload.file, token)
+      const result = await uploadLayerGeoJson(payload.layerId, payload.file, token, {
+        sourceCrs: payload.sourceCrs,
+        sourceLayer: payload.sourceLayer,
+      })
       return { ...payload, result }
     },
     onSuccess: (payload) => {
@@ -2495,7 +2504,7 @@ export default function App() {
     setUploadOpen(true)
   }
 
-  const handleUploadLayer = (file: File) => {
+  const handleUploadLayer = (file: File, options: { sourceCrs?: string; sourceLayer?: string }) => {
     if (!uploadTargetLayer) {
       return
     }
@@ -2505,6 +2514,8 @@ export default function App() {
       layerId: uploadTargetLayer.id,
       layerName: uploadTargetLayer.name,
       file,
+      sourceCrs: options.sourceCrs,
+      sourceLayer: options.sourceLayer,
     })
   }
 
@@ -3800,7 +3811,7 @@ export default function App() {
                     </span>
                   </Tooltip>
 
-                  <Tooltip title={isOwner ? 'Upload GeoJSON' : 'Only owner can upload'}>
+                  <Tooltip title={isOwner ? 'Import spatial data' : 'Only owner can import data'}>
                     <span>
                       <IconButton
                         size="small"

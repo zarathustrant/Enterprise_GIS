@@ -43,6 +43,11 @@ export interface CreateLayerPayload {
 export interface UploadLayerResult {
   inserted: number
   errors: number
+  diagnostics?: Array<{ feature: number; error: string }>
+  source_file?: string
+  source_layer?: string | null
+  source_crs?: string
+  target_crs?: string
 }
 
 export interface UpdateLayerPayload {
@@ -469,9 +474,16 @@ export function deleteLayer(layerId: string, token: string): Promise<{ message: 
   )
 }
 
-export function uploadLayerGeoJson(layerId: string, file: File, token: string): Promise<UploadLayerResult> {
+export function uploadLayerGeoJson(
+  layerId: string,
+  file: File,
+  token: string,
+  options: { sourceCrs?: string; sourceLayer?: string } = {},
+): Promise<UploadLayerResult> {
   const body = new FormData()
   body.append('file', file)
+  if (options.sourceCrs?.trim()) body.append('source_crs', options.sourceCrs.trim())
+  if (options.sourceLayer?.trim()) body.append('source_layer', options.sourceLayer.trim())
 
   return apiRequest<UploadLayerResult>(
     `/layers/${layerId}/upload`,

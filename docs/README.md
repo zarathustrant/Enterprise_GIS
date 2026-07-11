@@ -28,6 +28,7 @@ The documentation here is organized around that goal:
 - [engineering/frontend-map-editing.md](./engineering/frontend-map-editing.md)
 - [engineering/cartography.md](./engineering/cartography.md)
 - [engineering/attribute-table.md](./engineering/attribute-table.md)
+- [engineering/data-ingestion.md](./engineering/data-ingestion.md)
 
 ### Operations
 
