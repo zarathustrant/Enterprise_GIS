@@ -24,6 +24,7 @@ import {
   Menu,
   MenuItem,
   Paper,
+  Popover,
   Select,
   Stack,
   Tab,
@@ -41,6 +42,8 @@ import {
   Toolbar,
   Tooltip,
   Typography,
+  useMediaQuery,
+  useTheme,
 } from '@mui/material'
 import CloseIcon from '@mui/icons-material/Close'
 import FilterListIcon from '@mui/icons-material/FilterList'
@@ -298,7 +301,7 @@ export function AttributeTablePanel({
 
   // Phase 2: Selection tools
   // const [showSelectionTools, setShowSelectionTools] = useState(false)
-  const [showSelectionStats, setShowSelectionStats] = useState(false)
+  const [statsAnchor, setStatsAnchor] = useState<HTMLElement | null>(null)
   const [serverStats, setServerStats] = useState<FeatureStatisticsResponse | null>(null)
   const [statisticsLoading, setStatisticsLoading] = useState(false)
   const [selectionMode, setSelectionMode] = useState<'new' | 'add' | 'remove'>('new')
@@ -366,6 +369,9 @@ export function AttributeTablePanel({
   // Column visibility state
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set())
   const [columnMenuAnchor, setColumnMenuAnchor] = useState<HTMLElement | null>(null)
+
+  const theme = useTheme()
+  const isNarrow = useMediaQuery(theme.breakpoints.down('md'))
 
   const features = useMemo(() => featureCollection?.features ?? [], [featureCollection])
   const hasSchema = fields.length > 0
@@ -971,12 +977,8 @@ export function AttributeTablePanel({
 
   const selectionStats = serverStats ?? localSelectionStats
 
-  const handleToggleStatistics = async () => {
-    if (showSelectionStats) {
-      setShowSelectionStats(false)
-      return
-    }
-    setShowSelectionStats(true)
+  const handleOpenStatistics = async (anchorEl: HTMLElement) => {
+    setStatsAnchor(anchorEl)
     setServerStats(null)
     if (operationScope === 'current_page' || !onFetchStatistics) {
       return
@@ -1552,7 +1554,13 @@ export function AttributeTablePanel({
 
           {/* Phase 2: Selection Tools Toolbar */}
           <Box sx={{ px: 2, py: 1, bgcolor: 'grey.100', borderBottom: 1, borderColor: 'divider' }}>
-            <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
+            <Stack
+              direction="row"
+              spacing={1}
+              alignItems="center"
+              flexWrap={{ xs: 'nowrap', md: 'wrap' }}
+              sx={{ overflowX: { xs: 'auto', md: 'visible' }, pb: { xs: 0.5, md: 0 } }}
+            >
               <TextField
                 label="Operation scope"
                 value={operationScope}
@@ -1655,9 +1663,9 @@ export function AttributeTablePanel({
               <Tooltip title="Show selection statistics">
                 <Button
                   size="small"
-                  variant={showSelectionStats ? 'contained' : 'outlined'}
+                  variant={statsAnchor ? 'contained' : 'outlined'}
                   startIcon={<BarChartIcon />}
-                  onClick={() => void handleToggleStatistics()}
+                  onClick={(event) => void handleOpenStatistics(event.currentTarget)}
                   disabled={statisticsLoading || (operationScope === 'selected' && selectedFeatureIds.length === 0)}
                 >
                   {statisticsLoading ? 'Calculating…' : 'Stats'}
@@ -1708,45 +1716,7 @@ export function AttributeTablePanel({
             </Stack>
           </Box>
 
-          {/* Selection Statistics Panel */}
-          {showSelectionStats && selectionStats && (
-            <Box sx={{ px: 2, py: 1.5, bgcolor: 'info.light', borderBottom: 1, borderColor: 'divider' }}>
-              <Typography variant="subtitle2" fontWeight={700} gutterBottom>
-                Selection Summary
-              </Typography>
-              <Typography variant="body2" gutterBottom>
-                Selected: {selectionStats.count} of {totalRows} features
-              </Typography>
-              {Object.keys(selectionStats.fields).length > 0 && (
-                <Box sx={{ mt: 1 }}>
-                  <Typography variant="caption" fontWeight={600} color="text.secondary">
-                    Numeric Field Statistics:
-                  </Typography>
-                  <Stack spacing={0.5} sx={{ mt: 0.5 }}>
-                    {Object.entries(selectionStats.fields).map(([fieldName, stats]) => {
-                      const field = fields.find((f) => f.name === fieldName)
-                      return (
-                        <Box key={fieldName} sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
-                          <Typography variant="body2" fontWeight={600} sx={{ minWidth: 100 }}>
-                            {field?.alias || fieldName}:
-                          </Typography>
-                          <Typography variant="body2" sx={{ fontSize: '0.85rem' }}>
-                            Valid: {'valid_count' in stats ? stats.valid_count.toLocaleString() : selectionStats.count.toLocaleString()} |{' '}
-                            Sum: {stats.sum == null ? '—' : stats.sum.toLocaleString()} |{' '}
-                            Avg: {stats.avg == null ? '—' : stats.avg.toFixed(2)} |{' '}
-                            Min: {stats.min == null ? '—' : stats.min.toLocaleString()} |{' '}
-                            Max: {stats.max == null ? '—' : stats.max.toLocaleString()}
-                          </Typography>
-                        </Box>
-                      )
-                    })}
-                  </Stack>
-                </Box>
-              )}
-            </Box>
-          )}
-
-          <Box sx={{ flex: 1, overflow: 'auto', display: 'flex' }}>
+          <Box sx={{ flex: 1, overflow: 'auto', display: 'flex', position: 'relative' }}>
             <TableContainer sx={{ flex: 1 }}>
               <Table size="small" stickyHeader>
                 <TableHead>
@@ -2024,7 +1994,7 @@ export function AttributeTablePanel({
               </Table>
             </TableContainer>
 
-            {selectedRow && hasSchema && inspectorCollapsed && (
+            {selectedRow && hasSchema && inspectorCollapsed && !isNarrow && (
               <Box
                 sx={{
                   width: 40,
@@ -2052,7 +2022,7 @@ export function AttributeTablePanel({
               </Box>
             )}
 
-            {selectedRow && hasSchema && !inspectorCollapsed && (
+            {selectedRow && hasSchema && !inspectorCollapsed && !isNarrow && (
               <Box
                 role="separator"
                 aria-orientation="vertical"
@@ -2076,9 +2046,13 @@ export function AttributeTablePanel({
 
             {selectedRow && hasSchema && !inspectorCollapsed && (
               <Paper
-                elevation={0}
+                elevation={isNarrow ? 8 : 0}
                 sx={{
-                  width: inspectorWidth,
+                  // Narrow screens: overlay the grid full-width instead of
+                  // squeezing it into an unusable strip.
+                  ...(isNarrow
+                    ? { position: 'absolute', inset: 0, width: '100%', zIndex: 4 }
+                    : { width: inspectorWidth }),
                   flexShrink: 0,
                   borderLeft: 2,
                   borderColor: 'divider',
@@ -3025,6 +2999,63 @@ export function AttributeTablePanel({
           </Typography>
         </MenuItem>
       </Menu>
+
+      {/* Selection statistics — a popover so it never steals grid vertical space */}
+      <Popover
+        open={Boolean(statsAnchor)}
+        anchorEl={statsAnchor}
+        onClose={() => setStatsAnchor(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+        transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+        slotProps={{ paper: { sx: { p: 2, maxWidth: 480, maxHeight: 360 } } }}
+      >
+        <Typography variant="subtitle2" fontWeight={700} gutterBottom>
+          Selection Summary
+        </Typography>
+        {statisticsLoading ? (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, py: 1 }}>
+            <CircularProgress size={18} />
+            <Typography variant="body2" color="text.secondary">
+              Calculating…
+            </Typography>
+          </Box>
+        ) : selectionStats ? (
+          <>
+            <Typography variant="body2" gutterBottom>
+              {selectionStats.count.toLocaleString()} of {totalRows.toLocaleString()} features
+            </Typography>
+            {Object.keys(selectionStats.fields).length > 0 ? (
+              <Stack spacing={1} sx={{ mt: 1 }}>
+                {Object.entries(selectionStats.fields).map(([fieldName, stats]) => {
+                  const field = fields.find((f) => f.name === fieldName)
+                  return (
+                    <Box key={fieldName}>
+                      <Typography variant="body2" fontWeight={600}>
+                        {field?.alias || fieldName}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Valid: {'valid_count' in stats ? stats.valid_count.toLocaleString() : selectionStats.count.toLocaleString()} ·{' '}
+                        Sum: {stats.sum == null ? '—' : stats.sum.toLocaleString()} ·{' '}
+                        Avg: {stats.avg == null ? '—' : stats.avg.toFixed(2)} ·{' '}
+                        Min: {stats.min == null ? '—' : stats.min.toLocaleString()} ·{' '}
+                        Max: {stats.max == null ? '—' : stats.max.toLocaleString()}
+                      </Typography>
+                    </Box>
+                  )
+                })}
+              </Stack>
+            ) : (
+              <Typography variant="caption" color="text.secondary">
+                No numeric fields to summarize.
+              </Typography>
+            )}
+          </>
+        ) : (
+          <Typography variant="body2" color="text.secondary">
+            No records in scope to summarize.
+          </Typography>
+        )}
+      </Popover>
     </Paper>
   )
 }
