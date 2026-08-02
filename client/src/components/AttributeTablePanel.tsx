@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 import type { BulkUpdatePayload, FeatureStatisticsResponse, FeaturesQueryPayload, FeaturesQueryResponse } from '../api/services'
 import { fetchLayerRelationships, fetchRelatedRecords } from '../api/services'
@@ -872,7 +872,7 @@ export function AttributeTablePanel({
   }, [sortedRows, page, pageSize, onQueryRows, queryRows])
 
   // Phase 2: Selection operations
-  const handleSelectAll = async () => {
+  const handleSelectAll = useCallback(async () => {
     if (operationScope === 'selected') {
       setLocalError('Selected-record scope already contains the current selection.')
       return
@@ -896,11 +896,11 @@ export function AttributeTablePanel({
     } catch (selectionError) {
       setLocalError(selectionError instanceof Error ? selectionError.message : 'Failed to select records')
     }
-  }
+  }, [appliedFilters, onFeatureSelectionChange, onSelectRows, operationScope, rows])
 
-  const handleClearSelection = () => {
+  const handleClearSelection = useCallback(() => {
     onFeatureSelectionChange?.([])
-  }
+  }, [onFeatureSelectionChange])
 
   const handleSwitchSelection = () => {
     if (operationScope !== 'current_page') {
@@ -1127,7 +1127,7 @@ export function AttributeTablePanel({
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedFeatureIds, rows])
+  }, [handleClearSelection, handleSelectAll])
 
   // Phase 6: Export helper functions
   const downloadBlob = (blob: Blob, extension: string) => {

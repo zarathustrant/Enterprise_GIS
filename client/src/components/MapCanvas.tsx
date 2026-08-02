@@ -109,6 +109,9 @@ interface FlashFeatureRequest {
 }
 
 interface MapCanvasProps {
+  mapDocumentId?: string | null
+  basemapId?: string
+  initialView?: Partial<MapViewportState> | null
   layers: Layer[]
   visibleByLayerId: Record<string, boolean>
   featureCollections: Record<string, FeatureCollection | undefined>
@@ -155,6 +158,38 @@ interface MapCanvasProps {
 }
 
 const palette = ['#136f63', '#3f88c5', '#ff9f1c', '#a4243b', '#0f4c5c', '#8e44ad', '#6ab04c']
+
+function resolveBasemapStyle(basemapId?: string): maplibregl.StyleSpecification | string {
+  if (basemapId === 'osm') {
+    return {
+      version: 8,
+      sources: {
+        osm: {
+          type: 'raster',
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          attribution: '&copy; OpenStreetMap contributors',
+        },
+      },
+      layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
+    }
+  }
+  if (basemapId === 'satellite') {
+    return {
+      version: 8,
+      sources: {
+        imagery: {
+          type: 'raster',
+          tiles: ['https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'],
+          tileSize: 256,
+          attribution: 'Esri World Imagery',
+        },
+      },
+      layers: [{ id: 'imagery', type: 'raster', source: 'imagery' }],
+    }
+  }
+  return 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
+}
 
 function resolveUtilityOverlayTheme(utilityType?: string | null) {
   switch (utilityType) {
@@ -2445,6 +2480,9 @@ function isTempFeatureId(featureId: string): boolean {
 }
 
 export function MapCanvas({
+  mapDocumentId = null,
+  basemapId = 'light',
+  initialView = null,
   layers,
   visibleByLayerId,
   featureCollections,
@@ -4340,9 +4378,11 @@ export function MapCanvas({
     try {
       map = new maplibregl.Map({
         container: mapContainerRef.current,
-        style: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
-        center: [5.593, 6.297],
-        zoom: 12,
+        style: resolveBasemapStyle(basemapId),
+        center: [initialView?.center?.lng ?? 5.593, initialView?.center?.lat ?? 6.297],
+        zoom: initialView?.zoom ?? 12,
+        bearing: initialView?.bearing ?? 0,
+        pitch: initialView?.pitch ?? 0,
         attributionControl: false,
       })
 
@@ -4646,7 +4686,7 @@ export function MapCanvas({
       mapRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [onViewStateChange])
+  }, [basemapId, mapDocumentId, onViewStateChange])
 
   useEffect(() => {
     queueMicrotask(() => {

@@ -185,7 +185,7 @@ export function UtilityModePanel({
   const edgePreview = featurePreview(edges)
   const servicePointPreview = featurePreview(servicePoints)
 
-  const nodeFeatures = nodes?.features ?? []
+  const nodeFeatures = useMemo(() => nodes?.features ?? [], [nodes])
   const edgeFeatures = edges?.features ?? []
   const nodeLookup = useMemo(() => {
     const next = new Map<string, [number, number]>()

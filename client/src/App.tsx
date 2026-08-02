@@ -70,6 +70,11 @@ import ChangeHistoryIcon from '@mui/icons-material/ChangeHistory'
 import HexagonOutlinedIcon from '@mui/icons-material/HexagonOutlined'
 import StarBorderIcon from '@mui/icons-material/StarBorder'
 import PentagonOutlinedIcon from '@mui/icons-material/PentagonOutlined'
+import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward'
+import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward'
+import ContentCopyIcon from '@mui/icons-material/ContentCopy'
+import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder'
+import SaveIcon from '@mui/icons-material/Save'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -100,6 +105,7 @@ import {
   deleteLayerField,
   deleteFeatureWithSession,
   deleteLayer as deleteLayerApi,
+  deleteMap,
   exportLayerGeoJson,
   exportFeatureRows,
   fetchAsyncJobs,
@@ -116,6 +122,15 @@ import {
   fetchLayerFields,
   fetchLayerFeatures,
   fetchLayers,
+  fetchMaps,
+  fetchMap,
+  createMap,
+  createMapGroup,
+  duplicateMap,
+  addMapLayers,
+  removeMapLayer,
+  updateMapLayer,
+  updateMap as updateMapApi,
   fetchShareLinks,
   fetchUtilityNetworkEdges,
   fetchUtilityNetworkNodes,
@@ -166,6 +181,9 @@ import type {
 import { ActivityFeed } from './components/ActivityFeed'
 import type { ActivityEvent, ActivityLevel } from './components/ActivityFeed'
 import { UtilityModePanel } from './components/UtilityModePanel'
+import { CatalogBrowser } from './components/CatalogBrowser'
+import { NewMapDialog } from './components/NewMapDialog'
+import { MapPropertiesDialog } from './components/MapPropertiesDialog'
 import { useAuthStore } from './store/auth'
 import type { LegendMode } from './utils/legend'
 import {
@@ -188,6 +206,7 @@ import type {
   LayerStyleDraft,
   LayerView,
   MapView,
+  CatalogMap,
   UtilityNetwork,
   UtilityNetworkSummary,
 } from './types/gis'
@@ -277,11 +296,14 @@ interface FeatureConflictState {
 
 const drawerWidth = 360
 const EMPTY_LAYERS: Layer[] = []
+const EMPTY_MAPS: CatalogMap[] = []
+const EMPTY_UTILITY_NETWORKS: UtilityNetwork[] = []
 const APP_MODE_STORAGE_KEY = 'enterprise-gis-app-mode-v1'
 const LEGEND_MODE_STORAGE_KEY = 'enterprise-gis-legend-mode-v1'
 const WORK_MODE_STORAGE_KEY = 'enterprise-gis-work-mode-v1'
 const EDIT_TOOL_TAB_STORAGE_KEY = 'enterprise-gis-edit-tool-tab-v1'
 const EDIT_TOOL_FAVORITES_STORAGE_KEY = 'enterprise-gis-edit-tool-favorites-v1'
+const ACTIVE_MAP_STORAGE_KEY = 'enterprise-gis-active-map-v1'
 type AppMode = 'standard' | 'utilities'
 type EditToolTab = 'all' | 'my'
 type EditToolGroup = 'Alignment' | 'Reshape' | 'Construction'
@@ -995,6 +1017,14 @@ export default function App() {
   const [authOpen, setAuthOpen] = useState(false)
   const [createLayerOpen, setCreateLayerOpen] = useState(false)
   const [createLayerError, setCreateLayerError] = useState<string | null>(null)
+  const [leftPanelMode, setLeftPanelMode] = useState<'contents' | 'catalog'>('contents')
+  const [activeMapId, setActiveMapId] = useState<string | null>(() => window.localStorage.getItem(ACTIVE_MAP_STORAGE_KEY))
+  const [newMapOpen, setNewMapOpen] = useState(false)
+  const [newMapError, setNewMapError] = useState<string | null>(null)
+  const [newGroupOpen, setNewGroupOpen] = useState(false)
+  const [newGroupName, setNewGroupName] = useState('')
+  const [mapPropertiesOpen, setMapPropertiesOpen] = useState(false)
+  const [mapPropertiesError, setMapPropertiesError] = useState<string | null>(null)
 
   const [uploadOpen, setUploadOpen] = useState(false)
   const [uploadError, setUploadError] = useState<string | null>(null)
@@ -1201,7 +1231,82 @@ export default function App() {
     staleTime: 20_000,
   })
 
-  const layers = layersQuery.data ?? EMPTY_LAYERS
+  const mapsQuery = useQuery({
+    queryKey: ['catalog-maps', token],
+    queryFn: () => fetchMaps(token as string),
+    enabled: Boolean(token),
+    staleTime: 15_000,
+  })
+
+  const maps: CatalogMap[] = mapsQuery.data ?? EMPTY_MAPS
+
+  useEffect(() => {
+    if (!token) {
+      setActiveMapId(null)
+      return
+    }
+    if (!maps.length) return
+    const selectedStillExists = activeMapId && maps.some((map) => map.id === activeMapId)
+    if (!selectedStillExists) {
+      setActiveMapId((maps.find((map) => map.is_default) ?? maps[0]).id)
+    }
+  }, [activeMapId, maps, token])
+
+  useEffect(() => {
+    if (activeMapId) window.localStorage.setItem(ACTIVE_MAP_STORAGE_KEY, activeMapId)
+    else window.localStorage.removeItem(ACTIVE_MAP_STORAGE_KEY)
+  }, [activeMapId])
+
+  const activeMapQuery = useQuery({
+    queryKey: ['catalog-map', activeMapId, token],
+    queryFn: () => fetchMap(activeMapId as string, token as string),
+    enabled: Boolean(activeMapId && token),
+    staleTime: 10_000,
+  })
+
+  const activeMap: CatalogMap | null = activeMapQuery.data ?? null
+  const activeMapLayerBySourceId = useMemo(
+    () => new Map((activeMap?.layers ?? []).filter((item) => item.source_layer_id).map((item) => [item.source_layer_id as string, item])),
+    [activeMap?.layers],
+  )
+  const activeMapGroups = useMemo(
+    () => (activeMap?.layers ?? []).filter((item) => item.layer_kind === 'group'),
+    [activeMap?.layers],
+  )
+  const activeMapGroupById = useMemo(
+    () => new Map(activeMapGroups.map((item) => [item.id, item])),
+    [activeMapGroups],
+  )
+  const catalogLayers = layersQuery.data ?? EMPTY_LAYERS
+  const layers = useMemo(() => {
+    if (!token) return catalogLayers
+    if (!activeMap) return EMPTY_LAYERS
+    const sourceById = new Map(catalogLayers.map((layer) => [layer.id, layer]))
+    return (activeMap.layers ?? [])
+      .filter((item) => item.layer_kind === 'feature' && item.source_layer_id)
+      .sort((a, b) => b.draw_order - a.draw_order)
+      .map((item) => {
+        const source = sourceById.get(item.source_layer_id as string)
+        if (!source) return null
+        return {
+          ...source,
+          name: item.title,
+          style: item.effective_style ?? source.style,
+          min_zoom: item.min_zoom,
+          max_zoom: item.max_zoom,
+        }
+      })
+      .filter((layer): layer is Layer => Boolean(layer))
+  }, [activeMap, catalogLayers, token])
+
+  useEffect(() => {
+    if (!activeMap) return
+    const visibility: Record<string, boolean> = {}
+    for (const item of activeMap.layers ?? []) {
+      if (item.source_layer_id) visibility[item.source_layer_id] = item.visible
+    }
+    setVisibleByLayerId(visibility)
+  }, [activeMap])
   const schemaLayerId = fieldsLayer?.id ?? styleLayer?.id ?? tableLayer?.id ?? null
   const schemaPanelOpen = fieldsOpen || styleOpen || tableOpen
 
@@ -1429,7 +1534,7 @@ export default function App() {
   const shareLinks: LayerShareLink[] = shareLinksQuery.data ?? []
   const layerViews: LayerView[] = layerViewsQuery.data ?? []
   const layerRelationships: LayerRelationship[] = layerRelationshipsQuery.data ?? []
-  const utilityNetworks: UtilityNetwork[] = utilityNetworksQuery.data ?? []
+  const utilityNetworks: UtilityNetwork[] = utilityNetworksQuery.data ?? EMPTY_UTILITY_NETWORKS
   const utilityNetworkSummary: UtilityNetworkSummary | null = utilitySummaryQuery.data ?? null
   const editSessions: EditSession[] = editSessionsQuery.data ?? []
   const editSessionChanges: EditSessionChange[] = editSessionChangesQuery.data ?? []
@@ -1590,11 +1695,17 @@ export default function App() {
       if (!token) {
         throw new Error('You must be signed in to create a layer.')
       }
-      return createLayerApi(payload, token)
+      const created = await createLayerApi(payload, token)
+      if (activeMapId) {
+        await addMapLayers(activeMapId, [created.id], token)
+      }
+      return created
     },
     onSuccess: (newLayer) => {
       setVisibleByLayerId((previous) => ({ ...previous, [newLayer.id]: true }))
       queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-map', activeMapId] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-maps'] })
       setCreateLayerOpen(false)
       setCreateLayerError(null)
       notify(`Layer "${newLayer.name}" created`, 'success')
@@ -1602,6 +1713,136 @@ export default function App() {
     onError: (error) => {
       setCreateLayerError(error instanceof Error ? error.message : 'Failed to create layer')
     },
+  })
+
+  const createMapMutation = useMutation({
+    mutationFn: async (payload: { name: string; description?: string; basemap?: Record<string, unknown> }) => {
+      if (!token) throw new Error('You must be signed in to create a map.')
+      return createMap(payload, token)
+    },
+    onSuccess: (created) => {
+      setNewMapOpen(false)
+      setNewMapError(null)
+      setActiveMapId(created.id)
+      setLeftPanelMode('contents')
+      queryClient.invalidateQueries({ queryKey: ['catalog-maps'] })
+      notify(`Map "${created.name}" created`, 'success')
+    },
+    onError: (error) => setNewMapError(error instanceof Error ? error.message : 'Failed to create map'),
+  })
+
+  const saveMapMutation = useMutation({
+    mutationFn: async () => {
+      if (!token || !activeMap) throw new Error('No active map selected.')
+      return updateMapApi(activeMap.id, {
+        revision: activeMap.revision,
+        initial_view: (currentMapView ?? activeMap.initial_view) as Record<string, unknown>,
+      }, token)
+    },
+    onSuccess: (saved) => {
+      queryClient.invalidateQueries({ queryKey: ['catalog-map', saved.id] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-maps'] })
+      notify(`Map "${saved.name}" saved`, 'success')
+    },
+    onError: (error) => notify(error instanceof Error ? error.message : 'Failed to save map', 'error'),
+  })
+
+  const duplicateMapMutation = useMutation({
+    mutationFn: async () => {
+      if (!token || !activeMap) throw new Error('No active map selected.')
+      return duplicateMap(activeMap.id, `${activeMap.name} Copy`, token)
+    },
+    onSuccess: (created) => {
+      setActiveMapId(created.id)
+      queryClient.invalidateQueries({ queryKey: ['catalog-maps'] })
+      notify(`Map duplicated as "${created.name}"`, 'success')
+    },
+    onError: (error) => notify(error instanceof Error ? error.message : 'Failed to duplicate map', 'error'),
+  })
+
+  const updateMapPropertiesMutation = useMutation({
+    mutationFn: async (payload: { name: string; description: string; basemap: Record<string, unknown>; is_public: boolean }) => {
+      if (!token || !activeMap) throw new Error('No active map selected.')
+      return updateMapApi(activeMap.id, { ...payload, revision: activeMap.revision }, token)
+    },
+    onSuccess: (saved) => {
+      setMapPropertiesOpen(false)
+      setMapPropertiesError(null)
+      queryClient.invalidateQueries({ queryKey: ['catalog-map', saved.id] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-maps'] })
+      notify(`Map "${saved.name}" updated`, 'success')
+    },
+    onError: (error) => setMapPropertiesError(error instanceof Error ? error.message : 'Failed to update map'),
+  })
+
+  const deleteMapMutation = useMutation({
+    mutationFn: async () => {
+      if (!token || !activeMap) throw new Error('No active map selected.')
+      return deleteMap(activeMap.id, token)
+    },
+    onSuccess: () => {
+      setMapPropertiesOpen(false)
+      setActiveMapId(null)
+      queryClient.invalidateQueries({ queryKey: ['catalog-maps'] })
+      notify('Map deleted. Source data was preserved.', 'success')
+    },
+    onError: (error) => setMapPropertiesError(error instanceof Error ? error.message : 'Failed to delete map'),
+  })
+
+  const createMapGroupMutation = useMutation({
+    mutationFn: async (title: string) => {
+      if (!token || !activeMapId) throw new Error('No active map selected.')
+      return createMapGroup(activeMapId, title, token)
+    },
+    onSuccess: () => {
+      setNewGroupOpen(false)
+      setNewGroupName('')
+      queryClient.invalidateQueries({ queryKey: ['catalog-map', activeMapId] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-maps'] })
+      notify('Map group created', 'success')
+    },
+    onError: (error) => notify(error instanceof Error ? error.message : 'Failed to create map group', 'error'),
+  })
+
+  const mapLayerUpdateMutation = useMutation({
+    mutationFn: async ({ mapLayerId, payload }: { mapLayerId: string; payload: Parameters<typeof updateMapLayer>[2] }) => {
+      if (!token || !activeMapId) throw new Error('No active map selected.')
+      return updateMapLayer(activeMapId, mapLayerId, payload, token)
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['catalog-map', activeMapId] }),
+    onError: (error) => notify(error instanceof Error ? error.message : 'Failed to update map layer', 'error'),
+  })
+
+  const moveMapLayerMutation = useMutation({
+    mutationFn: async ({ sourceLayerId, direction }: { sourceLayerId: string; direction: -1 | 1 }) => {
+      if (!token || !activeMapId || !activeMap?.layers) throw new Error('No active map selected.')
+      const ordered = activeMap.layers
+        .filter((item) => item.layer_kind === 'feature')
+        .sort((a, b) => b.draw_order - a.draw_order)
+      const index = ordered.findIndex((item) => item.source_layer_id === sourceLayerId)
+      const target = ordered[index + direction]
+      const current = ordered[index]
+      if (!current || !target) return
+      await Promise.all([
+        updateMapLayer(activeMapId, current.id, { draw_order: target.draw_order }, token),
+        updateMapLayer(activeMapId, target.id, { draw_order: current.draw_order }, token),
+      ])
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['catalog-map', activeMapId] }),
+    onError: (error) => notify(error instanceof Error ? error.message : 'Failed to reorder map layer', 'error'),
+  })
+
+  const removeMapLayerMutation = useMutation({
+    mutationFn: async (mapLayerId: string) => {
+      if (!token || !activeMapId) throw new Error('No active map selected.')
+      return removeMapLayer(activeMapId, mapLayerId, token)
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['catalog-map', activeMapId] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-maps'] })
+      notify('Layer removed from map. Source data was not deleted.', 'info')
+    },
+    onError: (error) => notify(error instanceof Error ? error.message : 'Failed to remove map layer', 'error'),
   })
 
   const createUtilityNetworkMutation = useMutation({
@@ -1689,10 +1930,17 @@ export default function App() {
       if (!token) {
         throw new Error('You must be signed in to update styles.')
       }
+      const mapLayer = activeMapLayerBySourceId.get(payload.layer.id)
+      if (activeMapId && mapLayer) {
+        await updateMapLayer(activeMapId, mapLayer.id, { style_override: toStylePayload(payload.style) }, token)
+        return payload.layer
+      }
       return updateLayer(payload.layer.id, { style: toStylePayload(payload.style) }, token)
     },
     onSuccess: (layer) => {
       queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-map', activeMapId] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-maps'] })
       queryClient.invalidateQueries({ queryKey: ['layer-features', layer.id] })
       setStyleOpen(false)
       setStyleError(null)
@@ -1711,10 +1959,17 @@ export default function App() {
       }
       const base = readStyle(payload.layer)
       const nextStyle = { ...base, ...payload.patch }
+      const mapLayer = activeMapLayerBySourceId.get(payload.layer.id)
+      if (activeMapId && mapLayer) {
+        await updateMapLayer(activeMapId, mapLayer.id, { style_override: toStylePayload(nextStyle) }, token)
+        return payload.layer
+      }
       return updateLayer(payload.layer.id, { style: toStylePayload(nextStyle) }, token)
     },
     onSuccess: (layer) => {
       queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-map', activeMapId] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-maps'] })
       queryClient.invalidateQueries({ queryKey: ['layer-features', layer.id] })
       notify(`Editing settings updated for "${layer.name}"`, 'success', false)
     },
@@ -2177,12 +2432,15 @@ export default function App() {
         throw new Error('You must be signed in to delete layers.')
       }
 
-      await deleteLayerApi(layer.id, token)
+      await deleteLayerApi(layer.id, token, true)
       return layer
     },
     onSuccess: (layer) => {
       queryClient.invalidateQueries({ queryKey: ['layers'] })
       queryClient.invalidateQueries({ queryKey: ['layer-features'] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-map'] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-maps'] })
+      queryClient.invalidateQueries({ queryKey: ['catalog-items'] })
       if (activeEditLayerId === layer.id) {
         setActiveEditLayerId(null)
       }
@@ -2803,6 +3061,9 @@ export default function App() {
     queryClient.removeQueries()
     setCreateLayerOpen(false)
     setCreateLayerError(null)
+    setNewMapOpen(false)
+    setNewMapError(null)
+    setLeftPanelMode('contents')
     setUploadOpen(false)
     setUploadTargetLayer(null)
     setUploadError(null)
@@ -3288,7 +3549,7 @@ export default function App() {
   }
 
   const handleDeleteLayer = (layer: Layer) => {
-    if (!window.confirm(`Delete layer "${layer.name}" and all its features?`)) {
+    if (!window.confirm(`Permanently delete source layer "${layer.name}", all its features, and remove it from every map? This cannot be undone.`)) {
       return
     }
 
@@ -4019,10 +4280,66 @@ export default function App() {
       <Box sx={{ px: 2, pb: 2 }}>
         <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
           <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
-            {appMode === 'utilities' ? 'Utility Workspace' : 'Data Layers'}
+            {appMode === 'utilities' ? 'Utility Workspace' : 'Maps & Data'}
           </Typography>
           <Chip label={appMode === 'utilities' ? `${utilityNetworks.length} networks` : `${layers.length} layers`} size="small" />
         </Stack>
+
+        {appMode === 'standard' && token && (
+          <Stack spacing={1} sx={{ mb: 1.25 }}>
+            <Stack direction="row" spacing={0.75}>
+              <TextField
+                select
+                size="small"
+                label="Active map"
+                value={activeMapId ?? ''}
+                onChange={(event) => {
+                  setActiveMapId(event.target.value)
+                  setActiveEditLayerId(null)
+                }}
+                fullWidth
+                inputProps={{ 'aria-label': 'Active map' }}
+              >
+                {maps.map((map) => <MenuItem key={map.id} value={map.id}>{map.name}{map.is_default ? ' · default' : ''}</MenuItem>)}
+              </TextField>
+              <Button size="small" variant="outlined" startIcon={<AddCircleOutlineIcon />} onClick={() => { setNewMapError(null); setNewMapOpen(true) }} sx={{ whiteSpace: 'nowrap' }}>
+                New Map
+              </Button>
+            </Stack>
+            <Tabs value={leftPanelMode} onChange={(_, value: 'contents' | 'catalog') => setLeftPanelMode(value)} variant="fullWidth" sx={{ minHeight: 36 }}>
+              <Tab value="contents" label="Contents" sx={{ minHeight: 36, textTransform: 'none' }} />
+              <Tab value="catalog" label="Catalog" sx={{ minHeight: 36, textTransform: 'none' }} />
+            </Tabs>
+            {activeMap && (
+              <>
+                <Typography variant="caption" color="text.secondary">
+                  {activeMap.name} · {activeMap.layer_count} map items · revision {activeMap.revision}
+                </Typography>
+                <Stack direction="row" spacing={0.5}>
+                  <Button size="small" startIcon={<SaveIcon />} disabled={saveMapMutation.isPending} onClick={() => saveMapMutation.mutate()}>
+                    Save
+                  </Button>
+                  <Button size="small" startIcon={<ContentCopyIcon />} disabled={duplicateMapMutation.isPending} onClick={() => duplicateMapMutation.mutate()}>
+                    Duplicate
+                  </Button>
+                  <Button size="small" startIcon={<CreateNewFolderIcon />} onClick={() => setNewGroupOpen(true)}>
+                    Group
+                  </Button>
+                  <Tooltip title="Map properties">
+                    <IconButton size="small" onClick={() => { setMapPropertiesError(null); setMapPropertiesOpen(true) }}>
+                      <SettingsSuggestIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Stack>
+                {activeMapGroups.length > 0 && (
+                  <Stack direction="row" spacing={0.5} sx={{ flexWrap: 'wrap' }}>
+                    {activeMapGroups.map((group) => <Chip key={group.id} size="small" variant="outlined" icon={<CreateNewFolderIcon />} label={group.title} />)}
+                  </Stack>
+                )}
+              </>
+            )}
+          </Stack>
+        )}
 
         {appMode === 'utilities' && (
           <UtilityModePanel
@@ -4051,7 +4368,18 @@ export default function App() {
           />
         )}
 
-        {activeEditLayer && (
+        {appMode === 'standard' && leftPanelMode === 'catalog' && token && (
+          <CatalogBrowser
+            token={token}
+            activeMap={activeMap}
+            onLayersAdded={() => {
+              setLeftPanelMode('contents')
+              notify('Catalog layers added to the active map.', 'success')
+            }}
+          />
+        )}
+
+        {appMode === 'standard' && leftPanelMode === 'contents' && activeEditLayer && (
           <Box sx={{ mb: 1.5 }}>
             <Alert severity="info" sx={{ mb: 1 }}>
               Draw/Edit mode active: <strong>{activeEditLayer.name}</strong>
@@ -4076,28 +4404,40 @@ export default function App() {
           </Box>
         )}
 
-        {layersQuery.isLoading && (
+        {appMode === 'standard' && leftPanelMode === 'contents' && (layersQuery.isLoading || activeMapQuery.isLoading) && (
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, py: 1 }}>
             <CircularProgress size={18} />
             <Typography variant="body2">Loading layers...</Typography>
           </Box>
         )}
 
-        {layersQuery.error instanceof Error && (
+        {appMode === 'standard' && leftPanelMode === 'contents' && layersQuery.error instanceof Error && (
           <Alert severity="error" sx={{ mb: 2 }}>
             {layersQuery.error.message}
           </Alert>
         )}
 
-        {!layersQuery.isLoading && !layers.length && (
-          <Alert severity="info">No layers available. Sign in to create private layers.</Alert>
+        {appMode === 'standard' && leftPanelMode === 'contents' && !layersQuery.isLoading && !activeMapQuery.isLoading && !layers.length && (
+          <Alert severity="info">This map has no layers. Open Catalog to search and add data.</Alert>
         )}
 
-        <List dense disablePadding>
+        {appMode === 'standard' && leftPanelMode === 'contents' && (activeMap?.layers ?? []).some((item) => item.layer_kind === 'feature' && !item.source_accessible) && (
+          <Alert severity="warning" sx={{ mb: 1 }}>
+            {(activeMap?.layers ?? []).filter((item) => item.layer_kind === 'feature' && !item.source_accessible).length} map layer source(s) are unavailable or restricted. Ask the owner for access or remove the broken map item.
+          </Alert>
+        )}
+
+        {appMode === 'standard' && leftPanelMode === 'contents' && <List dense disablePadding>
           {layers.map((layer) => {
             const featureCount = featureCountByLayerId[layer.id]
             const isOwner = canManageLayer(ownerName, layer)
             const readOnly = !isOwner
+            const mapLayer = activeMapLayerBySourceId.get(layer.id)
+            const orderedMapLayers = (activeMap?.layers ?? [])
+              .filter((item) => item.layer_kind === 'feature')
+              .sort((a, b) => b.draw_order - a.draw_order)
+            const mapLayerIndex = orderedMapLayers.findIndex((item) => item.id === mapLayer?.id)
+            const groupTitle = mapLayer?.parent_id ? activeMapGroupById.get(mapLayer.parent_id)?.title : null
 
             return (
               <Box key={layer.id}>
@@ -4109,6 +4449,8 @@ export default function App() {
                       checked={resolvedVisibility[layer.id]}
                       onChange={(_, checked) => {
                         setVisibleByLayerId((previous) => ({ ...previous, [layer.id]: checked }))
+                        const mapLayer = activeMapLayerBySourceId.get(layer.id)
+                        if (mapLayer) mapLayerUpdateMutation.mutate({ mapLayerId: mapLayer.id, payload: { visible: checked } })
                       }}
                     />
                   }
@@ -4120,13 +4462,51 @@ export default function App() {
                         {readOnly ? <Chip label="Read-only" size="small" color="default" /> : <Chip label="Owner" size="small" color="success" />}
                       </Stack>
                     }
-                    secondary={`${layerSubtitle(layer)}${featureCount != null ? ` · ${featureCount} features` : ''}`}
+                    secondary={`${groupTitle ? `${groupTitle} · ` : ''}${layerSubtitle(layer)}${featureCount != null ? ` · ${featureCount} features` : ''}`}
                     primaryTypographyProps={{ fontWeight: 600, fontSize: '0.9rem', component: 'div' }}
                     secondaryTypographyProps={{ fontSize: '0.78rem' }}
                   />
                 </ListItem>
 
                 <Stack direction="row" spacing={0.3} sx={{ pl: 0.5, pb: 1, flexWrap: 'wrap' }}>
+                  {mapLayer && activeMapGroups.length > 0 && (
+                    <TextField
+                      select
+                      size="small"
+                      value={mapLayer.parent_id ?? ''}
+                      onChange={(event) => mapLayerUpdateMutation.mutate({
+                        mapLayerId: mapLayer.id,
+                        payload: { parent_id: event.target.value || null },
+                      })}
+                      inputProps={{ 'aria-label': `Group for ${layer.name}` }}
+                      sx={{ minWidth: 116, '& .MuiInputBase-input': { py: 0.45, fontSize: '0.75rem' } }}
+                    >
+                      <MenuItem value="">Map root</MenuItem>
+                      {activeMapGroups.map((group) => <MenuItem key={group.id} value={group.id}>{group.title}</MenuItem>)}
+                    </TextField>
+                  )}
+                  <Tooltip title="Move up in drawing order">
+                    <span>
+                      <IconButton
+                        size="small"
+                        disabled={!mapLayer || mapLayerIndex <= 0 || moveMapLayerMutation.isPending}
+                        onClick={() => moveMapLayerMutation.mutate({ sourceLayerId: layer.id, direction: -1 })}
+                      >
+                        <ArrowUpwardIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+                  <Tooltip title="Move down in drawing order">
+                    <span>
+                      <IconButton
+                        size="small"
+                        disabled={!mapLayer || mapLayerIndex < 0 || mapLayerIndex >= orderedMapLayers.length - 1 || moveMapLayerMutation.isPending}
+                        onClick={() => moveMapLayerMutation.mutate({ sourceLayerId: layer.id, direction: 1 })}
+                      >
+                        <ArrowDownwardIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
                   <Tooltip title={isOwner ? 'Toggle draw/edit mode' : 'Only owner can edit geometry'}>
                     <span>
                       <IconButton
@@ -4213,6 +4593,21 @@ export default function App() {
                     </span>
                   </Tooltip>
 
+                  <Tooltip title="Remove from map (source data is preserved)">
+                    <span>
+                      <IconButton
+                        size="small"
+                        onClick={() => {
+                          const mapLayer = activeMapLayerBySourceId.get(layer.id)
+                          if (mapLayer) removeMapLayerMutation.mutate(mapLayer.id)
+                        }}
+                        disabled={!activeMapLayerBySourceId.has(layer.id) || removeMapLayerMutation.isPending}
+                      >
+                        <ClearIcon fontSize="small" />
+                      </IconButton>
+                    </span>
+                  </Tooltip>
+
                   <Tooltip title={isOwner ? 'Delete layer' : 'Only owner can delete'}>
                     <span>
                       <IconButton
@@ -4231,7 +4626,7 @@ export default function App() {
               </Box>
             )
           })}
-        </List>
+        </List>}
 
         <ActivityFeed events={activityEvents} onClear={() => setActivityEvents([])} />
       </Box>
@@ -4511,6 +4906,9 @@ export default function App() {
           }
         >
           <MapCanvas
+            mapDocumentId={activeMap?.id ?? null}
+            basemapId={typeof activeMap?.basemap?.id === 'string' ? activeMap.basemap.id : 'light'}
+            initialView={(activeMap?.initial_view ?? null) as Partial<MapViewportState> | null}
             layers={layers}
             visibleByLayerId={resolvedVisibility}
             featureCollections={featureCollections}
@@ -4800,6 +5198,51 @@ export default function App() {
         onClose={() => setCreateLayerOpen(false)}
         onSubmit={handleCreateLayer}
       />
+
+      {newMapOpen && <NewMapDialog
+        open={newMapOpen}
+        submitting={createMapMutation.isPending}
+        error={newMapError}
+        onClose={() => setNewMapOpen(false)}
+        onSubmit={(payload) => {
+          setNewMapError(null)
+          createMapMutation.mutate(payload)
+        }}
+      />}
+
+      <Dialog open={newGroupOpen} onClose={() => !createMapGroupMutation.isPending && setNewGroupOpen(false)} fullWidth maxWidth="xs">
+        <DialogTitle>New Map Group</DialogTitle>
+        <DialogContent>
+          <TextField
+            autoFocus
+            fullWidth
+            size="small"
+            label="Group name"
+            value={newGroupName}
+            onChange={(event) => setNewGroupName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && newGroupName.trim()) createMapGroupMutation.mutate(newGroupName.trim())
+            }}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button color="inherit" onClick={() => setNewGroupOpen(false)} disabled={createMapGroupMutation.isPending}>Cancel</Button>
+          <Button variant="contained" disabled={!newGroupName.trim() || createMapGroupMutation.isPending} onClick={() => createMapGroupMutation.mutate(newGroupName.trim())}>
+            Create group
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {mapPropertiesOpen && <MapPropertiesDialog
+        open={mapPropertiesOpen}
+        map={activeMap}
+        submitting={updateMapPropertiesMutation.isPending}
+        deleting={deleteMapMutation.isPending}
+        error={mapPropertiesError}
+        onClose={() => setMapPropertiesOpen(false)}
+        onSave={(payload) => updateMapPropertiesMutation.mutate(payload)}
+        onDelete={() => deleteMapMutation.mutate()}
+      />}
 
       <Suspense fallback={null}>
         <UploadLayerDialog

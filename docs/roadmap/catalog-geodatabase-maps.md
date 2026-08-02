@@ -1,5 +1,11 @@
 # Catalog, Geodatabase, And Multi-Map Architecture
 
+> Implementation status (August 2, 2026): persistent maps, map-layer references,
+> per-map styles and visibility, groups/order, catalog search/favorites,
+> geodatabases, feature datasets, CRS validation, map management, and safe
+> migration backfills are implemented. Governed domains, subtypes, topology,
+> attachments, service connections, and broken-source repair remain roadmap work.
+
 ## Decision
 
 Enterprise GIS should separate reusable spatial data from map composition.
@@ -404,4 +410,3 @@ No existing feature geometry should move during the first implementation.
 - [ArcGIS geodatabase data design](https://pro.arcgis.com/en/pro-app/latest/help/data/geodatabases/overview/view-and-edit-fields-domains-and-subtypes.htm)
 - [ArcGIS Online Browse layers](https://doc.arcgis.com/en/arcgis-online/create-maps/browse-layers.htm)
 - [Esri Web Map specification](https://developers.arcgis.com/web-map-specification/objects/webmap/)
-

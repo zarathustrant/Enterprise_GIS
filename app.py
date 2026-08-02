@@ -13,6 +13,7 @@ from analysis import analysis_bp
 from schema_api import schema_bp
 from enterprise_api import enterprise_bp
 from utility_api import utility_bp
+from catalog_api import catalog_bp
 
 
 def create_app(config=Config):
@@ -36,6 +37,7 @@ def create_app(config=Config):
     app.register_blueprint(analysis_bp,   url_prefix='/api/v1/analysis')
     app.register_blueprint(enterprise_bp, url_prefix='/api/v1')
     app.register_blueprint(utility_bp,    url_prefix='/api/v1/utilities')
+    app.register_blueprint(catalog_bp,    url_prefix='/api/v1')
 
     app.teardown_appcontext(close_db)
 

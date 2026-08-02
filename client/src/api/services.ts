@@ -13,6 +13,11 @@ import type {
   LayerShareLink,
   LayerView,
   MapView,
+  CatalogMap,
+  CatalogMapLayer,
+  CatalogSearchResult,
+  Geodatabase,
+  FeatureDataset,
   QueryFilter,
   QueryResultRow,
   AsyncJob,
@@ -38,6 +43,11 @@ export interface CreateLayerPayload {
   description?: string
   geometry_type?: string
   is_public?: boolean
+  geodatabase_id?: string | null
+  feature_dataset_id?: string | null
+  catalog_status?: 'draft' | 'authoritative' | 'deprecated'
+  tags?: string[]
+  metadata?: Record<string, unknown>
 }
 
 export interface UploadLayerResult {
@@ -60,6 +70,11 @@ export interface UpdateLayerPayload {
   min_zoom?: number
   max_zoom?: number
   is_public?: boolean
+  geodatabase_id?: string | null
+  feature_dataset_id?: string | null
+  catalog_status?: 'draft' | 'authoritative' | 'deprecated'
+  tags?: string[]
+  metadata?: Record<string, unknown>
 }
 
 export interface CreateFeaturePayload {
@@ -546,6 +561,159 @@ export function fetchLayers(token?: string | null): Promise<Layer[]> {
   return apiRequest<Layer[]>('/layers', {}, token)
 }
 
+export function fetchMaps(token: string): Promise<CatalogMap[]> {
+  return apiRequest<CatalogMap[]>('/maps', {}, token)
+}
+
+export function fetchMap(mapId: string, token: string): Promise<CatalogMap> {
+  return apiRequest<CatalogMap>(`/maps/${mapId}`, {}, token)
+}
+
+export function createMap(
+  payload: { name: string; description?: string; basemap?: Record<string, unknown> },
+  token: string,
+): Promise<CatalogMap> {
+  return apiRequest<CatalogMap>('/maps', { method: 'POST', body: JSON.stringify(payload) }, token)
+}
+
+export function duplicateMap(mapId: string, name: string, token: string): Promise<CatalogMap> {
+  return apiRequest<CatalogMap>(
+    `/maps/${mapId}/duplicate`,
+    { method: 'POST', body: JSON.stringify({ name }) },
+    token,
+  )
+}
+
+export function updateMap(
+  mapId: string,
+  payload: Partial<Pick<CatalogMap, 'name' | 'description' | 'basemap' | 'initial_view' | 'settings' | 'is_public' | 'revision'>>,
+  token: string,
+): Promise<CatalogMap> {
+  return apiRequest<CatalogMap>(
+    `/maps/${mapId}`,
+    { method: 'PATCH', body: JSON.stringify(payload) },
+    token,
+  )
+}
+
+export function deleteMap(mapId: string, token: string): Promise<{ message: string }> {
+  return apiRequest<{ message: string }>(`/maps/${mapId}`, { method: 'DELETE' }, token)
+}
+
+export function addMapLayers(
+  mapId: string,
+  sourceLayerIds: string[],
+  token: string,
+  parentId?: string | null,
+): Promise<CatalogMapLayer[]> {
+  return apiRequest<CatalogMapLayer[]>(
+    `/maps/${mapId}/layers`,
+    { method: 'POST', body: JSON.stringify({ source_layer_ids: sourceLayerIds, parent_id: parentId ?? null }) },
+    token,
+  )
+}
+
+export function createMapGroup(mapId: string, title: string, token: string): Promise<CatalogMapLayer> {
+  return apiRequest<CatalogMapLayer>(
+    `/maps/${mapId}/groups`,
+    { method: 'POST', body: JSON.stringify({ title }) },
+    token,
+  )
+}
+
+export function updateMapLayer(
+  mapId: string,
+  mapLayerId: string,
+  payload: Partial<Pick<
+    CatalogMapLayer,
+    | 'title'
+    | 'draw_order'
+    | 'visible'
+    | 'opacity'
+    | 'parent_id'
+    | 'min_zoom'
+    | 'max_zoom'
+    | 'style_override'
+    | 'label_override'
+    | 'popup_config'
+    | 'definition_filter'
+    | 'selection_enabled'
+  >>,
+  token: string,
+): Promise<{ id: string; message: string }> {
+  return apiRequest<{ id: string; message: string }>(
+    `/maps/${mapId}/layers/${mapLayerId}`,
+    { method: 'PATCH', body: JSON.stringify(payload) },
+    token,
+  )
+}
+
+export function removeMapLayer(mapId: string, mapLayerId: string, token: string): Promise<{ message: string }> {
+  return apiRequest<{ message: string }>(
+    `/maps/${mapId}/layers/${mapLayerId}`,
+    { method: 'DELETE' },
+    token,
+  )
+}
+
+export function searchCatalog(
+  parameters: {
+    q?: string
+    collection?: 'organization' | 'mine' | 'shared' | 'favorites'
+    geometry_type?: string
+    status?: string
+    geodatabase_id?: string
+    limit?: number
+    offset?: number
+  },
+  token: string,
+): Promise<CatalogSearchResult> {
+  const query = new URLSearchParams()
+  for (const [key, value] of Object.entries(parameters)) {
+    if (value !== undefined && value !== '') query.set(key, String(value))
+  }
+  return apiRequest<CatalogSearchResult>(`/catalog/items?${query.toString()}`, {}, token)
+}
+
+export function setCatalogFavorite(
+  itemId: string,
+  favorite: boolean,
+  token: string,
+): Promise<{ message: string }> {
+  return apiRequest<{ message: string }>(
+    `/catalog/items/layer/${itemId}/favorite`,
+    { method: favorite ? 'POST' : 'DELETE' },
+    token,
+  )
+}
+
+export function fetchGeodatabases(token: string): Promise<Geodatabase[]> {
+  return apiRequest<Geodatabase[]>('/geodatabases', {}, token)
+}
+
+export function createGeodatabase(
+  payload: { name: string; description?: string; default_crs?: string },
+  token: string,
+): Promise<Geodatabase> {
+  return apiRequest<Geodatabase>('/geodatabases', { method: 'POST', body: JSON.stringify(payload) }, token)
+}
+
+export function fetchFeatureDatasets(geodatabaseId: string, token: string): Promise<FeatureDataset[]> {
+  return apiRequest<FeatureDataset[]>(`/geodatabases/${geodatabaseId}/feature-datasets`, {}, token)
+}
+
+export function createFeatureDataset(
+  geodatabaseId: string,
+  payload: { name: string; description?: string; crs?: string },
+  token: string,
+): Promise<FeatureDataset> {
+  return apiRequest<FeatureDataset>(
+    `/geodatabases/${geodatabaseId}/feature-datasets`,
+    { method: 'POST', body: JSON.stringify(payload) },
+    token,
+  )
+}
+
 export function fetchLayerFeatures(layerId: string, token?: string | null): Promise<FeatureCollection> {
   return apiRequest<FeatureCollection>(`/layers/${layerId}/features`, {}, token)
 }
@@ -664,9 +832,10 @@ export function createLayer(payload: CreateLayerPayload, token: string): Promise
   )
 }
 
-export function deleteLayer(layerId: string, token: string): Promise<{ message: string }> {
+export function deleteLayer(layerId: string, token: string, forceMapReferences = false): Promise<{ message: string }> {
+  const query = forceMapReferences ? '?force_map_references=true' : ''
   return apiRequest<{ message: string }>(
-    `/layers/${layerId}`,
+    `/layers/${layerId}${query}`,
     {
       method: 'DELETE',
     },

@@ -13,7 +13,128 @@ export interface Layer {
   group_name?: string | null
   z_index?: number
   workspace_id?: string | null
+  geodatabase_id?: string | null
+  feature_dataset_id?: string | null
+  catalog_status?: 'draft' | 'authoritative' | 'deprecated'
+  tags?: string[]
+  thumbnail_key?: string | null
+  metadata?: Record<string, unknown>
   created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CatalogMapLayer {
+  id: string
+  map_id: string
+  source_layer_id: string | null
+  parent_id: string | null
+  layer_kind: 'feature' | 'group'
+  title: string
+  draw_order: number
+  visible: boolean
+  min_zoom: number
+  max_zoom: number
+  opacity: number
+  style_override: Record<string, unknown> | null
+  effective_style: Record<string, unknown>
+  source_accessible: boolean
+  source_error: string | null
+  label_override: Record<string, unknown> | null
+  popup_config: Record<string, unknown>
+  definition_filter: Record<string, unknown>
+  selection_enabled: boolean
+  source: {
+    id: string
+    name: string
+    description: string | null
+    geometry_type: string | null
+    crs: string
+    style: Record<string, unknown>
+    is_public: boolean
+    catalog_status: 'draft' | 'authoritative' | 'deprecated'
+    created_by: string | null
+    created_at: string
+    updated_at: string
+  } | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CatalogMap {
+  id: string
+  workspace_id: string | null
+  name: string
+  description: string | null
+  basemap: Record<string, unknown>
+  initial_view: Record<string, unknown>
+  spatial_reference: string
+  settings: Record<string, unknown>
+  thumbnail_key: string | null
+  is_public: boolean
+  is_default: boolean
+  revision: number
+  created_by: string | null
+  owner_name: string | null
+  layer_count: number
+  layers?: CatalogMapLayer[]
+  created_at: string
+  updated_at: string
+}
+
+export interface CatalogItem {
+  id: string
+  item_type: 'layer'
+  name: string
+  description: string | null
+  geometry_type: string | null
+  crs: string
+  owner_name: string | null
+  workspace_id: string | null
+  geodatabase_id: string | null
+  geodatabase_name: string | null
+  feature_dataset_id: string | null
+  feature_dataset_name: string | null
+  catalog_status: 'draft' | 'authoritative' | 'deprecated'
+  tags: string[]
+  thumbnail_key: string | null
+  metadata: Record<string, unknown>
+  is_public: boolean
+  is_favorite: boolean
+  feature_count: number
+  extent: Geometry | null
+  updated_at: string
+}
+
+export interface CatalogSearchResult {
+  items: CatalogItem[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface Geodatabase {
+  id: string
+  workspace_id: string | null
+  name: string
+  alias: string | null
+  description: string | null
+  database_type: 'enterprise' | 'project' | 'external'
+  default_crs: string
+  status: 'active' | 'read_only' | 'archived'
+  created_by: string | null
+  dataset_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface FeatureDataset {
+  id: string
+  geodatabase_id: string
+  name: string
+  alias: string | null
+  description: string | null
+  crs: string
   created_at: string
   updated_at: string
 }

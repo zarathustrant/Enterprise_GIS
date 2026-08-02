@@ -19,6 +19,7 @@ services:
       - ./database/migrations/007_analysis_cancellation.sql:/docker-entrypoint-initdb.d/007_analysis_cancellation.sql:ro
       - ./database/migrations/008_vector_analysis_spatial_indexes.sql:/docker-entrypoint-initdb.d/008_vector_analysis_spatial_indexes.sql:ro
       - ./database/migrations/009_analysis_run_provenance.sql:/docker-entrypoint-initdb.d/009_analysis_run_provenance.sql:ro
+      - ./database/migrations/010_catalog_maps_geodatabases.sql:/docker-entrypoint-initdb.d/010_catalog_maps_geodatabases.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres -d enterprise_gis']
       interval: 5s
