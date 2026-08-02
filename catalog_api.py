@@ -660,7 +660,19 @@ def _serialize_geodatabase(row):
         'name': row['name'], 'alias': row.get('alias'), 'description': row.get('description'),
         'database_type': row['database_type'], 'default_crs': row['default_crs'], 'status': row['status'],
         'created_by': str(row['created_by']) if row.get('created_by') else None,
-        'dataset_count': int(row.get('dataset_count') or 0),
+        # dataset_count is retained for compatibility with older clients.
+        'dataset_count': int(row.get('layer_count') or row.get('dataset_count') or 0),
+        'layer_count': int(row.get('layer_count') or row.get('dataset_count') or 0),
+        'feature_dataset_count': int(row.get('feature_dataset_count') or 0),
+        'created_at': row['created_at'].isoformat(), 'updated_at': row['updated_at'].isoformat(),
+    }
+
+
+def _serialize_feature_dataset(row):
+    return {
+        'id': str(row['id']), 'geodatabase_id': str(row['geodatabase_id']), 'name': row['name'],
+        'alias': row.get('alias'), 'description': row.get('description'), 'crs': row['crs'],
+        'layer_count': int(row.get('layer_count') or 0),
         'created_at': row['created_at'].isoformat(), 'updated_at': row['updated_at'].isoformat(),
     }
 
@@ -690,12 +702,22 @@ def geodatabases():
             if not member or member['role'] not in {'owner', 'admin', 'editor'}:
                 return jsonify({'error': 'Workspace not found or permission denied'}), 404
         cur.execute(
+            """SELECT id FROM geodatabases
+               WHERE LOWER(name) = LOWER(%s) AND (
+                   (%s::uuid IS NULL AND workspace_id IS NULL AND created_by = %s::uuid)
+                   OR (%s::uuid IS NOT NULL AND workspace_id = %s::uuid)
+               )""",
+            (name, workspace_id, user_id, workspace_id, workspace_id),
+        )
+        if cur.fetchone():
+            return jsonify({'error': 'A geodatabase with this name already exists in this location'}), 409
+        cur.execute(
             """INSERT INTO geodatabases (
                    workspace_id, name, alias, description, database_type, default_crs, created_by
                ) VALUES (%s::uuid, %s, %s, %s, %s, %s, %s::uuid) RETURNING *""",
             (workspace_id, name, data.get('alias'), data.get('description'), data.get('database_type', 'enterprise'), data.get('default_crs', 'EPSG:4326'), user_id),
         )
-        row = dict(cur.fetchone()); row['dataset_count'] = 0
+        row = dict(cur.fetchone()); row['layer_count'] = 0; row['feature_dataset_count'] = 0
         db.commit()
         return jsonify(_serialize_geodatabase(row)), 201
     cur.execute(
@@ -713,7 +735,9 @@ def geodatabases():
         )
         db.commit()
     cur.execute(
-        """SELECT g.*, (SELECT COUNT(*) FROM layers l WHERE l.geodatabase_id = g.id) AS dataset_count
+        """SELECT g.*,
+                  (SELECT COUNT(*) FROM layers l WHERE l.geodatabase_id = g.id) AS layer_count,
+                  (SELECT COUNT(*) FROM feature_datasets fd WHERE fd.geodatabase_id = g.id) AS feature_dataset_count
            FROM geodatabases g
            WHERE g.created_by = %s::uuid
               OR EXISTS (SELECT 1 FROM workspace_members wm WHERE wm.workspace_id = g.workspace_id AND wm.user_id = %s::uuid)
@@ -758,19 +782,21 @@ def feature_datasets(geodatabase_id):
             return jsonify({'error': 'name is required'}), 400
         crs = str(data.get('crs') or geodatabase['default_crs'])
         cur.execute(
+            'SELECT id FROM feature_datasets WHERE geodatabase_id = %s::uuid AND LOWER(name) = LOWER(%s)',
+            (geodatabase_id, name),
+        )
+        if cur.fetchone():
+            return jsonify({'error': 'A feature dataset with this name already exists in this geodatabase'}), 409
+        cur.execute(
             """INSERT INTO feature_datasets (geodatabase_id, name, alias, description, crs, created_by)
                VALUES (%s::uuid, %s, %s, %s, %s, %s::uuid) RETURNING *""",
             (geodatabase_id, name, data.get('alias'), data.get('description'), crs, user_id),
         )
-        row = cur.fetchone(); db.commit()
-        return jsonify({
-            'id': str(row['id']), 'geodatabase_id': str(row['geodatabase_id']), 'name': row['name'],
-            'alias': row.get('alias'), 'description': row.get('description'), 'crs': row['crs'],
-            'created_at': row['created_at'].isoformat(), 'updated_at': row['updated_at'].isoformat(),
-        }), 201
-    cur.execute('SELECT * FROM feature_datasets WHERE geodatabase_id = %s::uuid ORDER BY name', (geodatabase_id,))
-    return jsonify([{
-        'id': str(row['id']), 'geodatabase_id': str(row['geodatabase_id']), 'name': row['name'],
-        'alias': row.get('alias'), 'description': row.get('description'), 'crs': row['crs'],
-        'created_at': row['created_at'].isoformat(), 'updated_at': row['updated_at'].isoformat(),
-    } for row in cur.fetchall()])
+        row = dict(cur.fetchone()); row['layer_count'] = 0; db.commit()
+        return jsonify(_serialize_feature_dataset(row)), 201
+    cur.execute(
+        """SELECT fd.*, (SELECT COUNT(*) FROM layers l WHERE l.feature_dataset_id = fd.id) AS layer_count
+           FROM feature_datasets fd WHERE fd.geodatabase_id = %s::uuid ORDER BY fd.name""",
+        (geodatabase_id,),
+    )
+    return jsonify([_serialize_feature_dataset(row) for row in cur.fetchall()])

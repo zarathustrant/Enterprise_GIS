@@ -124,6 +124,8 @@ export interface Geodatabase {
   status: 'active' | 'read_only' | 'archived'
   created_by: string | null
   dataset_count: number
+  layer_count: number
+  feature_dataset_count: number
   created_at: string
   updated_at: string
 }
@@ -135,6 +137,7 @@ export interface FeatureDataset {
   alias: string | null
   description: string | null
   crs: string
+  layer_count: number
   created_at: string
   updated_at: string
 }

@@ -42,6 +42,7 @@ export interface CreateLayerPayload {
   name: string
   description?: string
   geometry_type?: string
+  crs?: string
   is_public?: boolean
   geodatabase_id?: string | null
   feature_dataset_id?: string | null

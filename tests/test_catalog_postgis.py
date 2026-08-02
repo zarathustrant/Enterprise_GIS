@@ -128,12 +128,51 @@ class CatalogPostgisTests(unittest.TestCase):
         )
         self.assertEqual(geodatabase.status_code, 201, geodatabase.get_json())
         geodatabase_id = geodatabase.get_json()['id']
+        self.assertEqual(geodatabase.get_json()['layer_count'], 0)
+        self.assertEqual(geodatabase.get_json()['feature_dataset_count'], 0)
 
-        self.cursor.execute(
-            'UPDATE layers SET geodatabase_id = %s::uuid WHERE id = %s::uuid',
-            (geodatabase_id, self.layer_id),
+        duplicate_geodatabase = self.client.post(
+            '/api/v1/geodatabases',
+            json={'name': 'utility geodatabase'},
+            headers=self.headers,
         )
-        self.connection.commit()
+        self.assertEqual(duplicate_geodatabase.status_code, 409, duplicate_geodatabase.get_json())
+
+        feature_dataset = self.client.post(
+            f'/api/v1/geodatabases/{geodatabase_id}/feature-datasets',
+            json={'name': 'Distribution Assets', 'crs': 'EPSG:4326'},
+            headers=self.headers,
+        )
+        self.assertEqual(feature_dataset.status_code, 201, feature_dataset.get_json())
+        feature_dataset_id = feature_dataset.get_json()['id']
+        self.assertEqual(feature_dataset.get_json()['layer_count'], 0)
+
+        duplicate_dataset = self.client.post(
+            f'/api/v1/geodatabases/{geodatabase_id}/feature-datasets',
+            json={'name': 'distribution assets', 'crs': 'EPSG:4326'},
+            headers=self.headers,
+        )
+        self.assertEqual(duplicate_dataset.status_code, 409, duplicate_dataset.get_json())
+
+        moved = self.client.put(
+            f'/api/v1/layers/{self.layer_id}',
+            json={
+                'geodatabase_id': geodatabase_id,
+                'feature_dataset_id': feature_dataset_id,
+            },
+            headers=self.headers,
+        )
+        self.assertEqual(moved.status_code, 200, moved.get_json())
+
+        feature_datasets = self.client.get(
+            f'/api/v1/geodatabases/{geodatabase_id}/feature-datasets', headers=self.headers
+        )
+        self.assertEqual(feature_datasets.status_code, 200, feature_datasets.get_json())
+        self.assertEqual(feature_datasets.get_json()[0]['layer_count'], 1)
+        geodatabases = self.client.get('/api/v1/geodatabases', headers=self.headers).get_json()
+        counted = next(item for item in geodatabases if item['id'] == geodatabase_id)
+        self.assertEqual(counted['layer_count'], 1)
+        self.assertEqual(counted['feature_dataset_count'], 1)
 
         search = self.client.get(f'/api/v1/catalog/items?q={self.suffix}', headers=self.headers)
         self.assertEqual(search.status_code, 200, search.get_json())

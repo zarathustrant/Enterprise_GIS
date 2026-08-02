@@ -7,7 +7,9 @@ import {
   Chip,
   CircularProgress,
   Collapse,
+  Divider,
   FormControl,
+  FormControlLabel,
   IconButton,
   InputAdornment,
   MenuItem,
@@ -23,10 +25,13 @@ import FavoriteIcon from '@mui/icons-material/Favorite'
 import FavoriteBorderIcon from '@mui/icons-material/FavoriteBorder'
 import SearchIcon from '@mui/icons-material/Search'
 import StorageIcon from '@mui/icons-material/Storage'
+import AccountTreeIcon from '@mui/icons-material/AccountTree'
+import CreateNewFolderIcon from '@mui/icons-material/CreateNewFolder'
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   addMapLayers,
+  createLayer,
   createFeatureDataset,
   createGeodatabase,
   fetchFeatureDatasets,
@@ -60,11 +65,21 @@ export function CatalogBrowser({ token, activeMap, onLayersAdded }: CatalogBrows
   const [collection, setCollection] = useState<Collection>('organization')
   const [geometryType, setGeometryType] = useState('')
   const [status, setStatus] = useState('')
-  const [geodatabaseId, setGeodatabaseId] = useState('')
+  const [catalogGeodatabaseId, setCatalogGeodatabaseId] = useState('')
+  const [activeGeodatabaseId, setActiveGeodatabaseId] = useState('')
+  const [selectedDatasetId, setSelectedDatasetId] = useState('')
   const [creatingGeodatabase, setCreatingGeodatabase] = useState(false)
   const [geodatabaseName, setGeodatabaseName] = useState('')
+  const [geodatabaseCrs, setGeodatabaseCrs] = useState('EPSG:4326')
   const [creatingDataset, setCreatingDataset] = useState(false)
   const [datasetName, setDatasetName] = useState('')
+  const [datasetCrs, setDatasetCrs] = useState('')
+  const [creatingLayer, setCreatingLayer] = useState(false)
+  const [layerName, setLayerName] = useState('')
+  const [layerDescription, setLayerDescription] = useState('')
+  const [layerGeometryType, setLayerGeometryType] = useState('Point')
+  const [addCreatedLayerToMap, setAddCreatedLayerToMap] = useState(true)
+  const [storageMessage, setStorageMessage] = useState<string | null>(null)
   const [organizeGeodatabaseId, setOrganizeGeodatabaseId] = useState('')
   const [selected, setSelected] = useState<string[]>([])
   const [detailsItemId, setDetailsItemId] = useState<string | null>(null)
@@ -76,8 +91,8 @@ export function CatalogBrowser({ token, activeMap, onLayersAdded }: CatalogBrows
   }, [query])
 
   const catalogQuery = useQuery({
-    queryKey: ['catalog-items', token, debouncedQuery, collection, geometryType, status, geodatabaseId],
-    queryFn: () => searchCatalog({ q: debouncedQuery, collection, geometry_type: geometryType, status, geodatabase_id: geodatabaseId, limit: 100 }, token),
+    queryKey: ['catalog-items', token, debouncedQuery, collection, geometryType, status, catalogGeodatabaseId],
+    queryFn: () => searchCatalog({ q: debouncedQuery, collection, geometry_type: geometryType, status, geodatabase_id: catalogGeodatabaseId, limit: 100 }, token),
     staleTime: 15_000,
   })
 
@@ -87,20 +102,30 @@ export function CatalogBrowser({ token, activeMap, onLayersAdded }: CatalogBrows
     staleTime: 30_000,
   })
 
+  const workingGeodatabaseId = geodatabasesQuery.data?.some((item) => item.id === activeGeodatabaseId)
+    ? activeGeodatabaseId
+    : (geodatabasesQuery.data?.[0]?.id ?? '')
+
   const createGeodatabaseMutation = useMutation({
-    mutationFn: () => createGeodatabase({ name: geodatabaseName.trim() }, token),
+    mutationFn: () => createGeodatabase({
+      name: geodatabaseName.trim(),
+      default_crs: geodatabaseCrs.trim() || 'EPSG:4326',
+    }, token),
     onSuccess: (created) => {
       setGeodatabaseName('')
+      setGeodatabaseCrs('EPSG:4326')
       setCreatingGeodatabase(false)
-      setGeodatabaseId(created.id)
+      setActiveGeodatabaseId(created.id)
+      setSelectedDatasetId('')
+      setStorageMessage(`Created geodatabase “${created.name}”. Choose a feature dataset or create layers at its root.`)
       queryClient.invalidateQueries({ queryKey: ['geodatabases'] })
     },
   })
 
   const featureDatasetsQuery = useQuery({
-    queryKey: ['feature-datasets', geodatabaseId, token],
-    queryFn: () => fetchFeatureDatasets(geodatabaseId, token),
-    enabled: Boolean(geodatabaseId),
+    queryKey: ['feature-datasets', workingGeodatabaseId, token],
+    queryFn: () => fetchFeatureDatasets(workingGeodatabaseId, token),
+    enabled: Boolean(workingGeodatabaseId),
   })
 
   const organizeDatasetsQuery = useQuery({
@@ -111,17 +136,58 @@ export function CatalogBrowser({ token, activeMap, onLayersAdded }: CatalogBrows
 
   const createDatasetMutation = useMutation({
     mutationFn: () => {
-      const geodatabase = geodatabasesQuery.data?.find((item) => item.id === geodatabaseId)
+      const geodatabase = geodatabasesQuery.data?.find((item) => item.id === workingGeodatabaseId)
       return createFeatureDataset(
-        geodatabaseId,
-        { name: datasetName.trim(), crs: geodatabase?.default_crs },
+        workingGeodatabaseId,
+        { name: datasetName.trim(), crs: datasetCrs.trim() || geodatabase?.default_crs },
         token,
       )
     },
-    onSuccess: () => {
+    onSuccess: (created) => {
       setDatasetName('')
+      setDatasetCrs('')
       setCreatingDataset(false)
-      queryClient.invalidateQueries({ queryKey: ['feature-datasets', geodatabaseId] })
+      setSelectedDatasetId(created.id)
+      setStorageMessage(`Created feature dataset “${created.name}”. New layers here must use ${created.crs}.`)
+      queryClient.invalidateQueries({ queryKey: ['feature-datasets', workingGeodatabaseId] })
+      queryClient.invalidateQueries({ queryKey: ['geodatabases'] })
+    },
+  })
+
+  const createLayerMutation = useMutation({
+    mutationFn: async () => {
+      const geodatabase = geodatabasesQuery.data?.find((item) => item.id === workingGeodatabaseId)
+      const dataset = featureDatasetsQuery.data?.find((item) => item.id === selectedDatasetId)
+      if (!geodatabase) throw new Error('Select a working geodatabase first.')
+      const created = await createLayer({
+        name: layerName.trim(),
+        description: layerDescription.trim() || undefined,
+        geometry_type: layerGeometryType,
+        crs: dataset?.crs ?? geodatabase.default_crs,
+        geodatabase_id: geodatabase.id,
+        feature_dataset_id: dataset?.id ?? null,
+      }, token)
+      if (activeMap && addCreatedLayerToMap) {
+        await addMapLayers(activeMap.id, [created.id], token)
+      }
+      return { created, dataset, addedToMap: Boolean(activeMap && addCreatedLayerToMap) }
+    },
+    onSuccess: ({ created, dataset, addedToMap }) => {
+      setLayerName('')
+      setLayerDescription('')
+      setCreatingLayer(false)
+      setStorageMessage(
+        `Created layer “${created.name}” in ${dataset?.name ?? 'the geodatabase root'}${addedToMap ? ' and added it to the active map' : ''}.`,
+      )
+      queryClient.invalidateQueries({ queryKey: ['catalog-items'] })
+      queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['geodatabases'] })
+      queryClient.invalidateQueries({ queryKey: ['feature-datasets', workingGeodatabaseId] })
+      if (addedToMap) {
+        queryClient.invalidateQueries({ queryKey: ['catalog-map', activeMap?.id] })
+        queryClient.invalidateQueries({ queryKey: ['catalog-maps'] })
+        onLayersAdded()
+      }
     },
   })
 
@@ -134,6 +200,8 @@ export function CatalogBrowser({ token, activeMap, onLayersAdded }: CatalogBrows
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['catalog-items'] })
       queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['geodatabases'] })
+      queryClient.invalidateQueries({ queryKey: ['feature-datasets'] })
     },
   })
 
@@ -162,6 +230,9 @@ export function CatalogBrowser({ token, activeMap, onLayersAdded }: CatalogBrows
   })
 
   const items = catalogQuery.data?.items ?? []
+  const activeGeodatabase = geodatabasesQuery.data?.find((item) => item.id === workingGeodatabaseId) ?? null
+  const selectedDataset = featureDatasetsQuery.data?.find((item) => item.id === selectedDatasetId) ?? null
+  const workingCrs = selectedDataset?.crs ?? activeGeodatabase?.default_crs ?? 'EPSG:4326'
 
   return (
     <Stack spacing={1.25}>
@@ -174,16 +245,19 @@ export function CatalogBrowser({ token, activeMap, onLayersAdded }: CatalogBrows
         InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
       />
 
-      <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1.5, p: 1 }}>
+      <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1.5, p: 1.25, bgcolor: 'background.paper' }}>
         <Stack direction="row" spacing={0.75} alignItems="center">
           <StorageIcon fontSize="small" color="primary" />
-          <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>Geodatabases</Typography>
+          <Box sx={{ flexGrow: 1 }}>
+            <Typography variant="subtitle2">Data storage</Typography>
+            <Typography variant="caption" color="text.secondary">Choose where source layers are stored.</Typography>
+          </Box>
           <Button size="small" onClick={() => setCreatingGeodatabase((value) => !value)}>
-            {creatingGeodatabase ? 'Cancel' : 'New'}
+            {creatingGeodatabase ? 'Cancel' : 'New geodatabase'}
           </Button>
         </Stack>
         <Collapse in={creatingGeodatabase}>
-          <Stack direction="row" spacing={0.75} mt={1}>
+          <Stack spacing={0.75} mt={1}>
             <TextField
               autoFocus
               size="small"
@@ -195,46 +269,76 @@ export function CatalogBrowser({ token, activeMap, onLayersAdded }: CatalogBrows
                 if (event.key === 'Enter' && geodatabaseName.trim()) createGeodatabaseMutation.mutate()
               }}
             />
-            <Button
-              variant="contained"
+            <TextField
               size="small"
-              disabled={!geodatabaseName.trim() || createGeodatabaseMutation.isPending}
-              onClick={() => createGeodatabaseMutation.mutate()}
-            >
-              Create
-            </Button>
+              fullWidth
+              label="Default coordinate system"
+              value={geodatabaseCrs}
+              onChange={(event) => setGeodatabaseCrs(event.target.value)}
+              helperText="Used by layers created at the geodatabase root. Example: EPSG:4326."
+            />
+            <Stack direction="row" justifyContent="flex-end">
+              <Button
+                variant="contained"
+                size="small"
+                disabled={!geodatabaseName.trim() || createGeodatabaseMutation.isPending}
+                onClick={() => createGeodatabaseMutation.mutate()}
+              >
+                Create geodatabase
+              </Button>
+            </Stack>
           </Stack>
           {createGeodatabaseMutation.error instanceof Error && (
             <Alert severity="error" sx={{ mt: 1 }}>{createGeodatabaseMutation.error.message}</Alert>
           )}
         </Collapse>
-        <FormControl size="small" fullWidth sx={{ mt: 1 }}>
-          <Select
-            value={geodatabaseId}
-            onChange={(event) => setGeodatabaseId(event.target.value)}
-            displayEmpty
-            aria-label="Geodatabase filter"
-          >
-            <MenuItem value="">All geodatabases</MenuItem>
-            {(geodatabasesQuery.data ?? []).map((geodatabase) => (
-              <MenuItem key={geodatabase.id} value={geodatabase.id}>
-                {geodatabase.name} ({geodatabase.dataset_count})
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
-        {geodatabaseId && (
+
+        <TextField
+          select
+          size="small"
+          fullWidth
+          sx={{ mt: 1 }}
+          label="Working geodatabase"
+          value={workingGeodatabaseId}
+          onChange={(event) => {
+            setActiveGeodatabaseId(event.target.value)
+            setSelectedDatasetId('')
+            setCreatingDataset(false)
+            setCreatingLayer(false)
+            setDatasetCrs('')
+            setStorageMessage(null)
+          }}
+          inputProps={{ 'aria-label': 'Working geodatabase' }}
+          slotProps={{ inputLabel: { shrink: true } }}
+        >
+          {(geodatabasesQuery.data ?? []).map((geodatabase) => (
+            <MenuItem key={geodatabase.id} value={geodatabase.id}>
+              {geodatabase.name}
+            </MenuItem>
+          ))}
+        </TextField>
+
+        {activeGeodatabase && (
           <>
-            <Stack direction="row" spacing={0.75} alignItems="center" mt={0.75}>
-              <Typography variant="caption" color="text.secondary" sx={{ flexGrow: 1 }}>
-                {(featureDatasetsQuery.data ?? []).length} feature datasets
-              </Typography>
-              <Button size="small" onClick={() => setCreatingDataset((value) => !value)}>
+            <Stack direction="row" spacing={0.5} mt={0.75} sx={{ flexWrap: 'wrap' }}>
+              <Chip size="small" label={activeGeodatabase.default_crs} />
+              <Chip size="small" variant="outlined" label={`${activeGeodatabase.layer_count} layers`} />
+              <Chip size="small" variant="outlined" label={`${activeGeodatabase.feature_dataset_count} feature datasets`} />
+            </Stack>
+
+            <Divider sx={{ my: 1 }} />
+            <Stack direction="row" spacing={0.75} alignItems="center">
+              <AccountTreeIcon fontSize="small" color="action" />
+              <Typography variant="subtitle2" sx={{ flexGrow: 1 }}>Feature datasets</Typography>
+              <Button size="small" startIcon={<CreateNewFolderIcon />} onClick={() => setCreatingDataset((value) => !value)}>
                 {creatingDataset ? 'Cancel' : 'New dataset'}
               </Button>
             </Stack>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.25 }}>
+              Feature datasets group related layers that share one coordinate system.
+            </Typography>
             <Collapse in={creatingDataset}>
-              <Stack direction="row" spacing={0.75} mt={0.75}>
+              <Stack spacing={0.75} mt={0.75}>
                 <TextField
                   size="small"
                   fullWidth
@@ -242,22 +346,116 @@ export function CatalogBrowser({ token, activeMap, onLayersAdded }: CatalogBrows
                   value={datasetName}
                   onChange={(event) => setDatasetName(event.target.value)}
                 />
-                <Button
+                <TextField
                   size="small"
-                  variant="outlined"
-                  disabled={!datasetName.trim() || createDatasetMutation.isPending}
-                  onClick={() => createDatasetMutation.mutate()}
-                >
-                  Create
-                </Button>
+                  fullWidth
+                  label="Coordinate system"
+                  value={datasetCrs || activeGeodatabase.default_crs}
+                  onChange={(event) => setDatasetCrs(event.target.value)}
+                  helperText="Layers assigned to this dataset must use this CRS."
+                />
+                <Stack direction="row" justifyContent="flex-end">
+                  <Button
+                    size="small"
+                    variant="contained"
+                    disabled={!datasetName.trim() || createDatasetMutation.isPending}
+                    onClick={() => createDatasetMutation.mutate()}
+                  >
+                    Create feature dataset
+                  </Button>
+                </Stack>
               </Stack>
               {createDatasetMutation.error instanceof Error && (
                 <Alert severity="error" sx={{ mt: 0.75 }}>{createDatasetMutation.error.message}</Alert>
               )}
             </Collapse>
+
+            <TextField
+              select
+              size="small"
+              fullWidth
+              sx={{ mt: 1 }}
+              label="Layer location"
+              value={selectedDatasetId}
+              onChange={(event) => {
+                setSelectedDatasetId(event.target.value)
+                setStorageMessage(null)
+              }}
+              inputProps={{ 'aria-label': 'Layer location' }}
+              slotProps={{ inputLabel: { shrink: true } }}
+            >
+              <MenuItem value="">Geodatabase root · {activeGeodatabase.default_crs}</MenuItem>
+              {(featureDatasetsQuery.data ?? []).map((dataset) => (
+                <MenuItem key={dataset.id} value={dataset.id}>
+                  {dataset.name} · {dataset.crs} · {dataset.layer_count} layers
+                </MenuItem>
+              ))}
+            </TextField>
+            {!featureDatasetsQuery.isLoading && !(featureDatasetsQuery.data ?? []).length && (
+              <Alert severity="info" sx={{ mt: 0.75 }}>
+                This geodatabase has no feature datasets yet. Create one above, or store layers at the geodatabase root.
+              </Alert>
+            )}
+
+            <Box sx={{ mt: 1, p: 1, borderRadius: 1, bgcolor: 'action.hover' }}>
+              <Typography variant="caption" color="text.secondary">Selected location</Typography>
+              <Typography variant="body2" sx={{ fontWeight: 700 }}>
+                {activeGeodatabase.name} / {selectedDataset?.name ?? 'Root'}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">Coordinate system: {workingCrs}</Typography>
+              <Stack direction="row" justifyContent="flex-end" mt={0.5}>
+                <Button size="small" variant="outlined" onClick={() => setCreatingLayer((value) => !value)}>
+                  {creatingLayer ? 'Cancel' : 'New layer here'}
+                </Button>
+              </Stack>
+            </Box>
+
+            <Collapse in={creatingLayer}>
+              <Stack spacing={0.75} mt={0.75}>
+                <TextField size="small" label="Layer name" value={layerName} onChange={(event) => setLayerName(event.target.value)} />
+                <TextField size="small" label="Description" value={layerDescription} onChange={(event) => setLayerDescription(event.target.value)} />
+                <TextField select size="small" label="Geometry type" value={layerGeometryType} onChange={(event) => setLayerGeometryType(event.target.value)}>
+                  <MenuItem value="Point">Point</MenuItem>
+                  <MenuItem value="LineString">Line</MenuItem>
+                  <MenuItem value="Polygon">Polygon</MenuItem>
+                  <MenuItem value="MultiPolygon">Multipart polygon</MenuItem>
+                </TextField>
+                <FormControlLabel
+                  control={<Checkbox checked={addCreatedLayerToMap} onChange={(_, checked) => setAddCreatedLayerToMap(checked)} />}
+                  label={activeMap ? `Add to active map “${activeMap.name}”` : 'Add to active map (no map selected)'}
+                  disabled={!activeMap}
+                />
+                <Button
+                  size="small"
+                  variant="contained"
+                  disabled={!layerName.trim() || createLayerMutation.isPending}
+                  onClick={() => createLayerMutation.mutate()}
+                >
+                  Create layer in {selectedDataset?.name ?? 'geodatabase root'}
+                </Button>
+                {createLayerMutation.error instanceof Error && <Alert severity="error">{createLayerMutation.error.message}</Alert>}
+              </Stack>
+            </Collapse>
+            {storageMessage && <Alert severity="success" sx={{ mt: 0.75 }}>{storageMessage}</Alert>}
           </>
         )}
       </Box>
+
+      <TextField
+        select
+        size="small"
+        fullWidth
+        label="Filter catalog by geodatabase"
+        value={catalogGeodatabaseId}
+        onChange={(event) => setCatalogGeodatabaseId(event.target.value)}
+        inputProps={{ 'aria-label': 'Catalog geodatabase filter' }}
+        slotProps={{ inputLabel: { shrink: true } }}
+      >
+        <MenuItem value="">All geodatabases</MenuItem>
+        {(geodatabasesQuery.data ?? []).map((geodatabase) => (
+          <MenuItem key={geodatabase.id} value={geodatabase.id}>{geodatabase.name}</MenuItem>
+        ))}
+      </TextField>
 
       <Stack direction="row" spacing={0.75}>
         <FormControl size="small" fullWidth>

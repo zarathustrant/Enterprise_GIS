@@ -42,6 +42,29 @@ The Catalog tab supports:
 
 Feature-dataset assignment is rejected when the layer CRS differs from the feature-dataset CRS. The API instructs the user to reproject first rather than silently changing coordinates.
 
+### Create A Geodatabase, Dataset, And Layer
+
+The Catalog tab's **Data storage** section implements the hierarchy directly:
+
+```text
+Geodatabase
+|- Root layers (use the geodatabase default CRS)
+`- Feature dataset (defines one CRS)
+   `- Layers / feature classes (must use the feature-dataset CRS)
+```
+
+1. Select **New geodatabase**, enter its name and default coordinate system, then create it.
+2. The new geodatabase becomes the **Working geodatabase**. This controls where new source data is stored; it does not filter the catalog search results.
+3. Either keep **Layer location** at **Geodatabase root**, or select **New dataset** to create a same-CRS feature dataset for related feature classes.
+4. Confirm the **Selected location** breadcrumb and coordinate system.
+5. Select **New layer here**, enter the feature-class name and geometry type, and optionally add it to the active map.
+
+The **Filter catalog by geodatabase** control is intentionally separate. It only narrows search results and never changes the destination of a create operation.
+
+A feature dataset is not itself a drawable layer and does not hold features directly. It is a schema container for related point, line, or polygon feature classes that need a shared coordinate system, and later can participate in topology, networks, or other controller datasets.
+
+The UI reports both layer count and feature-dataset count for each geodatabase. Feature datasets separately report their contained layer count, avoiding the previous ambiguous `dataset_count` display.
+
 ## API Surface
 
 ```text
