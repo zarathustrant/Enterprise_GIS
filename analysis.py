@@ -220,6 +220,17 @@ def buffer():
     )
 
 
+@analysis_bp.route('/multi-ring-buffer', methods=['POST'])
+@jwt_required()
+def multi_ring_buffer():
+    return _run_layer_tool(
+        'multi_ring_buffer',
+        request.get_json() or {},
+        ('layer_id',),
+        'analysis_multi_ring_buffer',
+    )
+
+
 # ── Intersect ─────────────────────────────────────────────────────────────────
 
 @analysis_bp.route('/intersect', methods=['POST'])
@@ -293,6 +304,19 @@ def summarize_within():
         request.get_json() or {},
         ('zone_layer', 'summary_layer'),
         'analysis_summarize_within',
+    )
+
+
+# ── Near / Proximity ─────────────────────────────────────────────────────────
+
+@analysis_bp.route('/near', methods=['POST'])
+@jwt_required()
+def near():
+    return _run_layer_tool(
+        'near',
+        request.get_json() or {},
+        ('source_layer', 'near_layer'),
+        'analysis_near',
     )
 
 

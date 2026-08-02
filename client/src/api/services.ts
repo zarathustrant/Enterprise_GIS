@@ -267,6 +267,16 @@ export interface AnalysisClipPayload {
   environments?: AnalysisEnvironments
 }
 
+export interface AnalysisMultiRingBufferPayload {
+  layer_id: string
+  distances: number[]
+  output_name: string
+  ring_type?: 'rings' | 'disks'
+  async?: boolean
+  execution_mode?: 'automatic' | 'synchronous' | 'asynchronous'
+  environments?: AnalysisEnvironments
+}
+
 export interface AnalysisErasePayload {
   input_layer: string
   mask_layer: string
@@ -322,6 +332,21 @@ export interface AnalysisSummarizeWithinPayload {
   environments?: AnalysisEnvironments
 }
 
+export interface AnalysisNearPayload {
+  source_layer: string
+  near_layer: string
+  output_name: string
+  nearest_count?: number
+  max_distance?: number | null
+  exclude_self?: boolean
+  output_geometry?: 'connecting_line' | 'source_point' | 'near_point'
+  source_prefix?: string
+  near_prefix?: string
+  async?: boolean
+  execution_mode?: 'automatic' | 'synchronous' | 'asynchronous'
+  environments?: AnalysisEnvironments
+}
+
 export interface AnalysisWithinPayload {
   layer_id: string
   polygon: Geometry
@@ -343,7 +368,7 @@ export interface CreateViewPayload {
 }
 
 export interface CreateJobPayload {
-  job_type: 'analysis.buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.dissolve' | 'analysis.spatial_join' | 'analysis.summarize_within' | 'analysis.within'
+  job_type: 'analysis.buffer' | 'analysis.multi_ring_buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.dissolve' | 'analysis.spatial_join' | 'analysis.summarize_within' | 'analysis.near' | 'analysis.within'
   payload: Record<string, unknown>
 }
 
@@ -1202,6 +1227,20 @@ export function runIntersectAnalysis(
   )
 }
 
+export function runMultiRingBufferAnalysis(
+  payload: AnalysisMultiRingBufferPayload,
+  token: string,
+): Promise<AnalysisLayerResponse> {
+  return apiRequest<AnalysisLayerResponse>(
+    '/analysis/multi-ring-buffer',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token,
+  )
+}
+
 export function runClipAnalysis(
   payload: AnalysisClipPayload,
   token: string,
@@ -1264,6 +1303,20 @@ export function runSummarizeWithinAnalysis(
 ): Promise<AnalysisLayerResponse> {
   return apiRequest<AnalysisLayerResponse>(
     '/analysis/summarize-within',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token,
+  )
+}
+
+export function runNearAnalysis(
+  payload: AnalysisNearPayload,
+  token: string,
+): Promise<AnalysisLayerResponse> {
+  return apiRequest<AnalysisLayerResponse>(
+    '/analysis/near',
     {
       method: 'POST',
       body: JSON.stringify(payload),

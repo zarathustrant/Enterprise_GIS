@@ -26,7 +26,7 @@ import { fetchLayerFields } from '../api/services'
 import { useAuthStore } from '../store/auth'
 import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 
-export type AnalysisTab = 'buffer' | 'intersect' | 'clip' | 'erase' | 'dissolve' | 'spatial_join' | 'summarize_within' | 'within'
+export type AnalysisTab = 'buffer' | 'multi_ring_buffer' | 'intersect' | 'clip' | 'erase' | 'dissolve' | 'spatial_join' | 'summarize_within' | 'near' | 'within'
 export type AnalysisJobStatus = 'queued' | 'running' | 'success' | 'error'
 
 export interface AnalysisJobState {
@@ -45,6 +45,7 @@ interface AnalysisDialogProps {
   workMode?: boolean
   onClose: () => void
   onRunBuffer: (payload: { layerId: string; distance: number; outputName: string }) => void
+  onRunMultiRingBuffer: (payload: { layerId: string; distances: number[]; outputName: string; ringType: 'rings' | 'disks' }) => void
   onRunIntersect: (payload: {
     layerA: string
     layerB: string
@@ -83,6 +84,17 @@ interface AnalysisDialogProps {
     includeEmpty: boolean
     boundaryPredicate: 'intersects' | 'within'
   }) => void
+  onRunNear: (payload: {
+    sourceLayer: string
+    nearLayer: string
+    outputName: string
+    nearestCount: number
+    maxDistance: number | null
+    excludeSelf: boolean
+    outputGeometry: 'connecting_line' | 'source_point' | 'near_point'
+    sourcePrefix: string
+    nearPrefix: string
+  }) => void
   onRunWithin: (payload: { layerId: string; polygon: string }) => void
 }
 
@@ -96,18 +108,24 @@ export function AnalysisDialog({
   workMode = false,
   onClose,
   onRunBuffer,
+  onRunMultiRingBuffer,
   onRunIntersect,
   onRunClip,
   onRunErase,
   onRunDissolve,
   onRunSpatialJoin,
   onRunSummarizeWithin,
+  onRunNear,
   onRunWithin,
 }: AnalysisDialogProps) {
   const [tab, setTab] = useState<AnalysisTab>('buffer')
   const [bufferLayerId, setBufferLayerId] = useState('')
   const [bufferDistance, setBufferDistance] = useState('100')
   const [bufferName, setBufferName] = useState('Buffer')
+  const [multiRingLayerId, setMultiRingLayerId] = useState('')
+  const [multiRingDistances, setMultiRingDistances] = useState('100, 250, 500')
+  const [multiRingName, setMultiRingName] = useState('Multi-Ring Buffer')
+  const [multiRingType, setMultiRingType] = useState<'rings' | 'disks'>('rings')
 
   const [intersectA, setIntersectA] = useState('')
   const [intersectB, setIntersectB] = useState('')
@@ -151,6 +169,16 @@ export function AnalysisDialog({
   const [summaryStatisticType, setSummaryStatisticType] = useState<'sum' | 'minimum' | 'maximum' | 'mean'>('sum')
   const [summaryIncludeEmpty, setSummaryIncludeEmpty] = useState(true)
   const [summaryBoundaryPredicate, setSummaryBoundaryPredicate] = useState<'intersects' | 'within'>('intersects')
+
+  const [nearSourceLayer, setNearSourceLayer] = useState('')
+  const [nearCandidateLayer, setNearCandidateLayer] = useState('')
+  const [nearOutputName, setNearOutputName] = useState('Near')
+  const [nearCount, setNearCount] = useState('1')
+  const [nearMaxDistance, setNearMaxDistance] = useState('')
+  const [nearExcludeSelf, setNearExcludeSelf] = useState(true)
+  const [nearOutputGeometry, setNearOutputGeometry] = useState<'connecting_line' | 'source_point' | 'near_point'>('connecting_line')
+  const [nearSourcePrefix, setNearSourcePrefix] = useState('source_')
+  const [nearFieldPrefix, setNearFieldPrefix] = useState('near_')
 
   const [withinLayerId, setWithinLayerId] = useState('')
   const [withinPolygon, setWithinPolygon] = useState(
@@ -277,12 +305,14 @@ export function AnalysisDialog({
           sx={{ mb: 2 }}
         >
           <Tab value="buffer" label="Buffer" />
+          <Tab value="multi_ring_buffer" label="Multi-Ring" />
           <Tab value="intersect" label="Intersect" />
           <Tab value="clip" label="Clip" />
           <Tab value="erase" label="Erase" />
           <Tab value="dissolve" label="Dissolve" />
           <Tab value="spatial_join" label="Spatial Join" />
           <Tab value="summarize_within" label="Summarize Within" />
+          <Tab value="near" label="Near" />
           <Tab value="within" label="Within" />
         </Tabs>
 
@@ -348,6 +378,36 @@ export function AnalysisDialog({
             >
               Run Buffer
             </Button>
+          </Box>
+        )}
+
+        {tab === 'multi_ring_buffer' && (
+          <Box display="grid" gap={2}>
+            <TextField label="Source layer" value={multiRingLayerId} onChange={(event) => setMultiRingLayerId(event.target.value)} size="small" select>
+              {layerOptions.map((item) => <MenuItem key={item.value} value={item.value}>{item.label}</MenuItem>)}
+            </TextField>
+            <TextField
+              label="Distances (metres)"
+              value={multiRingDistances}
+              onChange={(event) => setMultiRingDistances(event.target.value)}
+              size="small"
+              helperText="Comma-separated positive distances; duplicates are removed and values are sorted."
+            />
+            <TextField label="Band behavior" value={multiRingType} onChange={(event) => setMultiRingType(event.target.value as 'rings' | 'disks')} size="small" select>
+              <MenuItem value="rings">Non-overlapping rings</MenuItem>
+              <MenuItem value="disks">Cumulative buffer disks</MenuItem>
+            </TextField>
+            <TextField label="Output layer name" value={multiRingName} onChange={(event) => setMultiRingName(event.target.value)} size="small" />
+            <Button
+              variant="contained"
+              disabled={running || !multiRingLayerId || !multiRingDistances.trim()}
+              onClick={() => onRunMultiRingBuffer({
+                layerId: multiRingLayerId,
+                distances: multiRingDistances.split(',').map((value) => Number(value.trim())).filter((value) => Number.isFinite(value) && value > 0),
+                outputName: multiRingName || 'Multi-Ring Buffer',
+                ringType: multiRingType,
+              })}
+            >Run Multi-Ring Buffer</Button>
           </Box>
         )}
 
@@ -688,6 +748,50 @@ export function AnalysisDialog({
                 boundaryPredicate: summaryBoundaryPredicate,
               })}
             >Run Summarize Within</Button>
+          </Box>
+        )}
+
+        {tab === 'near' && (
+          <Box display="grid" gap={2}>
+            <TextField label="Source features" value={nearSourceLayer} onChange={(event) => setNearSourceLayer(event.target.value)} size="small" select>
+              {layerOptions.map((item) => <MenuItem key={item.value} value={item.value}>{item.label}</MenuItem>)}
+            </TextField>
+            <TextField label="Near candidates" value={nearCandidateLayer} onChange={(event) => setNearCandidateLayer(event.target.value)} size="small" select>
+              {layerOptions.map((item) => <MenuItem key={item.value} value={item.value}>{item.label}</MenuItem>)}
+            </TextField>
+            <Alert severity="info">
+              Results are ranked per source using indexed nearest candidates, then measured on the WGS84 spheroid.
+            </Alert>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField label="Nearest per source" type="number" value={nearCount} onChange={(event) => setNearCount(event.target.value)} inputProps={{ min: 1, max: 100, step: 1 }} size="small" />
+              <TextField label="Maximum distance (m)" type="number" value={nearMaxDistance} onChange={(event) => setNearMaxDistance(event.target.value)} helperText="Optional" size="small" />
+            </Box>
+            <TextField label="Map output geometry" value={nearOutputGeometry} onChange={(event) => setNearOutputGeometry(event.target.value as typeof nearOutputGeometry)} size="small" select>
+              <MenuItem value="connecting_line">Connection line</MenuItem>
+              <MenuItem value="source_point">Closest point on source</MenuItem>
+              <MenuItem value="near_point">Closest point on near feature</MenuItem>
+            </TextField>
+            <FormControlLabel control={<Switch checked={nearExcludeSelf} onChange={(event) => setNearExcludeSelf(event.target.checked)} />} label="Exclude the same feature ID when layers match" />
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField label="Source field prefix" value={nearSourcePrefix} onChange={(event) => setNearSourcePrefix(event.target.value)} size="small" />
+              <TextField label="Near field prefix" value={nearFieldPrefix} onChange={(event) => setNearFieldPrefix(event.target.value)} size="small" />
+            </Box>
+            <TextField label="Output layer name" value={nearOutputName} onChange={(event) => setNearOutputName(event.target.value)} size="small" />
+            <Button
+              variant="contained"
+              disabled={running || !nearSourceLayer || !nearCandidateLayer || Number(nearCount) < 1 || Number(nearCount) > 100}
+              onClick={() => onRunNear({
+                sourceLayer: nearSourceLayer,
+                nearLayer: nearCandidateLayer,
+                outputName: nearOutputName || 'Near',
+                nearestCount: Number(nearCount),
+                maxDistance: nearMaxDistance ? Number(nearMaxDistance) : null,
+                excludeSelf: nearExcludeSelf,
+                outputGeometry: nearOutputGeometry,
+                sourcePrefix: nearSourcePrefix,
+                nearPrefix: nearFieldPrefix,
+              })}
+            >Run Near</Button>
           </Box>
         )}
 

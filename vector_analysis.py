@@ -64,6 +64,23 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
         migrated=True,
         keywords=('distance', 'geodesic', 'proximity'),
     ),
+    'multi_ring_buffer': VectorToolSpec(
+        id='multi_ring_buffer',
+        version=1,
+        title='Multi-Ring Buffer',
+        category='Proximity',
+        description='Create ordered geodesic distance bands or cumulative buffers around each input feature.',
+        input_geometry_families=('point', 'line', 'polygon'),
+        output_geometry_family='polygon',
+        parameters=(
+            ToolParameter('layer_id', 'Input layer', 'layer', required=True),
+            ToolParameter('distances', 'Distances (metres)', 'number_list', required=True, minimum=0.000001),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Multi-Ring Buffer'),
+            ToolParameter('ring_type', 'Output type', 'choice', default='rings', choices=('rings', 'disks')),
+        ),
+        migrated=True,
+        keywords=('distance bands', 'service area', 'proximity', 'geodesic'),
+    ),
     'intersect': VectorToolSpec(
         id='intersect',
         version=1,
@@ -208,6 +225,34 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
         migrated=True,
         keywords=('zones', 'count', 'length', 'area', 'grouped summary'),
     ),
+    'near': VectorToolSpec(
+        id='near',
+        version=1,
+        title='Near',
+        category='Proximity',
+        description='Generate a ranked near table with geodesic distance, bearing, and closest locations.',
+        input_geometry_families=('point', 'line', 'polygon'),
+        output_geometry_family=None,
+        parameters=(
+            ToolParameter('source_layer', 'Source layer', 'layer', required=True),
+            ToolParameter('near_layer', 'Candidate layer', 'layer', required=True),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Near'),
+            ToolParameter('nearest_count', 'Nearest features per source', 'integer', default=1, minimum=1),
+            ToolParameter('max_distance', 'Maximum search distance (metres)', 'number', minimum=0.000001),
+            ToolParameter('exclude_self', 'Exclude matching feature IDs', 'boolean', default=True),
+            ToolParameter(
+                'output_geometry',
+                'Output geometry',
+                'choice',
+                default='connecting_line',
+                choices=('connecting_line', 'source_point', 'near_point'),
+            ),
+            ToolParameter('source_prefix', 'Source field prefix', 'string', default='source_'),
+            ToolParameter('near_prefix', 'Near field prefix', 'string', default='near_'),
+        ),
+        migrated=True,
+        keywords=('nearest', 'distance', 'bearing', 'near table', 'knn'),
+    ),
     'within': VectorToolSpec(
         id='within',
         version=1,
@@ -310,11 +355,14 @@ def validate_tool_parameters(tool_id: str, raw: Any) -> dict[str, Any]:
         value = raw.get(definition.name, definition.default)
         if definition.required and value in (None, ''):
             raise VectorAnalysisError(f'{definition.name} is required')
-        if definition.type == 'number' and value is not None:
+        if definition.type in {'number', 'integer'} and value is not None:
             try:
-                value = float(value)
+                numeric_value = float(value)
             except (TypeError, ValueError) as exc:
                 raise VectorAnalysisError(f'{definition.name} must be a number') from exc
+            if definition.type == 'integer' and not numeric_value.is_integer():
+                raise VectorAnalysisError(f'{definition.name} must be a whole number')
+            value = int(numeric_value) if definition.type == 'integer' else numeric_value
             if definition.minimum is not None and value < definition.minimum:
                 raise VectorAnalysisError(f'{definition.name} must be at least {definition.minimum}')
         if definition.type == 'string' and value is not None:
@@ -347,6 +395,17 @@ def validate_tool_parameters(tool_id: str, raw: Any) -> dict[str, Any]:
                 raise VectorAnalysisError(f'{definition.name} contains an invalid field name')
             if len(value) != len(set(value)):
                 raise VectorAnalysisError(f'{definition.name} cannot contain duplicate fields')
+        if definition.type == 'number_list':
+            if not isinstance(value, (list, tuple)) or not value:
+                raise VectorAnalysisError(f'{definition.name} must be a non-empty list of numbers')
+            try:
+                value = sorted({float(item) for item in value})
+            except (TypeError, ValueError) as exc:
+                raise VectorAnalysisError(f'{definition.name} must contain only numbers') from exc
+            if definition.minimum is not None and any(item < definition.minimum for item in value):
+                raise VectorAnalysisError(f'{definition.name} values must be at least {definition.minimum}')
+            if len(value) > 50:
+                raise VectorAnalysisError(f'{definition.name} is limited to 50 distances')
         if definition.type == 'statistics':
             if not isinstance(value, (list, tuple)):
                 raise VectorAnalysisError(f'{definition.name} must be a list')
@@ -390,6 +449,8 @@ def validate_tool_parameters(tool_id: str, raw: Any) -> dict[str, Any]:
         ]
         if unsupported:
             raise VectorAnalysisError('Summarize Within supports count, sum, minimum, maximum, and mean')
+    if tool_id == 'near' and parameters['nearest_count'] > 100:
+        raise VectorAnalysisError('nearest_count is limited to 100 features per source')
     return parameters
 
 
@@ -852,6 +913,121 @@ def _execute_buffer(
         'count': feature_count,
         'output_layer_ids': [output_layer_id],
         'warnings': [] if feature_count else ['The operation produced an empty output layer.'],
+    }
+
+
+def _execute_multi_ring_buffer(
+    cur,
+    parameters: dict[str, Any],
+    environments: dict[str, Any],
+    created_by: str | None,
+    progress: Callable[[int, str], None],
+) -> dict[str, Any]:
+    layer_id = parameters['layer_id']
+    cur.execute('SELECT id, name FROM layers WHERE id = %s::uuid', (layer_id,))
+    source = cur.fetchone()
+    if not source:
+        raise VectorAnalysisError('Source layer not found')
+    source_count = _count_scoped_features(
+        cur, layer_id, environments['scope'], environments['selected_feature_ids']
+    )
+
+    progress(15, 'Creating distance-band schema')
+    output_layer_id = _create_output_layer(
+        cur,
+        name=parameters['output_name'],
+        description=f'Multi-ring buffer of "{source["name"]}"',
+        geometry_type='Polygon',
+        created_by=created_by,
+        source_layer_id=layer_id,
+    )
+    cur.execute('SELECT name FROM layer_fields WHERE layer_id = %s::uuid', (output_layer_id,))
+    used_fields = {row['name'] for row in cur.fetchall()}
+    generated: dict[str, str] = {}
+    definitions = [
+        ('source_feature_id', 'Source feature ID', 'string', 36),
+        ('ring_index', 'Ring index', 'integer', None),
+        ('ring_min_m', 'Inner distance (metres)', 'double', None),
+        ('ring_max_m', 'Outer distance (metres)', 'double', None),
+    ]
+    for index, (requested, alias, field_type, length) in enumerate(definitions):
+        output_field = _bounded_identifier('', requested, used_fields)
+        generated[requested] = output_field
+        cur.execute(
+            """
+            INSERT INTO layer_fields (layer_id, name, alias, field_type, nullable, length, sort_order)
+            VALUES (%s::uuid, %s, %s, %s, FALSE, %s, %s)
+            """,
+            (output_layer_id, output_field, alias, field_type, length, 100_000 + index),
+        )
+
+    scope_clause = _selected_clause('source', environments['scope'])
+    geometry_expression = (
+        'outer_geometry'
+        if parameters['ring_type'] == 'disks'
+        else 'CASE WHEN inner_distance = 0 THEN outer_geometry '
+             'ELSE ST_Difference(outer_geometry, ST_Buffer(source_geometry::geography, inner_distance)::geometry) END'
+    )
+    query_parameters: list[Any] = [parameters['distances'], layer_id]
+    if environments['scope'] == 'selected':
+        query_parameters.append(environments['selected_feature_ids'])
+    query_parameters.append(output_layer_id)
+    if environments['precision_grid'] is not None:
+        geometry_expression = f'ST_SnapToGrid({geometry_expression}, %s)'
+        query_parameters.append(environments['precision_grid'])
+    query_parameters.append(created_by)
+
+    progress(42, 'Building geodesic distance bands')
+    cur.execute(
+        f"""
+        WITH distance_steps AS MATERIALIZED (
+            SELECT distance,
+                   ordinal::integer AS ring_index,
+                   COALESCE(LAG(distance) OVER (ORDER BY distance), 0) AS inner_distance
+            FROM UNNEST(%s::double precision[]) WITH ORDINALITY AS requested(distance, ordinal)
+        ), buffered AS MATERIALIZED (
+            SELECT source.id AS source_id,
+                   source.geometry AS source_geometry,
+                   source.properties,
+                   distance_steps.distance AS outer_distance,
+                   distance_steps.inner_distance,
+                   distance_steps.ring_index,
+                   ST_Buffer(source.geometry::geography, distance_steps.distance)::geometry AS outer_geometry
+            FROM features source
+            CROSS JOIN distance_steps
+            WHERE source.layer_id = %s::uuid
+              {scope_clause}
+        )
+        INSERT INTO features (layer_id, geometry, properties, created_by)
+        SELECT %s::uuid,
+               {geometry_expression},
+               properties || jsonb_build_object(
+                   '{generated['source_feature_id']}', source_id::text,
+                   '{generated['ring_index']}', ring_index,
+                   '{generated['ring_min_m']}', inner_distance,
+                   '{generated['ring_max_m']}', outer_distance
+               ),
+               %s::uuid
+        FROM buffered
+        """,
+        tuple(query_parameters),
+    )
+    feature_count = cur.rowcount
+    progress(80, 'Recording output provenance')
+    _record_output_history(cur, output_layer_id, created_by)
+    progress(92, 'Finalizing output')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id),
+        'count': feature_count,
+        'output_layer_ids': [output_layer_id],
+        'warnings': [] if feature_count else ['The operation produced an empty output layer.'],
+        'metrics': {
+            'source_feature_count': source_count,
+            'distance_count': len(parameters['distances']),
+            'distances_m': parameters['distances'],
+            'ring_type': parameters['ring_type'],
+            'distance_method': 'PostGIS geography buffer',
+        },
     }
 
 
@@ -1946,14 +2122,213 @@ def _execute_summarize_within(
     }
 
 
+def _execute_near(
+    cur,
+    parameters: dict[str, Any],
+    environments: dict[str, Any],
+    created_by: str | None,
+    progress: Callable[[int, str], None],
+) -> dict[str, Any]:
+    source_layer_id = parameters['source_layer']
+    near_layer_id = parameters['near_layer']
+    cur.execute(
+        'SELECT id, name, geometry_type FROM layers WHERE id = ANY(%s::uuid[])',
+        ([source_layer_id, near_layer_id],),
+    )
+    layers = {str(row['id']): dict(row) for row in cur.fetchall()}
+    if source_layer_id not in layers or near_layer_id not in layers:
+        raise VectorAnalysisError('One or more input layers were not found')
+
+    scope_source = environments['scope_a']
+    scope_near = environments['scope_b']
+    selected_sources = environments['selected_feature_ids_a']
+    selected_near = environments['selected_feature_ids_b']
+    source_count = _count_scoped_features(cur, source_layer_id, scope_source, selected_sources)
+    near_count = _count_scoped_features(cur, near_layer_id, scope_near, selected_near)
+
+    progress(15, 'Creating near-table schema')
+    output_geometry_type = 'LineString' if parameters['output_geometry'] == 'connecting_line' else 'Point'
+    output_layer_id = _create_output_layer(
+        cur,
+        name=parameters['output_name'],
+        description=f'Nearest features from "{layers[source_layer_id]["name"]}" to "{layers[near_layer_id]["name"]}"',
+        geometry_type=output_geometry_type,
+        created_by=created_by,
+    )
+    cur.execute(
+        """
+        INSERT INTO layer_fields (layer_id, name, alias, field_type, nullable, length, sort_order)
+        VALUES
+            (%s::uuid, 'source_id', 'Source feature ID', 'string', FALSE, 36, 0),
+            (%s::uuid, 'near_id', 'Near feature ID', 'string', FALSE, 36, 1),
+            (%s::uuid, 'near_rank', 'Near rank', 'integer', FALSE, NULL, 2),
+            (%s::uuid, 'distance_m', 'Geodesic distance (metres)', 'double', FALSE, NULL, 3),
+            (%s::uuid, 'bearing_deg', 'Initial bearing (degrees)', 'double', TRUE, NULL, 4),
+            (%s::uuid, 'source_x', 'Closest source longitude', 'double', FALSE, NULL, 5),
+            (%s::uuid, 'source_y', 'Closest source latitude', 'double', FALSE, NULL, 6),
+            (%s::uuid, 'near_x', 'Closest near longitude', 'double', FALSE, NULL, 7),
+            (%s::uuid, 'near_y', 'Closest near latitude', 'double', FALSE, NULL, 8)
+        """,
+        (output_layer_id,) * 9,
+    )
+    used_fields = {
+        'source_id', 'near_id', 'near_rank', 'distance_m', 'bearing_deg',
+        'source_x', 'source_y', 'near_x', 'near_y',
+    }
+    used_domains: set[str] = set()
+    source_mapping = _append_prefixed_layer_schema(
+        cur,
+        source_layer_id=source_layer_id,
+        output_layer_id=output_layer_id,
+        prefix=parameters['source_prefix'],
+        alias_prefix='Source',
+        sort_offset=100,
+        used_field_names=used_fields,
+        used_domain_names=used_domains,
+    )
+    near_mapping = _append_prefixed_layer_schema(
+        cur,
+        source_layer_id=near_layer_id,
+        output_layer_id=output_layer_id,
+        prefix=parameters['near_prefix'],
+        alias_prefix='Near',
+        sort_offset=10_000,
+        used_field_names=used_fields,
+        used_domain_names=used_domains,
+    )
+
+    source_scope_clause = _selected_clause('source', scope_source)
+    near_scope_clause = _selected_clause('candidate', scope_near)
+    self_clause = 'AND candidate.id <> source.id' if parameters['exclude_self'] and source_layer_id == near_layer_id else ''
+    distance_clause = (
+        'AND ST_DWithin(source.geometry::geography, candidate.geometry::geography, %s)'
+        if parameters['max_distance'] is not None else ''
+    )
+    output_geometry = {
+        'connecting_line': 'ST_MakeLine(ranked.source_point, ranked.near_point)',
+        'source_point': 'ranked.source_point',
+        'near_point': 'ranked.near_point',
+    }[parameters['output_geometry']]
+    query_parameters: list[Any] = [
+        output_layer_id,
+        json.dumps(source_mapping),
+        json.dumps(near_mapping),
+        created_by,
+        near_layer_id,
+    ]
+    if parameters['max_distance'] is not None:
+        query_parameters.append(parameters['max_distance'])
+    if scope_near == 'selected':
+        query_parameters.append(selected_near)
+    candidate_limit = max(64, parameters['nearest_count'] * 8)
+    query_parameters.extend([candidate_limit, parameters['nearest_count'], source_layer_id])
+    if scope_source == 'selected':
+        query_parameters.append(selected_sources)
+
+    progress(42, 'Finding indexed nearest candidates')
+    cur.execute(
+        f"""
+        INSERT INTO features (layer_id, geometry, properties, created_by)
+        SELECT %s::uuid,
+               {output_geometry},
+               jsonb_build_object(
+                   'source_id', source.id::text,
+                   'near_id', ranked.near_id::text,
+                   'near_rank', ranked.near_rank,
+                   'distance_m', ranked.distance_m,
+                   'bearing_deg', ranked.bearing_deg,
+                   'source_x', ST_X(ranked.source_point),
+                   'source_y', ST_Y(ranked.source_point),
+                   'near_x', ST_X(ranked.near_point),
+                   'near_y', ST_Y(ranked.near_point)
+               )
+               || COALESCE((
+                   SELECT jsonb_object_agg(field_map.value, source_property.value)
+                   FROM jsonb_each_text(%s::jsonb) field_map
+                   JOIN jsonb_each(source.properties) source_property ON source_property.key = field_map.key
+               ), '{{}}'::jsonb)
+               || COALESCE((
+                   SELECT jsonb_object_agg(field_map.value, near_property.value)
+                   FROM jsonb_each_text(%s::jsonb) field_map
+                   JOIN jsonb_each(ranked.near_properties) near_property ON near_property.key = field_map.key
+               ), '{{}}'::jsonb),
+               %s::uuid
+        FROM features source
+        CROSS JOIN LATERAL (
+            SELECT exact.near_id,
+                   exact.near_properties,
+                   exact.source_point,
+                   exact.near_point,
+                   exact.distance_m,
+                   exact.bearing_deg,
+                   ROW_NUMBER() OVER (ORDER BY exact.distance_m, exact.near_id)::integer AS near_rank
+            FROM (
+                SELECT candidates.near_id,
+                       candidates.near_properties,
+                       candidates.source_point,
+                       candidates.near_point,
+                       ST_Distance(candidates.source_point::geography, candidates.near_point::geography) AS distance_m,
+                       DEGREES(ST_Azimuth(candidates.source_point::geography, candidates.near_point::geography)) AS bearing_deg
+                FROM (
+                    SELECT candidate.id AS near_id,
+                           candidate.properties AS near_properties,
+                           ST_ClosestPoint(source.geometry, candidate.geometry) AS source_point,
+                           ST_ClosestPoint(candidate.geometry, source.geometry) AS near_point
+                    FROM features candidate
+                    WHERE candidate.layer_id = %s::uuid
+                      {self_clause}
+                      {distance_clause}
+                      {near_scope_clause}
+                    ORDER BY candidate.geometry <-> source.geometry, candidate.id
+                    LIMIT %s
+                ) candidates
+            ) exact
+            ORDER BY exact.distance_m, exact.near_id
+            LIMIT %s
+        ) ranked
+        WHERE source.layer_id = %s::uuid
+          {source_scope_clause}
+        """,
+        tuple(query_parameters),
+    )
+    feature_count = cur.rowcount
+    progress(80, 'Recording output provenance')
+    _record_output_history(cur, output_layer_id, created_by)
+    warnings = [] if feature_count else ['No candidate features met the Near search criteria.']
+    if near_count > candidate_limit:
+        warnings.append(
+            f'Geodesic ranking was refined from the closest {candidate_limit} indexed candidates per source.'
+        )
+    progress(92, 'Finalizing output')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id),
+        'count': feature_count,
+        'output_layer_ids': [output_layer_id],
+        'warnings': warnings,
+        'metrics': {
+            'source_feature_count': source_count,
+            'near_feature_count': near_count,
+            'nearest_count': parameters['nearest_count'],
+            'candidate_limit': candidate_limit,
+            'max_distance_m': parameters['max_distance'],
+            'exclude_self': parameters['exclude_self'],
+            'distance_method': 'PostGIS spheroid geography',
+            'candidate_method': 'GiST KNN geometry operator',
+            'output_geometry': parameters['output_geometry'],
+        },
+    }
+
+
 EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     'buffer': _execute_buffer,
+    'multi_ring_buffer': _execute_multi_ring_buffer,
     'intersect': _execute_intersect,
     'clip': _execute_clip,
     'erase': _execute_erase,
     'dissolve': _execute_dissolve,
     'spatial_join': _execute_spatial_join,
     'summarize_within': _execute_summarize_within,
+    'near': _execute_near,
 }
 
 

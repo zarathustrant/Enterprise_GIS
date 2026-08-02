@@ -11,6 +11,8 @@ from vector_analysis import (
     _execute_spatial_join,
     _execute_summarize_within,
     _execute_intersect,
+    _execute_multi_ring_buffer,
+    _execute_near,
     _geometry_family,
     _resolve_intersection_output_type,
     get_tool_spec,
@@ -187,6 +189,44 @@ class VectorToolValidationTests(unittest.TestCase):
                 'statistics': [{'field': 'name', 'statistic': 'first'}],
             })
 
+    def test_near_parameters_enforce_rank_limits_and_integer_count(self):
+        source = str(uuid4())
+        near = str(uuid4())
+        parameters = validate_tool_parameters('near', {
+            'source_layer': source,
+            'near_layer': near,
+            'output_name': 'Nearest assets',
+            'nearest_count': '3',
+        })
+
+        self.assertEqual(parameters['nearest_count'], 3)
+        self.assertTrue(parameters['exclude_self'])
+        self.assertEqual(parameters['output_geometry'], 'connecting_line')
+        with self.assertRaisesRegex(VectorAnalysisError, 'whole number'):
+            validate_tool_parameters('near', {
+                'source_layer': source,
+                'near_layer': near,
+                'output_name': 'Invalid',
+                'nearest_count': 1.5,
+            })
+        with self.assertRaisesRegex(VectorAnalysisError, 'limited to 100'):
+            validate_tool_parameters('near', {
+                'source_layer': source,
+                'near_layer': near,
+                'output_name': 'Invalid',
+                'nearest_count': 101,
+            })
+
+    def test_multi_ring_distances_are_sorted_and_deduplicated(self):
+        parameters = validate_tool_parameters('multi_ring_buffer', {
+            'layer_id': str(uuid4()),
+            'distances': [500, '100', 500, 250],
+            'output_name': 'Service bands',
+        })
+
+        self.assertEqual(parameters['distances'], [100.0, 250.0, 500.0])
+        self.assertEqual(parameters['ring_type'], 'rings')
+
     def test_selected_scope_requires_valid_feature_ids(self):
         feature_id = str(uuid4())
         environments = normalize_environments({
@@ -270,6 +310,8 @@ class PlaceholderCheckingCursor:
         self.dissolve_parameters = None
         self.spatial_join_parameters = None
         self.summarize_within_parameters = None
+        self.near_parameters = None
+        self.multi_ring_parameters = None
 
     def execute(self, query, parameters=()):
         parameters = tuple(parameters)
@@ -287,6 +329,8 @@ class PlaceholderCheckingCursor:
                 ]
             else:
                 self._one = {'id': self.layer_a, 'name': 'Parcels', 'geometry_type': self.geometry_a}
+        elif normalized.startswith('SELECT id, name FROM layers WHERE id ='):
+            self._one = {'id': self.layer_a, 'name': 'Parcels'}
         elif normalized.startswith('SELECT COUNT(*) AS count FROM features'):
             self._one = {'count': 2}
         elif normalized.startswith('INSERT INTO layers'):
@@ -306,6 +350,12 @@ class PlaceholderCheckingCursor:
         elif normalized.startswith('WITH matches AS MATERIALIZED'):
             self.summarize_within_parameters = parameters
             self.rowcount = 2
+        elif normalized.startswith('INSERT INTO features') and 'Finding indexed nearest candidates' not in normalized and 'candidate.geometry <-> source.geometry' in normalized:
+            self.near_parameters = parameters
+            self.rowcount = 3
+        elif normalized.startswith('WITH distance_steps AS MATERIALIZED'):
+            self.multi_ring_parameters = parameters
+            self.rowcount = 6
         elif normalized.startswith('SELECT l.*, u.username AS created_by'):
             now = datetime.now(timezone.utc)
             self._one = {
@@ -362,6 +412,39 @@ class IntersectExecutorContractTests(unittest.TestCase):
         self.assertEqual(result['metrics']['output_geometry_family'], 'line')
         self.assertEqual(cursor.intersect_parameters[0], 0.00001)
         self.assertEqual(cursor.intersect_parameters[1:3], (layer_a, layer_b))
+
+
+class MultiRingBufferExecutorContractTests(unittest.TestCase):
+    def test_selected_multi_ring_buffer_orders_precision_after_output(self):
+        source_layer = str(uuid4())
+        output_layer = str(uuid4())
+        user_id = str(uuid4())
+        selected_feature = str(uuid4())
+        cursor = PlaceholderCheckingCursor(source_layer, str(uuid4()), output_layer)
+        parameters = validate_tool_parameters('multi_ring_buffer', {
+            'layer_id': source_layer,
+            'distances': [100, 250, 500],
+            'output_name': 'Service bands',
+        })
+        environments = normalize_environments({
+            'scope': 'selected',
+            'selected_feature_ids': [selected_feature],
+            'precision_grid': 0.00001,
+        })
+
+        result = _execute_multi_ring_buffer(
+            cursor, parameters, environments, user_id, lambda _progress, _stage: None
+        )
+
+        self.assertEqual(result['count'], 6)
+        self.assertEqual(cursor.multi_ring_parameters, (
+            [100.0, 250.0, 500.0],
+            source_layer,
+            [selected_feature],
+            output_layer,
+            0.00001,
+            user_id,
+        ))
 
 
 class MaskOverlayExecutorContractTests(unittest.TestCase):
@@ -633,6 +716,54 @@ class SummarizeWithinExecutorContractTests(unittest.TestCase):
                 str(uuid4()),
                 lambda _progress, _stage: None,
             )
+
+
+class NearExecutorContractTests(unittest.TestCase):
+    def test_near_uses_dual_scopes_distance_and_knn_candidate_limit(self):
+        source_layer = str(uuid4())
+        near_layer = str(uuid4())
+        output_layer = str(uuid4())
+        user_id = str(uuid4())
+        source_feature = str(uuid4())
+        near_feature = str(uuid4())
+        cursor = PlaceholderCheckingCursor(
+            source_layer,
+            near_layer,
+            output_layer,
+            geometry_a='Polygon',
+            geometry_b='Point',
+        )
+        parameters = validate_tool_parameters('near', {
+            'source_layer': source_layer,
+            'near_layer': near_layer,
+            'output_name': 'Three nearest facilities',
+            'nearest_count': 3,
+            'max_distance': 2500,
+            'output_geometry': 'near_point',
+        })
+        environments = normalize_environments({
+            'scope_a': 'selected',
+            'scope_b': 'selected',
+            'selected_feature_ids_a': [source_feature],
+            'selected_feature_ids_b': [near_feature],
+        })
+
+        result = _execute_near(
+            cursor, parameters, environments, user_id, lambda _progress, _stage: None
+        )
+
+        self.assertEqual(result['count'], 3)
+        self.assertEqual(result['metrics']['nearest_count'], 3)
+        self.assertEqual(result['metrics']['candidate_limit'], 64)
+        self.assertEqual(cursor.near_parameters[-7:], (
+            near_layer,
+            2500.0,
+            [near_feature],
+            64,
+            3,
+            source_layer,
+            [source_feature],
+        ))
 
 
 if __name__ == '__main__':

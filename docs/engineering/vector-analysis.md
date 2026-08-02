@@ -139,6 +139,18 @@ Summarize Within retains polygon zone geometry and schema while calculating coun
 
 The tool calculates geodesic line length in metres, polygon area in square metres, zone area, percentage of zone area, and percentage of each source measurement represented inside the zone. It supports optional categorical grouping, repeatable sum/minimum/maximum/mean statistics, empty-zone retention, independent input selections, and source-family-aware metrics. Grouped summaries intentionally produce one zone-geometry row per category. The endpoint is `POST /api/v1/analysis/summarize-within`.
 
+### Near
+
+Near generates one or more ranked candidate relationships per source feature. PostGIS GiST KNN ordering selects a bounded candidate set and exact geography measurements on the WGS84 spheroid determine distance and deterministic rank, with feature UUID as the tie-breaker.
+
+Outputs include source and near feature IDs, rank, distance in metres, initial bearing, closest-point longitude/latitude pairs, and collision-safe prefixed schemas from both inputs. Users can map each relationship as a connecting line, closest point on the source, or closest point on the near feature. The tool supports maximum geodesic search distance, same-layer self-match exclusion, independent input selections, synchronous/worker execution, and a configurable 1-100 nearest count. The endpoint is `POST /api/v1/analysis/near`.
+
+For very large candidate layers, exact geodesic ranking is refined from at least 64 indexed planar KNN candidates per source. This bounds work and is exposed in run metrics and warnings; global antimeridian fixtures and query-plan assertions remain required before claiming strict global-nearest equivalence.
+
+### Multi-Ring Buffer
+
+Multi-Ring Buffer creates up to 50 ordered geodesic distance levels per source feature. Non-overlapping ring mode subtracts each previous geography buffer from the next; cumulative disk mode retains complete buffers at every distance. Outputs preserve source schema and add collision-safe source ID, ring index, inner distance, and outer distance fields. Selected scope, precision snapping, durable runs, and worker execution use the same framework. The endpoint is `POST /api/v1/analysis/multi-ring-buffer`.
+
 ## Transaction Guarantees
 
 - A run is committed before synchronous execution, so failures remain visible.
@@ -148,7 +160,6 @@ The tool calculates geodesic line length in metres, polygon area in square metre
 
 ## Next Migration Order
 
-1. Near and nearest-feature tables with geodesic distances.
-2. Polygonize line networks with diagnostics.
-3. Geometry construction, quality, and statistics tool groups.
-4. Analysis Workbench UI generated from the registry and run-history APIs.
+1. Polygonize line networks with diagnostics.
+2. Geometry construction, quality, and statistics tool groups.
+3. Analysis Workbench UI generated from the registry and run-history APIs.

@@ -131,6 +131,8 @@ import {
   runDissolveAnalysis,
   runEraseAnalysis,
   runIntersectAnalysis,
+  runMultiRingBufferAnalysis,
+  runNearAnalysis,
   runSpatialJoinAnalysis,
   runSummarizeWithinAnalysis,
   runWithinAnalysis,
@@ -2420,6 +2422,32 @@ export default function App() {
     },
   })
 
+  const multiRingBufferMutation = useMutation({
+    mutationFn: async (payload: { layerId: string; distances: number[]; outputName: string; ringType: 'rings' | 'disks' }) => {
+      if (!token) throw new Error('Sign in to run multi-ring buffer analysis.')
+      return runMultiRingBufferAnalysis({
+        layer_id: payload.layerId,
+        distances: payload.distances,
+        output_name: payload.outputName,
+        ring_type: payload.ringType,
+      }, token)
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['layer-features'] })
+      setAnalysisError(null)
+      setAnalysisOverlay(null)
+      setWithinCount(null)
+      completeAnalysisJob(`Multi-Ring Buffer complete (${result.count} bands)`)
+      notify(`Multi-Ring Buffer complete (${result.count} bands)`, 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Multi-Ring Buffer failed'
+      setAnalysisError(message)
+      failAnalysisJob(message)
+    },
+  })
+
   const clipMutation = useMutation({
     mutationFn: async (payload: {
       inputLayer: string
@@ -2600,6 +2628,48 @@ export default function App() {
     },
   })
 
+  const nearMutation = useMutation({
+    mutationFn: async (payload: {
+      sourceLayer: string
+      nearLayer: string
+      outputName: string
+      nearestCount: number
+      maxDistance: number | null
+      excludeSelf: boolean
+      outputGeometry: 'connecting_line' | 'source_point' | 'near_point'
+      sourcePrefix: string
+      nearPrefix: string
+    }) => {
+      if (!token) throw new Error('Sign in to run Near analysis.')
+      return runNearAnalysis({
+        source_layer: payload.sourceLayer,
+        near_layer: payload.nearLayer,
+        output_name: payload.outputName,
+        nearest_count: payload.nearestCount,
+        max_distance: payload.maxDistance,
+        exclude_self: payload.excludeSelf,
+        output_geometry: payload.outputGeometry,
+        source_prefix: payload.sourcePrefix,
+        near_prefix: payload.nearPrefix,
+      }, token)
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['layer-features'] })
+      setAnalysisError(null)
+      setAnalysisOverlay(null)
+      setWithinCount(null)
+      const warningText = result.warnings?.length ? ` ${result.warnings.join(' ')}` : ''
+      completeAnalysisJob(`Near complete (${result.count} relationships).${warningText}`)
+      notify(`Near complete (${result.count} relationships).${warningText}`, result.warnings?.length ? 'warning' : 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Near analysis failed'
+      setAnalysisError(message)
+      failAnalysisJob(message)
+    },
+  })
+
   const withinMutation = useMutation({
     mutationFn: async (payload: { layerId: string; polygonText: string }) => {
       const polygon = JSON.parse(payload.polygonText) as Geometry
@@ -2620,12 +2690,14 @@ export default function App() {
   })
 
   const analysisRunning = bufferMutation.isPending
+    || multiRingBufferMutation.isPending
     || intersectMutation.isPending
     || clipMutation.isPending
     || eraseMutation.isPending
     || dissolveMutation.isPending
     || spatialJoinMutation.isPending
     || summarizeWithinMutation.isPending
+    || nearMutation.isPending
     || withinMutation.isPending
 
   const handleAuthenticated = (response: AuthResponse) => {
@@ -4776,6 +4848,11 @@ export default function App() {
             startAnalysisJob('buffer')
             bufferMutation.mutate(payload)
           }}
+          onRunMultiRingBuffer={(payload) => {
+            setAnalysisError(null)
+            startAnalysisJob('multi_ring_buffer')
+            multiRingBufferMutation.mutate(payload)
+          }}
           onRunIntersect={(payload) => {
             setAnalysisError(null)
             startAnalysisJob('intersect')
@@ -4805,6 +4882,11 @@ export default function App() {
             setAnalysisError(null)
             startAnalysisJob('summarize_within')
             summarizeWithinMutation.mutate(payload)
+          }}
+          onRunNear={(payload) => {
+            setAnalysisError(null)
+            startAnalysisJob('near')
+            nearMutation.mutate(payload)
           }}
           onRunWithin={(payload) => {
             setAnalysisError(null)

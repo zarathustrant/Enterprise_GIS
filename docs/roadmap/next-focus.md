@@ -291,6 +291,17 @@ Exit gate:
 
 ## Phase 6: Near And Proximity
 
+Implementation status:
+
+- nearest and N-nearest ranked near-table outputs complete
+- GiST KNN candidate selection with exact WGS84 spheroid distance refinement complete
+- geodesic distance, initial bearing, deterministic UUID tie-breaking, and maximum distance complete
+- same-layer self-match exclusion and independent selected scopes complete
+- connecting-line, closest-source-point, and closest-near-point outputs complete
+- prefixed source/near schemas, worker execution, visual controls, metrics, and provenance complete
+- multi-ring geodesic bands/disks complete
+- antimeridian/multi-region database fixtures and EXPLAIN plan assertions remain
+
 Capabilities:
 
 - nearest feature

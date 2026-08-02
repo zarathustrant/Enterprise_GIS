@@ -111,12 +111,14 @@ def process_job(database_url: str, job_id: str) -> bool:
         try:
             if job_type in {
                 'analysis.buffer',
+                'analysis.multi_ring_buffer',
                 'analysis.intersect',
                 'analysis.clip',
                 'analysis.erase',
                 'analysis.dissolve',
                 'analysis.spatial_join',
                 'analysis.summarize_within',
+                'analysis.near',
             }:
                 # New jobs use the structured framework payload; retain old queued jobs.
                 parameters = payload.get('parameters') or payload
