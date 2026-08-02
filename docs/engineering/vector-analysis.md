@@ -85,6 +85,29 @@ Intersect now uses the shared executor for both request and worker execution. It
 
 The endpoint remains `POST /api/v1/analysis/intersect`. Optional parameters are `output_type`, `prefix_a`, and `prefix_b`. Self-intersection is rejected until a dedicated tool can provide correct duplicate-pair and topology behavior.
 
+### Clip and Erase
+
+Clip and Erase share one polygon-mask overlay kernel and preserve the input layer's geometry family, complete field/domain schema, style, and zoom range.
+
+Clip provides:
+
+- Point, Line, or Polygon inputs with Polygon or MultiPolygon masks
+- dissolved-mask mode by default, producing at most one output row per source feature
+- per-mask mode with both source and mask feature provenance
+- spatial-index candidate filtering and exact intersection tests
+- removal of touching-only lower-dimensional results
+- explicit warning that overlapping undissolved masks can duplicate source portions
+
+Erase provides:
+
+- unioned polygon masks to avoid repeated subtraction and overlap artifacts
+- retention of unaffected features
+- removal of fully covered features
+- preservation of holes and multipart results through same-family extraction
+- fully removed feature count in run metrics
+
+Both tools support independent selected-feature scopes for input and mask layers, precision-grid snapping, synchronous or worker execution, durable run history, output feature history, and transactional rollback. Their endpoints are `POST /api/v1/analysis/clip` and `POST /api/v1/analysis/erase`.
+
 ## Transaction Guarantees
 
 - A run is committed before synchronous execution, so failures remain visible.
@@ -94,8 +117,7 @@ The endpoint remains `POST /api/v1/analysis/intersect`. Optional parameters are 
 
 ## Next Migration Order
 
-1. Clip and Erase using the shared overlay kernel.
-2. Dissolve with grouping fields and aggregate statistics.
-3. Spatial Join and Summarize Within with explicit cardinality behavior.
-4. Near and nearest-feature tables with geodesic distances.
-5. Analysis Workbench UI generated from the registry and run-history APIs.
+1. Dissolve with grouping fields and aggregate statistics.
+2. Spatial Join and Summarize Within with explicit cardinality behavior.
+3. Near and nearest-feature tables with geodesic distances.
+4. Analysis Workbench UI generated from the registry and run-history APIs.

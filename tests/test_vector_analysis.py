@@ -5,6 +5,8 @@ from uuid import uuid4
 from vector_analysis import (
     VectorAnalysisError,
     _bounded_identifier,
+    _execute_clip,
+    _execute_erase,
     _execute_intersect,
     _geometry_family,
     _resolve_intersection_output_type,
@@ -34,6 +36,15 @@ class VectorToolRegistryTests(unittest.TestCase):
         )
         self.assertEqual(output_parameter.default, 'auto')
         self.assertEqual(output_parameter.choices, ('auto', 'point', 'line', 'polygon'))
+
+    def test_clip_and_erase_are_migrated_overlay_tools(self):
+        clip_tool = get_tool_spec('clip')
+        erase_tool = get_tool_spec('erase')
+
+        self.assertTrue(clip_tool.migrated)
+        self.assertTrue(erase_tool.migrated)
+        self.assertEqual(clip_tool.category, 'Overlay')
+        self.assertEqual(erase_tool.category, 'Overlay')
 
     def test_unknown_tool_is_rejected(self):
         with self.assertRaisesRegex(VectorAnalysisError, 'Unknown vector analysis tool'):
@@ -99,6 +110,17 @@ class VectorToolValidationTests(unittest.TestCase):
                 'output_type': 'geometry-collection',
             })
 
+    def test_clip_boolean_parameter_is_strict(self):
+        base = {
+            'input_layer': str(uuid4()),
+            'mask_layer': str(uuid4()),
+            'output_name': 'Clip',
+        }
+        self.assertTrue(validate_tool_parameters('clip', base)['dissolve_mask'])
+        self.assertFalse(validate_tool_parameters('clip', {**base, 'dissolve_mask': 'false'})['dissolve_mask'])
+        with self.assertRaisesRegex(VectorAnalysisError, 'must be a boolean'):
+            validate_tool_parameters('clip', {**base, 'dissolve_mask': 1})
+
     def test_selected_scope_requires_valid_feature_ids(self):
         feature_id = str(uuid4())
         environments = normalize_environments({
@@ -161,14 +183,24 @@ class IntersectGeometryTests(unittest.TestCase):
 
 
 class PlaceholderCheckingCursor:
-    def __init__(self, layer_a: str, layer_b: str, output_layer: str):
+    def __init__(
+        self,
+        layer_a: str,
+        layer_b: str,
+        output_layer: str,
+        geometry_a: str = 'Polygon',
+        geometry_b: str = 'LineString',
+    ):
         self.layer_a = layer_a
         self.layer_b = layer_b
         self.output_layer = output_layer
+        self.geometry_a = geometry_a
+        self.geometry_b = geometry_b
         self.rowcount = 0
         self._one = None
         self._all = []
         self.intersect_parameters = None
+        self.mask_overlay_parameters = None
 
     def execute(self, query, parameters=()):
         parameters = tuple(parameters)
@@ -181,8 +213,9 @@ class PlaceholderCheckingCursor:
         if normalized.startswith('SELECT id, name, geometry_type FROM layers'):
             self._all = [
                 {'id': self.layer_a, 'name': 'Parcels', 'geometry_type': 'Polygon'},
-                {'id': self.layer_b, 'name': 'Roads', 'geometry_type': 'LineString'},
+                {'id': self.layer_b, 'name': 'Masks', 'geometry_type': self.geometry_b},
             ]
+            self._all[0]['geometry_type'] = self.geometry_a
         elif normalized.startswith('SELECT COUNT(*) AS count FROM features'):
             self._one = {'count': 2}
         elif normalized.startswith('INSERT INTO layers'):
@@ -190,13 +223,16 @@ class PlaceholderCheckingCursor:
         elif normalized.startswith('WITH raw_intersections AS MATERIALIZED'):
             self.intersect_parameters = parameters
             self.rowcount = 2
+        elif normalized.startswith('WITH dissolved_mask AS MATERIALIZED') or normalized.startswith('WITH processed AS MATERIALIZED'):
+            self.mask_overlay_parameters = parameters
+            self.rowcount = 2
         elif normalized.startswith('SELECT l.*, u.username AS created_by'):
             now = datetime.now(timezone.utc)
             self._one = {
                 'id': self.output_layer,
                 'name': 'Road parcel overlay',
                 'description': 'Intersection',
-                'geometry_type': 'LineString',
+                'geometry_type': self.geometry_a,
                 'crs': 'EPSG:4326',
                 'style': {},
                 'min_zoom': 0,
@@ -246,6 +282,129 @@ class IntersectExecutorContractTests(unittest.TestCase):
         self.assertEqual(result['metrics']['output_geometry_family'], 'line')
         self.assertEqual(cursor.intersect_parameters[0], 0.00001)
         self.assertEqual(cursor.intersect_parameters[1:3], (layer_a, layer_b))
+
+
+class MaskOverlayExecutorContractTests(unittest.TestCase):
+    def setUp(self):
+        self.input_layer = str(uuid4())
+        self.mask_layer = str(uuid4())
+        self.output_layer = str(uuid4())
+        self.user_id = str(uuid4())
+
+    def test_dissolved_clip_preserves_input_family_and_parameter_order(self):
+        cursor = PlaceholderCheckingCursor(
+            self.input_layer,
+            self.mask_layer,
+            self.output_layer,
+            geometry_a='LineString',
+            geometry_b='Polygon',
+        )
+        parameters = validate_tool_parameters('clip', {
+            'input_layer': self.input_layer,
+            'mask_layer': self.mask_layer,
+            'output_name': 'Road clip',
+        })
+        environments = normalize_environments({'precision_grid': 0.00001})
+
+        result = _execute_clip(
+            cursor, parameters, environments, self.user_id, lambda _progress, _stage: None
+        )
+
+        self.assertEqual(result['count'], 2)
+        self.assertEqual(result['metrics']['output_geometry_family'], 'line')
+        self.assertTrue(result['metrics']['dissolved_mask'])
+        self.assertEqual(cursor.mask_overlay_parameters[:3], (
+            self.mask_layer,
+            0.00001,
+            self.input_layer,
+        ))
+
+    def test_erase_uses_dissolved_polygon_mask(self):
+        cursor = PlaceholderCheckingCursor(
+            self.input_layer,
+            self.mask_layer,
+            self.output_layer,
+            geometry_a='Polygon',
+            geometry_b='MultiPolygon',
+        )
+        parameters = validate_tool_parameters('erase', {
+            'input_layer': self.input_layer,
+            'mask_layer': self.mask_layer,
+            'output_name': 'Parcel erase',
+        })
+
+        result = _execute_erase(
+            cursor,
+            parameters,
+            normalize_environments({}),
+            self.user_id,
+            lambda _progress, _stage: None,
+        )
+
+        self.assertEqual(result['metrics']['output_geometry_family'], 'polygon')
+        self.assertTrue(result['metrics']['dissolved_mask'])
+        self.assertEqual(cursor.mask_overlay_parameters[:2], (self.mask_layer, self.input_layer))
+
+    def test_undissolved_clip_orders_selected_input_parameters(self):
+        cursor = PlaceholderCheckingCursor(
+            self.input_layer,
+            self.mask_layer,
+            self.output_layer,
+            geometry_a='Point',
+            geometry_b='Polygon',
+        )
+        input_feature = str(uuid4())
+        mask_feature = str(uuid4())
+        parameters = validate_tool_parameters('clip', {
+            'input_layer': self.input_layer,
+            'mask_layer': self.mask_layer,
+            'output_name': 'Per-mask clip',
+            'dissolve_mask': False,
+        })
+        environments = normalize_environments({
+            'scope_a': 'selected',
+            'scope_b': 'selected',
+            'selected_feature_ids_a': [input_feature],
+            'selected_feature_ids_b': [mask_feature],
+            'precision_grid': 0.00001,
+        })
+
+        result = _execute_clip(
+            cursor, parameters, environments, self.user_id, lambda _progress, _stage: None
+        )
+
+        self.assertFalse(result['metrics']['dissolved_mask'])
+        self.assertEqual(cursor.mask_overlay_parameters[:5], (
+            0.00001,
+            self.input_layer,
+            self.mask_layer,
+            [input_feature],
+            [mask_feature],
+        ))
+        self.assertTrue(any('duplicate' in warning for warning in result['warnings']))
+
+    def test_clip_rejects_non_polygon_mask(self):
+        cursor = PlaceholderCheckingCursor(
+            self.input_layer,
+            self.mask_layer,
+            self.output_layer,
+            geometry_a='Point',
+            geometry_b='LineString',
+        )
+        parameters = validate_tool_parameters('clip', {
+            'input_layer': self.input_layer,
+            'mask_layer': self.mask_layer,
+            'output_name': 'Invalid clip',
+        })
+
+        with self.assertRaisesRegex(VectorAnalysisError, 'must contain polygon'):
+            _execute_clip(
+                cursor,
+                parameters,
+                normalize_environments({}),
+                self.user_id,
+                lambda _progress, _stage: None,
+            )
 
 
 if __name__ == '__main__':

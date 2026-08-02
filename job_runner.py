@@ -109,7 +109,12 @@ def process_job(database_url: str, job_id: str) -> bool:
         analysis_run_id = payload.get('analysis_run_id')
 
         try:
-            if job_type in {'analysis.buffer', 'analysis.intersect'}:
+            if job_type in {
+                'analysis.buffer',
+                'analysis.intersect',
+                'analysis.clip',
+                'analysis.erase',
+            }:
                 # New jobs use the structured framework payload; retain old queued jobs.
                 parameters = payload.get('parameters') or payload
                 environments = payload.get('environments') or {}

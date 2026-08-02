@@ -233,6 +233,30 @@ def intersect():
     )
 
 
+# ── Clip / Erase ──────────────────────────────────────────────────────────────
+
+@analysis_bp.route('/clip', methods=['POST'])
+@jwt_required()
+def clip():
+    return _run_layer_tool(
+        'clip',
+        request.get_json() or {},
+        ('input_layer', 'mask_layer'),
+        'analysis_clip',
+    )
+
+
+@analysis_bp.route('/erase', methods=['POST'])
+@jwt_required()
+def erase():
+    return _run_layer_tool(
+        'erase',
+        request.get_json() or {},
+        ('input_layer', 'mask_layer'),
+        'analysis_erase',
+    )
+
+
 # ── Spatial query (features within a polygon) ─────────────────────────────────
 
 @analysis_bp.route('/within', methods=['POST'])

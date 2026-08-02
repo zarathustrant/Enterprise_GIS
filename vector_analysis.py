@@ -90,6 +90,39 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
         migrated=True,
         keywords=('overlay', 'shared geometry'),
     ),
+    'clip': VectorToolSpec(
+        id='clip',
+        version=1,
+        title='Clip',
+        category='Overlay',
+        description='Extract input feature portions that fall inside polygon masks.',
+        input_geometry_families=('point', 'line', 'polygon'),
+        output_geometry_family=None,
+        parameters=(
+            ToolParameter('input_layer', 'Input layer', 'layer', required=True),
+            ToolParameter('mask_layer', 'Polygon mask layer', 'layer', required=True),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Clip'),
+            ToolParameter('dissolve_mask', 'Dissolve mask features', 'boolean', default=True),
+        ),
+        migrated=True,
+        keywords=('extract', 'mask', 'cookie cutter'),
+    ),
+    'erase': VectorToolSpec(
+        id='erase',
+        version=1,
+        title='Erase',
+        category='Overlay',
+        description='Remove polygon mask areas from input features.',
+        input_geometry_families=('point', 'line', 'polygon'),
+        output_geometry_family=None,
+        parameters=(
+            ToolParameter('input_layer', 'Input layer', 'layer', required=True),
+            ToolParameter('mask_layer', 'Polygon mask layer', 'layer', required=True),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Erase'),
+        ),
+        migrated=True,
+        keywords=('difference', 'remove', 'mask'),
+    ),
     'within': VectorToolSpec(
         id='within',
         version=1,
@@ -214,6 +247,13 @@ def validate_tool_parameters(tool_id: str, raw: Any) -> dict[str, Any]:
             raise VectorAnalysisError(
                 f'{definition.name} must be one of {", ".join(definition.choices)}'
             )
+        if definition.type == 'boolean':
+            if isinstance(value, bool):
+                pass
+            elif isinstance(value, str) and value.strip().lower() in {'true', 'false'}:
+                value = value.strip().lower() == 'true'
+            else:
+                raise VectorAnalysisError(f'{definition.name} must be a boolean')
         parameters[definition.name] = value
     return parameters
 
@@ -522,6 +562,45 @@ def _add_source_id_fields(cur, output_layer_id: str) -> None:
             (%s::uuid, 'source_b_id', 'Layer B source feature ID', 'string', FALSE, 36, 1)
         """,
         (output_layer_id, output_layer_id),
+    )
+
+
+def _add_provenance_fields(
+    cur,
+    output_layer_id: str,
+    requested_names: list[tuple[str, str]],
+) -> list[str]:
+    cur.execute(
+        'SELECT name FROM layer_fields WHERE layer_id = %s::uuid',
+        (output_layer_id,),
+    )
+    used = {row['name'] for row in cur.fetchall()}
+    output_names: list[str] = []
+    for index, (requested_name, alias) in enumerate(requested_names):
+        output_name = _bounded_identifier('', requested_name, used)
+        cur.execute(
+            """
+            INSERT INTO layer_fields (
+                layer_id, name, alias, field_type, nullable, length, sort_order
+            ) VALUES (%s::uuid, %s, %s, 'string', FALSE, 36, %s)
+            """,
+            (output_layer_id, output_name, alias, 100_000 + index),
+        )
+        output_names.append(output_name)
+    return output_names
+
+
+def _inherit_layer_style(cur, output_layer_id: str, source_layer_id: str) -> None:
+    cur.execute(
+        """
+        UPDATE layers output
+        SET style = source.style,
+            min_zoom = source.min_zoom,
+            max_zoom = source.max_zoom
+        FROM layers source
+        WHERE output.id = %s::uuid AND source.id = %s::uuid
+        """,
+        (output_layer_id, source_layer_id),
     )
 
 
@@ -877,9 +956,224 @@ def _execute_intersect(
     }
 
 
+def _execute_mask_overlay(
+    cur,
+    parameters: dict[str, Any],
+    environments: dict[str, Any],
+    created_by: str | None,
+    progress: Callable[[int, str], None],
+    operation: str,
+) -> dict[str, Any]:
+    input_layer_id = parameters['input_layer']
+    mask_layer_id = parameters['mask_layer']
+    if input_layer_id == mask_layer_id:
+        raise VectorAnalysisError(f'{operation.title()} requires different input and mask layers')
+
+    cur.execute(
+        'SELECT id, name, geometry_type FROM layers WHERE id = ANY(%s::uuid[])',
+        ([input_layer_id, mask_layer_id],),
+    )
+    layers = {str(row['id']): dict(row) for row in cur.fetchall()}
+    if input_layer_id not in layers or mask_layer_id not in layers:
+        raise VectorAnalysisError('One or more input layers were not found')
+
+    input_family = _resolve_layer_family(cur, layers[input_layer_id])
+    mask_family = _resolve_layer_family(cur, layers[mask_layer_id])
+    if mask_family != 'polygon':
+        raise VectorAnalysisError(f'{operation.title()} mask layer must contain polygon geometry')
+    geometry_types = {'point': ('Point', 1), 'line': ('LineString', 2), 'polygon': ('Polygon', 3)}
+    layer_geometry_type, collection_type = geometry_types[input_family]
+
+    scope_input = environments['scope_a']
+    scope_mask = environments['scope_b']
+    selected_input = environments['selected_feature_ids_a']
+    selected_mask = environments['selected_feature_ids_b']
+    input_count = _count_scoped_features(cur, input_layer_id, scope_input, selected_input)
+    mask_count = _count_scoped_features(cur, mask_layer_id, scope_mask, selected_mask)
+
+    progress(15, 'Creating output schema')
+    output_layer_id = _create_output_layer(
+        cur,
+        name=parameters['output_name'],
+        description=f'{operation.title()} of "{layers[input_layer_id]["name"]}" using "{layers[mask_layer_id]["name"]}"',
+        geometry_type=layer_geometry_type,
+        created_by=created_by,
+        source_layer_id=input_layer_id,
+    )
+    _inherit_layer_style(cur, output_layer_id, input_layer_id)
+    provenance_requests = [
+        ('source_feature_id', 'Source feature ID'),
+    ]
+    dissolve_mask = operation == 'erase' or parameters.get('dissolve_mask', True)
+    if operation == 'clip' and not dissolve_mask:
+        provenance_requests.append(('mask_feature_id', 'Mask feature ID'))
+    provenance_fields = _add_provenance_fields(cur, output_layer_id, provenance_requests)
+    source_id_field = provenance_fields[0]
+    mask_id_field = provenance_fields[1] if len(provenance_fields) > 1 else None
+
+    input_clause = _selected_clause('source', scope_input)
+    mask_clause = _selected_clause('mask', scope_mask)
+    precision_grid = environments['precision_grid']
+
+    progress(38, f'{operation.title()}ping features' if operation == 'clip' else 'Erasing mask areas')
+    if operation == 'clip' and not dissolve_mask:
+        geometry_expression = 'ST_Intersection(source.geometry, mask.geometry)'
+        query_parameters: list[Any] = []
+        if precision_grid is not None:
+            geometry_expression = f'ST_SnapToGrid({geometry_expression}, %s)'
+            query_parameters.append(precision_grid)
+        query_parameters.extend([input_layer_id, mask_layer_id])
+        if scope_input == 'selected':
+            query_parameters.append(selected_input)
+        if scope_mask == 'selected':
+            query_parameters.append(selected_mask)
+        query_parameters.extend([
+            collection_type,
+            output_layer_id,
+            source_id_field,
+            mask_id_field,
+            created_by,
+        ])
+        cur.execute(
+            f"""
+            WITH processed AS MATERIALIZED (
+                SELECT source.id AS source_id,
+                       mask.id AS mask_id,
+                       source.properties,
+                       {geometry_expression} AS geometry
+                FROM features source
+                JOIN features mask
+                  ON source.geometry && mask.geometry
+                 AND ST_Intersects(source.geometry, mask.geometry)
+                WHERE source.layer_id = %s::uuid
+                  AND mask.layer_id = %s::uuid
+                  {input_clause}
+                  {mask_clause}
+            ), typed AS MATERIALIZED (
+                SELECT source_id,
+                       mask_id,
+                       properties,
+                       ST_CollectionExtract(geometry, %s) AS geometry
+                FROM processed
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid,
+                   geometry,
+                   properties || jsonb_build_object(
+                       %s, source_id::text,
+                       %s, mask_id::text
+                   ),
+                   %s::uuid
+            FROM typed
+            WHERE geometry IS NOT NULL AND NOT ST_IsEmpty(geometry)
+            """,
+            tuple(query_parameters),
+        )
+    else:
+        mask_parameters: list[Any] = [mask_layer_id]
+        if scope_mask == 'selected':
+            mask_parameters.append(selected_mask)
+        if operation == 'clip':
+            geometry_expression = 'ST_Intersection(source.geometry, dissolved_mask.geometry)'
+        else:
+            geometry_expression = """
+                CASE
+                    WHEN dissolved_mask.geometry IS NULL THEN source.geometry
+                    WHEN NOT source.geometry && dissolved_mask.geometry THEN source.geometry
+                    ELSE ST_Difference(source.geometry, dissolved_mask.geometry)
+                END
+            """
+        geometry_parameters: list[Any] = []
+        if precision_grid is not None:
+            geometry_expression = f'ST_SnapToGrid(({geometry_expression}), %s)'
+            geometry_parameters.append(precision_grid)
+        input_parameters: list[Any] = [input_layer_id]
+        if scope_input == 'selected':
+            input_parameters.append(selected_input)
+        cur.execute(
+            f"""
+            WITH dissolved_mask AS MATERIALIZED (
+                SELECT ST_UnaryUnion(ST_Collect(mask.geometry)) AS geometry
+                FROM features mask
+                WHERE mask.layer_id = %s::uuid
+                  {mask_clause}
+            ), processed AS MATERIALIZED (
+                SELECT source.id AS source_id,
+                       source.properties,
+                       {geometry_expression} AS geometry
+                FROM features source
+                CROSS JOIN dissolved_mask
+                WHERE source.layer_id = %s::uuid
+                  {input_clause}
+                  {'AND dissolved_mask.geometry IS NOT NULL AND source.geometry && dissolved_mask.geometry AND ST_Intersects(source.geometry, dissolved_mask.geometry)' if operation == 'clip' else ''}
+            ), typed AS MATERIALIZED (
+                SELECT source_id,
+                       properties,
+                       ST_CollectionExtract(geometry, %s) AS geometry
+                FROM processed
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid,
+                   geometry,
+                   properties || jsonb_build_object(%s, source_id::text),
+                   %s::uuid
+            FROM typed
+            WHERE geometry IS NOT NULL AND NOT ST_IsEmpty(geometry)
+            """,
+            tuple(
+                mask_parameters
+                + geometry_parameters
+                + input_parameters
+                + [collection_type, output_layer_id, source_id_field, created_by]
+            ),
+        )
+    feature_count = cur.rowcount
+
+    progress(78, 'Recording output provenance')
+    _record_output_history(cur, output_layer_id, created_by)
+    warnings: list[str] = []
+    if mask_count == 0:
+        warnings.append('The selected mask contains no features.')
+    if not feature_count:
+        warnings.append('The operation produced an empty output layer.')
+    if operation == 'clip' and not dissolve_mask:
+        warnings.append('Overlapping mask features can produce duplicate source portions when mask dissolve is disabled.')
+
+    progress(92, 'Finalizing output')
+    metrics = {
+        'input_feature_count': input_count,
+        'mask_feature_count': mask_count,
+        'output_geometry_family': input_family,
+        'dissolved_mask': dissolve_mask,
+    }
+    if operation == 'erase':
+        metrics['fully_removed_feature_count'] = max(input_count - feature_count, 0)
+    return {
+        'layer': _serialize_layer(cur, output_layer_id),
+        'count': feature_count,
+        'output_layer_ids': [output_layer_id],
+        'warnings': warnings,
+        'metrics': metrics,
+    }
+
+
+def _execute_clip(cur, parameters, environments, created_by, progress):
+    return _execute_mask_overlay(
+        cur, parameters, environments, created_by, progress, 'clip'
+    )
+
+
+def _execute_erase(cur, parameters, environments, created_by, progress):
+    return _execute_mask_overlay(
+        cur, parameters, environments, created_by, progress, 'erase'
+    )
+
+
 EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     'buffer': _execute_buffer,
     'intersect': _execute_intersect,
+    'clip': _execute_clip,
+    'erase': _execute_erase,
 }
 
 

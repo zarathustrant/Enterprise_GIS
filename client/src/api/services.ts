@@ -257,6 +257,25 @@ export interface AnalysisIntersectPayload {
   environments?: AnalysisEnvironments
 }
 
+export interface AnalysisClipPayload {
+  input_layer: string
+  mask_layer: string
+  output_name: string
+  dissolve_mask?: boolean
+  async?: boolean
+  execution_mode?: 'automatic' | 'synchronous' | 'asynchronous'
+  environments?: AnalysisEnvironments
+}
+
+export interface AnalysisErasePayload {
+  input_layer: string
+  mask_layer: string
+  output_name: string
+  async?: boolean
+  execution_mode?: 'automatic' | 'synchronous' | 'asynchronous'
+  environments?: AnalysisEnvironments
+}
+
 export interface AnalysisWithinPayload {
   layer_id: string
   polygon: Geometry
@@ -278,7 +297,7 @@ export interface CreateViewPayload {
 }
 
 export interface CreateJobPayload {
-  job_type: 'analysis.buffer' | 'analysis.intersect' | 'analysis.within'
+  job_type: 'analysis.buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.within'
   payload: Record<string, unknown>
 }
 
@@ -1129,6 +1148,34 @@ export function runIntersectAnalysis(
 ): Promise<AnalysisLayerResponse> {
   return apiRequest<AnalysisLayerResponse>(
     '/analysis/intersect',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token,
+  )
+}
+
+export function runClipAnalysis(
+  payload: AnalysisClipPayload,
+  token: string,
+): Promise<AnalysisLayerResponse> {
+  return apiRequest<AnalysisLayerResponse>(
+    '/analysis/clip',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token,
+  )
+}
+
+export function runEraseAnalysis(
+  payload: AnalysisErasePayload,
+  token: string,
+): Promise<AnalysisLayerResponse> {
+  return apiRequest<AnalysisLayerResponse>(
+    '/analysis/erase',
     {
       method: 'POST',
       body: JSON.stringify(payload),

@@ -126,6 +126,8 @@ import {
   selectFeatures,
   // rollbackFeature,
   runBufferAnalysis,
+  runClipAnalysis,
+  runEraseAnalysis,
   runIntersectAnalysis,
   runWithinAnalysis,
   sendTelemetry,
@@ -1491,7 +1493,7 @@ export default function App() {
   }, [layerOpsLayer, activeEditSessionByLayerId])
 
   const startAnalysisJob = (tab: AnalysisTab) => {
-    const label = tab === 'buffer' ? 'buffer' : tab === 'intersect' ? 'intersect' : 'within'
+    const label = tab
     pushActivity(`Started ${label} analysis`, 'info')
     setAnalysisJob({
       status: 'queued',
@@ -2414,6 +2416,68 @@ export default function App() {
     },
   })
 
+  const clipMutation = useMutation({
+    mutationFn: async (payload: {
+      inputLayer: string
+      maskLayer: string
+      outputName: string
+      dissolveMask: boolean
+    }) => {
+      if (!token) {
+        throw new Error('Sign in to run clip analysis.')
+      }
+      return runClipAnalysis({
+        input_layer: payload.inputLayer,
+        mask_layer: payload.maskLayer,
+        output_name: payload.outputName,
+        dissolve_mask: payload.dissolveMask,
+      }, token)
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['layer-features'] })
+      setAnalysisError(null)
+      setAnalysisOverlay(null)
+      setWithinCount(null)
+      const warningText = result.warnings?.length ? ` ${result.warnings.join(' ')}` : ''
+      completeAnalysisJob(`Clip complete (${result.count} features).${warningText}`)
+      notify(`Clip complete (${result.count} features).${warningText}`, result.warnings?.length ? 'warning' : 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Clip analysis failed'
+      setAnalysisError(message)
+      failAnalysisJob(message)
+    },
+  })
+
+  const eraseMutation = useMutation({
+    mutationFn: async (payload: { inputLayer: string; maskLayer: string; outputName: string }) => {
+      if (!token) {
+        throw new Error('Sign in to run erase analysis.')
+      }
+      return runEraseAnalysis({
+        input_layer: payload.inputLayer,
+        mask_layer: payload.maskLayer,
+        output_name: payload.outputName,
+      }, token)
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['layer-features'] })
+      setAnalysisError(null)
+      setAnalysisOverlay(null)
+      setWithinCount(null)
+      const warningText = result.warnings?.length ? ` ${result.warnings.join(' ')}` : ''
+      completeAnalysisJob(`Erase complete (${result.count} features).${warningText}`)
+      notify(`Erase complete (${result.count} features).${warningText}`, result.warnings?.length ? 'warning' : 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Erase analysis failed'
+      setAnalysisError(message)
+      failAnalysisJob(message)
+    },
+  })
+
   const withinMutation = useMutation({
     mutationFn: async (payload: { layerId: string; polygonText: string }) => {
       const polygon = JSON.parse(payload.polygonText) as Geometry
@@ -2433,7 +2497,11 @@ export default function App() {
     },
   })
 
-  const analysisRunning = bufferMutation.isPending || intersectMutation.isPending || withinMutation.isPending
+  const analysisRunning = bufferMutation.isPending
+    || intersectMutation.isPending
+    || clipMutation.isPending
+    || eraseMutation.isPending
+    || withinMutation.isPending
 
   const handleAuthenticated = (response: AuthResponse) => {
     setAuthTokens(response.access_token, response.refresh_token ?? null)
@@ -4587,6 +4655,16 @@ export default function App() {
             setAnalysisError(null)
             startAnalysisJob('intersect')
             intersectMutation.mutate(payload)
+          }}
+          onRunClip={(payload) => {
+            setAnalysisError(null)
+            startAnalysisJob('clip')
+            clipMutation.mutate(payload)
+          }}
+          onRunErase={(payload) => {
+            setAnalysisError(null)
+            startAnalysisJob('erase')
+            eraseMutation.mutate(payload)
           }}
           onRunWithin={(payload) => {
             setAnalysisError(null)

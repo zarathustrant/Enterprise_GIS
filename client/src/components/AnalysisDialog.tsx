@@ -8,17 +8,19 @@ import {
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   LinearProgress,
   MenuItem,
   Tab,
   Tabs,
   TextField,
   Typography,
+  Switch,
 } from '@mui/material'
 import type { Layer } from '../types/gis'
 import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 
-export type AnalysisTab = 'buffer' | 'intersect' | 'within'
+export type AnalysisTab = 'buffer' | 'intersect' | 'clip' | 'erase' | 'within'
 export type AnalysisJobStatus = 'queued' | 'running' | 'success' | 'error'
 
 export interface AnalysisJobState {
@@ -45,6 +47,8 @@ interface AnalysisDialogProps {
     prefixA: string
     prefixB: string
   }) => void
+  onRunClip: (payload: { inputLayer: string; maskLayer: string; outputName: string; dissolveMask: boolean }) => void
+  onRunErase: (payload: { inputLayer: string; maskLayer: string; outputName: string }) => void
   onRunWithin: (payload: { layerId: string; polygon: string }) => void
 }
 
@@ -59,6 +63,8 @@ export function AnalysisDialog({
   onClose,
   onRunBuffer,
   onRunIntersect,
+  onRunClip,
+  onRunErase,
   onRunWithin,
 }: AnalysisDialogProps) {
   const [tab, setTab] = useState<AnalysisTab>('buffer')
@@ -73,6 +79,12 @@ export function AnalysisDialog({
   const [intersectPrefixA, setIntersectPrefixA] = useState('a_')
   const [intersectPrefixB, setIntersectPrefixB] = useState('b_')
 
+  const [overlayInputLayerId, setOverlayInputLayerId] = useState('')
+  const [overlayMaskLayerId, setOverlayMaskLayerId] = useState('')
+  const [clipName, setClipName] = useState('Clip')
+  const [eraseName, setEraseName] = useState('Erase')
+  const [dissolveMask, setDissolveMask] = useState(true)
+
   const [withinLayerId, setWithinLayerId] = useState('')
   const [withinPolygon, setWithinPolygon] = useState(
     '{\n  "type": "Polygon",\n  "coordinates": [[[5.58,6.29],[5.62,6.29],[5.62,6.31],[5.58,6.31],[5.58,6.29]]]\n}',
@@ -81,6 +93,83 @@ export function AnalysisDialog({
   const layerOptions = useMemo(
     () => layers.map((layer) => ({ label: layer.name, value: layer.id })),
     [layers],
+  )
+  const polygonLayerOptions = useMemo(
+    () => layerOptions.filter((item) => {
+      const layer = layers.find((candidate) => candidate.id === item.value)
+      return (layer?.geometry_type ?? '').toLowerCase().includes('polygon')
+    }),
+    [layerOptions, layers],
+  )
+
+  const renderMaskOverlayForm = (operation: 'clip' | 'erase') => (
+    <Box display="grid" gap={2}>
+      <TextField
+        label="Input layer"
+        value={overlayInputLayerId}
+        onChange={(event) => setOverlayInputLayerId(event.target.value)}
+        size="small"
+        select
+        fullWidth
+      >
+        {layerOptions.map((item) => (
+          <MenuItem key={item.value} value={item.value}>{item.label}</MenuItem>
+        ))}
+      </TextField>
+      <TextField
+        label="Polygon mask layer"
+        value={overlayMaskLayerId}
+        onChange={(event) => setOverlayMaskLayerId(event.target.value)}
+        size="small"
+        select
+        fullWidth
+        helperText={polygonLayerOptions.length ? 'Only polygon layers can be used as masks.' : 'Create or import a polygon layer to use as a mask.'}
+      >
+        {polygonLayerOptions.map((item) => (
+          <MenuItem key={item.value} value={item.value} disabled={item.value === overlayInputLayerId}>
+            {item.label}
+          </MenuItem>
+        ))}
+      </TextField>
+      {overlayInputLayerId && overlayInputLayerId === overlayMaskLayerId && (
+        <Alert severity="warning">Choose different input and mask layers.</Alert>
+      )}
+      {operation === 'clip' && (
+        <FormControlLabel
+          control={<Switch checked={dissolveMask} onChange={(event) => setDissolveMask(event.target.checked)} />}
+          label="Dissolve mask before clipping"
+        />
+      )}
+      <TextField
+        label="Output layer name"
+        value={operation === 'clip' ? clipName : eraseName}
+        onChange={(event) => operation === 'clip' ? setClipName(event.target.value) : setEraseName(event.target.value)}
+        size="small"
+        fullWidth
+      />
+      <Button
+        variant="contained"
+        disabled={running || !overlayInputLayerId || !overlayMaskLayerId || overlayInputLayerId === overlayMaskLayerId}
+        onClick={() => {
+          if (operation === 'clip') {
+            onRunClip({
+              inputLayer: overlayInputLayerId,
+              maskLayer: overlayMaskLayerId,
+              outputName: clipName || 'Clip',
+              dissolveMask,
+            })
+          } else {
+            onRunErase({
+              inputLayer: overlayInputLayerId,
+              maskLayer: overlayMaskLayerId,
+              outputName: eraseName || 'Erase',
+            })
+          }
+        }}
+      >
+        Run {operation === 'clip' ? 'Clip' : 'Erase'}
+      </Button>
+    </Box>
   )
 
   return (
@@ -94,9 +183,17 @@ export function AnalysisDialog({
     >
       <DialogTitle>Spatial Analysis</DialogTitle>
       <DialogContent>
-        <Tabs value={tab} onChange={(_, value) => setTab(value as AnalysisTab)} sx={{ mb: 2 }}>
+        <Tabs
+          value={tab}
+          onChange={(_, value) => setTab(value as AnalysisTab)}
+          variant="scrollable"
+          scrollButtons="auto"
+          sx={{ mb: 2 }}
+        >
           <Tab value="buffer" label="Buffer" />
           <Tab value="intersect" label="Intersect" />
+          <Tab value="clip" label="Clip" />
+          <Tab value="erase" label="Erase" />
           <Tab value="within" label="Within" />
         </Tabs>
 
@@ -249,6 +346,9 @@ export function AnalysisDialog({
             </Button>
           </Box>
         )}
+
+        {tab === 'clip' && renderMaskOverlayForm('clip')}
+        {tab === 'erase' && renderMaskOverlayForm('erase')}
 
         {tab === 'within' && (
           <Box display="grid" gap={2}>

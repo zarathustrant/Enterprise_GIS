@@ -170,6 +170,15 @@ Correctness requirements:
 
 ## Phase 2: Clip And Erase
 
+Implementation status:
+
+- shared Clip/Erase polygon-mask kernel complete
+- dissolved and per-feature Clip masks complete
+- Erase mask union, unaffected-feature retention, and fully removed counts complete
+- source schema, domains, styling, geometry family, and provenance propagation complete
+- independent input/mask selections, precision grid, sync/worker execution, metrics, and warnings complete
+- database area/length conservation fixtures, repair policy, multipart explode mode, and automatic async threshold remain
+
 ### Clip
 
 - clip points, lines, and polygons by polygon masks
