@@ -202,6 +202,16 @@ Exit gate:
 
 ## Phase 3: Dissolve
 
+Implementation status:
+
+- dissolve all and multi-field grouping complete
+- grouped or excluded null policy complete
+- multipart and singlepart output complete
+- count, sum, minimum, maximum, mean, first, and last statistics complete
+- grouping schema/domain retention and generated statistic schema complete
+- selected scope, precision grid, shared worker execution, visual field/statistic builder, metrics, and warnings complete
+- database aggregate fixtures, concatenated values, invalid-geometry repair, and bounded staged unions for very large groups remain
+
 Capabilities:
 
 - dissolve all or by one or more fields

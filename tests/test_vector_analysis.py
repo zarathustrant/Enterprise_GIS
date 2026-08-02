@@ -6,6 +6,7 @@ from vector_analysis import (
     VectorAnalysisError,
     _bounded_identifier,
     _execute_clip,
+    _execute_dissolve,
     _execute_erase,
     _execute_intersect,
     _geometry_family,
@@ -45,6 +46,12 @@ class VectorToolRegistryTests(unittest.TestCase):
         self.assertTrue(erase_tool.migrated)
         self.assertEqual(clip_tool.category, 'Overlay')
         self.assertEqual(erase_tool.category, 'Overlay')
+
+    def test_dissolve_is_a_migrated_data_management_tool(self):
+        dissolve_tool = get_tool_spec('dissolve')
+
+        self.assertTrue(dissolve_tool.migrated)
+        self.assertEqual(dissolve_tool.category, 'Data management')
 
     def test_unknown_tool_is_rejected(self):
         with self.assertRaisesRegex(VectorAnalysisError, 'Unknown vector analysis tool'):
@@ -120,6 +127,26 @@ class VectorToolValidationTests(unittest.TestCase):
         self.assertFalse(validate_tool_parameters('clip', {**base, 'dissolve_mask': 'false'})['dissolve_mask'])
         with self.assertRaisesRegex(VectorAnalysisError, 'must be a boolean'):
             validate_tool_parameters('clip', {**base, 'dissolve_mask': 1})
+
+    def test_dissolve_statistics_are_normalized(self):
+        parameters = validate_tool_parameters('dissolve', {
+            'layer_id': str(uuid4()),
+            'output_name': 'District totals',
+            'dissolve_fields': ['district'],
+            'statistics': [
+                {'field': 'population', 'statistic': 'mean'},
+                {'statistic': 'count'},
+            ],
+        })
+
+        self.assertEqual(parameters['statistics'][0]['output_field'], 'mean_population')
+        self.assertEqual(parameters['statistics'][1]['output_field'], 'feature_count')
+        with self.assertRaisesRegex(VectorAnalysisError, 'Unsupported statistic'):
+            validate_tool_parameters('dissolve', {
+                'layer_id': str(uuid4()),
+                'output_name': 'Invalid',
+                'statistics': [{'field': 'population', 'statistic': 'median'}],
+            })
 
     def test_selected_scope_requires_valid_feature_ids(self):
         feature_id = str(uuid4())
@@ -201,6 +228,7 @@ class PlaceholderCheckingCursor:
         self._all = []
         self.intersect_parameters = None
         self.mask_overlay_parameters = None
+        self.dissolve_parameters = None
 
     def execute(self, query, parameters=()):
         parameters = tuple(parameters)
@@ -211,11 +239,13 @@ class PlaceholderCheckingCursor:
         self.rowcount = 0
 
         if normalized.startswith('SELECT id, name, geometry_type FROM layers'):
-            self._all = [
-                {'id': self.layer_a, 'name': 'Parcels', 'geometry_type': 'Polygon'},
-                {'id': self.layer_b, 'name': 'Masks', 'geometry_type': self.geometry_b},
-            ]
-            self._all[0]['geometry_type'] = self.geometry_a
+            if '= ANY(' in normalized:
+                self._all = [
+                    {'id': self.layer_a, 'name': 'Parcels', 'geometry_type': self.geometry_a},
+                    {'id': self.layer_b, 'name': 'Masks', 'geometry_type': self.geometry_b},
+                ]
+            else:
+                self._one = {'id': self.layer_a, 'name': 'Parcels', 'geometry_type': self.geometry_a}
         elif normalized.startswith('SELECT COUNT(*) AS count FROM features'):
             self._one = {'count': 2}
         elif normalized.startswith('INSERT INTO layers'):
@@ -226,6 +256,9 @@ class PlaceholderCheckingCursor:
         elif normalized.startswith('WITH dissolved_mask AS MATERIALIZED') or normalized.startswith('WITH processed AS MATERIALIZED'):
             self.mask_overlay_parameters = parameters
             self.rowcount = 2
+        elif normalized.startswith('WITH grouped AS MATERIALIZED'):
+            self.dissolve_parameters = parameters
+            self.rowcount = 1
         elif normalized.startswith('SELECT l.*, u.username AS created_by'):
             now = datetime.now(timezone.utc)
             self._one = {
@@ -405,6 +438,43 @@ class MaskOverlayExecutorContractTests(unittest.TestCase):
                 self.user_id,
                 lambda _progress, _stage: None,
             )
+
+
+class DissolveExecutorContractTests(unittest.TestCase):
+    def test_dissolve_all_with_count_uses_selected_scope_and_precision(self):
+        layer_id = str(uuid4())
+        output_layer = str(uuid4())
+        user_id = str(uuid4())
+        selected_feature = str(uuid4())
+        cursor = PlaceholderCheckingCursor(
+            layer_id,
+            str(uuid4()),
+            output_layer,
+            geometry_a='Polygon',
+        )
+        parameters = validate_tool_parameters('dissolve', {
+            'layer_id': layer_id,
+            'output_name': 'Dissolved parcels',
+            'statistics': [{'statistic': 'count'}],
+        })
+        environments = normalize_environments({
+            'scope': 'selected',
+            'selected_feature_ids': [selected_feature],
+            'precision_grid': 0.00001,
+        })
+
+        result = _execute_dissolve(
+            cursor, parameters, environments, user_id, lambda _progress, _stage: None
+        )
+
+        self.assertEqual(result['count'], 1)
+        self.assertEqual(result['metrics']['statistic_count'], 1)
+        self.assertEqual(cursor.dissolve_parameters[:4], (
+            layer_id,
+            [selected_feature],
+            3,
+            0.00001,
+        ))
 
 
 if __name__ == '__main__':

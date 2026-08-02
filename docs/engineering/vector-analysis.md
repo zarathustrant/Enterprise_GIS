@@ -108,6 +108,23 @@ Erase provides:
 
 Both tools support independent selected-feature scopes for input and mask layers, precision-grid snapping, synchronous or worker execution, durable run history, output feature history, and transactional rollback. Their endpoints are `POST /api/v1/analysis/clip` and `POST /api/v1/analysis/erase`.
 
+### Dissolve
+
+Dissolve aggregates all input features or groups them by multiple authoritative schema fields. It supports:
+
+- zero, one, or multiple grouping fields
+- grouped or excluded null values
+- multipart output or `ST_Dump` singlepart expansion
+- count, sum, minimum, maximum, mean, first, and last statistics
+- numeric field enforcement for numeric statistics
+- deterministic first/last ordering by source feature UUID
+- preservation of grouping field aliases, types, defaults, domains, and order
+- generated statistic fields with validated names and appropriate types
+- selected-feature scope and precision-grid snapping
+- staged `ST_Collect` plus `ST_UnaryUnion` aggregation
+
+The endpoint is `POST /api/v1/analysis/dissolve`. The analysis panel loads layer fields and builds grouping and statistic rules visually.
+
 ## Transaction Guarantees
 
 - A run is committed before synchronous execution, so failures remain visible.
@@ -117,7 +134,6 @@ Both tools support independent selected-feature scopes for input and mask layers
 
 ## Next Migration Order
 
-1. Dissolve with grouping fields and aggregate statistics.
-2. Spatial Join and Summarize Within with explicit cardinality behavior.
-3. Near and nearest-feature tables with geodesic distances.
-4. Analysis Workbench UI generated from the registry and run-history APIs.
+1. Spatial Join and Summarize Within with explicit cardinality behavior.
+2. Near and nearest-feature tables with geodesic distances.
+3. Analysis Workbench UI generated from the registry and run-history APIs.

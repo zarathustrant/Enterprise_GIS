@@ -73,6 +73,7 @@ import PentagonOutlinedIcon from '@mui/icons-material/PentagonOutlined'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  type AnalysisStatistic,
   abandonEditSession,
   bulkUpdateFeatures,
   createEditSession,
@@ -127,6 +128,7 @@ import {
   // rollbackFeature,
   runBufferAnalysis,
   runClipAnalysis,
+  runDissolveAnalysis,
   runEraseAnalysis,
   runIntersectAnalysis,
   runWithinAnalysis,
@@ -2478,6 +2480,44 @@ export default function App() {
     },
   })
 
+  const dissolveMutation = useMutation({
+    mutationFn: async (payload: {
+      layerId: string
+      outputName: string
+      dissolveFields: string[]
+      statistics: AnalysisStatistic[]
+      multipart: boolean
+      nullPolicy: 'group' | 'exclude'
+    }) => {
+      if (!token) {
+        throw new Error('Sign in to run dissolve analysis.')
+      }
+      return runDissolveAnalysis({
+        layer_id: payload.layerId,
+        output_name: payload.outputName,
+        dissolve_fields: payload.dissolveFields,
+        statistics: payload.statistics,
+        multipart: payload.multipart,
+        null_policy: payload.nullPolicy,
+      }, token)
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['layer-features'] })
+      setAnalysisError(null)
+      setAnalysisOverlay(null)
+      setWithinCount(null)
+      const warningText = result.warnings?.length ? ` ${result.warnings.join(' ')}` : ''
+      completeAnalysisJob(`Dissolve complete (${result.count} features).${warningText}`)
+      notify(`Dissolve complete (${result.count} features).${warningText}`, result.warnings?.length ? 'warning' : 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Dissolve analysis failed'
+      setAnalysisError(message)
+      failAnalysisJob(message)
+    },
+  })
+
   const withinMutation = useMutation({
     mutationFn: async (payload: { layerId: string; polygonText: string }) => {
       const polygon = JSON.parse(payload.polygonText) as Geometry
@@ -2501,6 +2541,7 @@ export default function App() {
     || intersectMutation.isPending
     || clipMutation.isPending
     || eraseMutation.isPending
+    || dissolveMutation.isPending
     || withinMutation.isPending
 
   const handleAuthenticated = (response: AuthResponse) => {
@@ -4665,6 +4706,11 @@ export default function App() {
             setAnalysisError(null)
             startAnalysisJob('erase')
             eraseMutation.mutate(payload)
+          }}
+          onRunDissolve={(payload) => {
+            setAnalysisError(null)
+            startAnalysisJob('dissolve')
+            dissolveMutation.mutate(payload)
           }}
           onRunWithin={(payload) => {
             setAnalysisError(null)

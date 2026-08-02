@@ -257,6 +257,19 @@ def erase():
     )
 
 
+# ── Dissolve ──────────────────────────────────────────────────────────────────
+
+@analysis_bp.route('/dissolve', methods=['POST'])
+@jwt_required()
+def dissolve():
+    return _run_layer_tool(
+        'dissolve',
+        request.get_json() or {},
+        ('layer_id',),
+        'analysis_dissolve',
+    )
+
+
 # ── Spatial query (features within a polygon) ─────────────────────────────────
 
 @analysis_bp.route('/within', methods=['POST'])

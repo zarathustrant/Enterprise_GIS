@@ -276,6 +276,24 @@ export interface AnalysisErasePayload {
   environments?: AnalysisEnvironments
 }
 
+export interface AnalysisStatistic {
+  field?: string | null
+  statistic: 'count' | 'sum' | 'minimum' | 'maximum' | 'mean' | 'first' | 'last'
+  output_field?: string
+}
+
+export interface AnalysisDissolvePayload {
+  layer_id: string
+  output_name: string
+  dissolve_fields?: string[]
+  statistics?: AnalysisStatistic[]
+  multipart?: boolean
+  null_policy?: 'group' | 'exclude'
+  async?: boolean
+  execution_mode?: 'automatic' | 'synchronous' | 'asynchronous'
+  environments?: AnalysisEnvironments
+}
+
 export interface AnalysisWithinPayload {
   layer_id: string
   polygon: Geometry
@@ -297,7 +315,7 @@ export interface CreateViewPayload {
 }
 
 export interface CreateJobPayload {
-  job_type: 'analysis.buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.within'
+  job_type: 'analysis.buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.dissolve' | 'analysis.within'
   payload: Record<string, unknown>
 }
 
@@ -1176,6 +1194,20 @@ export function runEraseAnalysis(
 ): Promise<AnalysisLayerResponse> {
   return apiRequest<AnalysisLayerResponse>(
     '/analysis/erase',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token,
+  )
+}
+
+export function runDissolveAnalysis(
+  payload: AnalysisDissolvePayload,
+  token: string,
+): Promise<AnalysisLayerResponse> {
+  return apiRequest<AnalysisLayerResponse>(
+    '/analysis/dissolve',
     {
       method: 'POST',
       body: JSON.stringify(payload),

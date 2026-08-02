@@ -123,6 +123,31 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
         migrated=True,
         keywords=('difference', 'remove', 'mask'),
     ),
+    'dissolve': VectorToolSpec(
+        id='dissolve',
+        version=1,
+        title='Dissolve',
+        category='Data management',
+        description='Aggregate features by attributes and calculate summary statistics.',
+        input_geometry_families=('point', 'line', 'polygon'),
+        output_geometry_family=None,
+        parameters=(
+            ToolParameter('layer_id', 'Input layer', 'layer', required=True),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Dissolve'),
+            ToolParameter('dissolve_fields', 'Dissolve fields', 'string_list', default=()),
+            ToolParameter('statistics', 'Summary statistics', 'statistics', default=()),
+            ToolParameter('multipart', 'Create multipart features', 'boolean', default=True),
+            ToolParameter(
+                'null_policy',
+                'Null grouping policy',
+                'choice',
+                default='group',
+                choices=('group', 'exclude'),
+            ),
+        ),
+        migrated=True,
+        keywords=('aggregate', 'group', 'union', 'statistics'),
+    ),
     'within': VectorToolSpec(
         id='within',
         version=1,
@@ -254,6 +279,42 @@ def validate_tool_parameters(tool_id: str, raw: Any) -> dict[str, Any]:
                 value = value.strip().lower() == 'true'
             else:
                 raise VectorAnalysisError(f'{definition.name} must be a boolean')
+        if definition.type == 'string_list':
+            if not isinstance(value, (list, tuple)):
+                raise VectorAnalysisError(f'{definition.name} must be a list of field names')
+            value = [str(item).strip() for item in value]
+            if any(not item or len(item) > 64 for item in value):
+                raise VectorAnalysisError(f'{definition.name} contains an invalid field name')
+            if len(value) != len(set(value)):
+                raise VectorAnalysisError(f'{definition.name} cannot contain duplicate fields')
+        if definition.type == 'statistics':
+            if not isinstance(value, (list, tuple)):
+                raise VectorAnalysisError(f'{definition.name} must be a list')
+            normalized_statistics = []
+            allowed_statistics = {'count', 'sum', 'minimum', 'maximum', 'mean', 'first', 'last'}
+            used_output_names: set[str] = set()
+            for index, item in enumerate(value):
+                if not isinstance(item, dict):
+                    raise VectorAnalysisError(f'{definition.name}[{index}] must be an object')
+                statistic = str(item.get('statistic', '')).strip().lower()
+                field_name = str(item.get('field', '')).strip()
+                if statistic not in allowed_statistics:
+                    raise VectorAnalysisError(f'Unsupported statistic: {statistic or "missing"}')
+                if statistic != 'count' and not field_name:
+                    raise VectorAnalysisError(f'{statistic} statistic requires a field')
+                default_name = 'feature_count' if statistic == 'count' else f'{statistic}_{field_name}'
+                output_name = str(item.get('output_field') or default_name).strip()
+                if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,63}', output_name):
+                    raise VectorAnalysisError(f'Invalid statistic output field: {output_name}')
+                if output_name in used_output_names:
+                    raise VectorAnalysisError(f'Duplicate statistic output field: {output_name}')
+                used_output_names.add(output_name)
+                normalized_statistics.append({
+                    'field': field_name or None,
+                    'statistic': statistic,
+                    'output_field': output_name,
+                })
+            value = normalized_statistics
         parameters[definition.name] = value
     return parameters
 
@@ -1169,11 +1230,235 @@ def _execute_erase(cur, parameters, environments, created_by, progress):
     )
 
 
+def _execute_dissolve(
+    cur,
+    parameters: dict[str, Any],
+    environments: dict[str, Any],
+    created_by: str | None,
+    progress: Callable[[int, str], None],
+) -> dict[str, Any]:
+    layer_id = parameters['layer_id']
+    cur.execute(
+        'SELECT id, name, geometry_type FROM layers WHERE id = %s::uuid',
+        (layer_id,),
+    )
+    source_layer = cur.fetchone()
+    if not source_layer:
+        raise VectorAnalysisError('Input layer was not found')
+    source_layer = dict(source_layer)
+    input_family = _resolve_layer_family(cur, source_layer)
+    geometry_types = {'point': ('Point', 1), 'line': ('LineString', 2), 'polygon': ('Polygon', 3)}
+    layer_geometry_type, collection_type = geometry_types[input_family]
+
+    cur.execute(
+        """
+        SELECT name, alias, field_type, nullable, length, precision, scale
+        FROM layer_fields WHERE layer_id = %s::uuid
+        """,
+        (layer_id,),
+    )
+    source_fields = {row['name']: dict(row) for row in cur.fetchall()}
+    dissolve_fields = parameters['dissolve_fields']
+    missing_fields = [name for name in dissolve_fields if name not in source_fields]
+    if missing_fields:
+        raise VectorAnalysisError(f'Unknown dissolve fields: {", ".join(missing_fields)}')
+
+    statistics = parameters['statistics']
+    numeric_types = {'integer', 'double'}
+    for statistic in statistics:
+        field_name = statistic['field']
+        if field_name and field_name not in source_fields:
+            raise VectorAnalysisError(f'Unknown statistic field: {field_name}')
+        if statistic['statistic'] in {'sum', 'minimum', 'maximum', 'mean'}:
+            if source_fields[field_name]['field_type'] not in numeric_types:
+                raise VectorAnalysisError(
+                    f'{statistic["statistic"]} requires a numeric field: {field_name}'
+                )
+        if statistic['output_field'] in dissolve_fields:
+            raise VectorAnalysisError(
+                f'Statistic output field conflicts with dissolve field: {statistic["output_field"]}'
+            )
+
+    scope = environments['scope']
+    selected_ids = environments['selected_feature_ids']
+    input_count = _count_scoped_features(cur, layer_id, scope, selected_ids)
+
+    progress(15, 'Creating dissolve schema')
+    output_layer_id = _create_output_layer(
+        cur,
+        name=parameters['output_name'],
+        description=f'Dissolve of "{source_layer["name"]}"',
+        geometry_type=layer_geometry_type,
+        created_by=created_by,
+        source_layer_id=layer_id,
+    )
+    if dissolve_fields:
+        cur.execute(
+            """
+            DELETE FROM layer_fields
+            WHERE layer_id = %s::uuid AND NOT (name = ANY(%s::text[]))
+            """,
+            (output_layer_id, dissolve_fields),
+        )
+    else:
+        cur.execute('DELETE FROM layer_fields WHERE layer_id = %s::uuid', (output_layer_id,))
+    cur.execute(
+        """
+        DELETE FROM layer_domains domain
+        WHERE domain.layer_id = %s::uuid
+          AND NOT EXISTS (SELECT 1 FROM layer_fields field WHERE field.domain_id = domain.id)
+        """,
+        (output_layer_id,),
+    )
+    for index, statistic in enumerate(statistics):
+        source_field = source_fields.get(statistic['field']) if statistic['field'] else None
+        statistic_name = statistic['statistic']
+        if statistic_name == 'count':
+            field_type = 'integer'
+            alias = 'Feature count'
+            length = precision = scale = None
+        elif statistic_name in {'sum', 'minimum', 'maximum', 'mean'}:
+            field_type = 'double'
+            alias = f'{statistic_name.title()} of {source_field.get("alias") or statistic["field"]}'
+            length = None
+            precision = source_field.get('precision')
+            scale = source_field.get('scale')
+        else:
+            field_type = source_field['field_type']
+            alias = f'{statistic_name.title()} {source_field.get("alias") or statistic["field"]}'
+            length = source_field.get('length')
+            precision = source_field.get('precision')
+            scale = source_field.get('scale')
+        cur.execute(
+            """
+            INSERT INTO layer_fields (
+                layer_id, name, alias, field_type, nullable, length, precision, scale, sort_order
+            ) VALUES (%s::uuid, %s, %s, %s, TRUE, %s, %s, %s, %s)
+            """,
+            (
+                output_layer_id,
+                statistic['output_field'],
+                alias[:128],
+                field_type,
+                length,
+                precision,
+                scale,
+                10_000 + index,
+            ),
+        )
+
+    group_selects = [
+        f"source.properties -> '{field_name}' AS group_{index}"
+        for index, field_name in enumerate(dissolve_fields)
+    ]
+    group_by = [f"source.properties -> '{field_name}'" for field_name in dissolve_fields]
+    statistic_selects: list[str] = []
+    for index, statistic in enumerate(statistics):
+        statistic_name = statistic['statistic']
+        field_name = statistic['field']
+        if statistic_name == 'count':
+            expression = 'COUNT(*)'
+        elif statistic_name in {'sum', 'minimum', 'maximum', 'mean'}:
+            function = {'sum': 'SUM', 'minimum': 'MIN', 'maximum': 'MAX', 'mean': 'AVG'}[statistic_name]
+            numeric_value = (
+                f"CASE WHEN jsonb_typeof(source.properties -> '{field_name}') = 'number' "
+                f"THEN (source.properties ->> '{field_name}')::double precision END"
+            )
+            expression = f'{function}({numeric_value})'
+        elif statistic_name == 'first':
+            expression = f"(array_agg(source.properties -> '{field_name}' ORDER BY source.id))[1]"
+        else:
+            expression = f"(array_agg(source.properties -> '{field_name}' ORDER BY source.id DESC))[1]"
+        statistic_selects.append(f'{expression} AS statistic_{index}')
+
+    property_pairs = [
+        f"'{field_name}', group_{index}"
+        for index, field_name in enumerate(dissolve_fields)
+    ] + [
+        f"'{statistic['output_field']}', statistic_{index}"
+        for index, statistic in enumerate(statistics)
+    ]
+    properties_expression = (
+        f"jsonb_build_object({', '.join(property_pairs)})"
+        if property_pairs else "'{}'::jsonb"
+    )
+    where_clauses = ['source.layer_id = %s::uuid']
+    query_parameters: list[Any] = [layer_id]
+    if scope == 'selected':
+        where_clauses.append('source.id = ANY(%s::uuid[])')
+        query_parameters.append(selected_ids)
+    if parameters['null_policy'] == 'exclude':
+        for field_name in dissolve_fields:
+            where_clauses.append(
+                f"source.properties -> '{field_name}' IS NOT NULL "
+                f"AND source.properties -> '{field_name}' <> 'null'::jsonb"
+            )
+
+    aggregate_columns = group_selects + [
+        'ST_UnaryUnion(ST_Collect(source.geometry)) AS geometry',
+    ] + statistic_selects
+    grouped_sql = ',\n                       '.join(aggregate_columns)
+    precision_expression = 'ST_CollectionExtract(geometry, %s)'
+    prepared_parameters: list[Any] = [collection_type]
+    if environments['precision_grid'] is not None:
+        precision_expression = f'ST_SnapToGrid({precision_expression}, %s)'
+        prepared_parameters.append(environments['precision_grid'])
+    group_clause = f"GROUP BY {', '.join(group_by)}" if group_by else ''
+    if parameters['multipart']:
+        final_geometry = 'geometry'
+        final_from = 'prepared'
+    else:
+        final_geometry = 'dumped.geometry'
+        final_from = 'prepared CROSS JOIN LATERAL ST_Dump(prepared.geometry) AS dumped'
+
+    progress(42, 'Aggregating dissolve groups')
+    cur.execute(
+        f"""
+        WITH grouped AS MATERIALIZED (
+            SELECT {grouped_sql}
+            FROM features source
+            WHERE {' AND '.join(where_clauses)}
+            {group_clause}
+        ), prepared AS MATERIALIZED (
+            SELECT {precision_expression} AS geometry,
+                   {properties_expression} AS properties
+            FROM grouped
+        )
+        INSERT INTO features (layer_id, geometry, properties, created_by)
+        SELECT %s::uuid, {final_geometry}, properties, %s::uuid
+        FROM {final_from}
+        WHERE {final_geometry} IS NOT NULL AND NOT ST_IsEmpty({final_geometry})
+        """,
+        tuple(query_parameters + prepared_parameters + [output_layer_id, created_by]),
+    )
+    feature_count = cur.rowcount
+
+    progress(80, 'Recording output provenance')
+    _record_output_history(cur, output_layer_id, created_by)
+    warnings = [] if feature_count else ['The operation produced an empty output layer.']
+    progress(92, 'Finalizing output')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id),
+        'count': feature_count,
+        'output_layer_ids': [output_layer_id],
+        'warnings': warnings,
+        'metrics': {
+            'input_feature_count': input_count,
+            'group_count': feature_count,
+            'dissolve_field_count': len(dissolve_fields),
+            'statistic_count': len(statistics),
+            'multipart': parameters['multipart'],
+            'output_geometry_family': input_family,
+        },
+    }
+
+
 EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     'buffer': _execute_buffer,
     'intersect': _execute_intersect,
     'clip': _execute_clip,
     'erase': _execute_erase,
+    'dissolve': _execute_dissolve,
 }
 
 
