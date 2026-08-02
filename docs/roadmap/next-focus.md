@@ -2,6 +2,28 @@
 
 This document describes the most defensible next implementation priorities based on the current codebase.
 
+## Queued Next: Scalable ingestion schema profiling
+
+Replace ingestion's full in-memory scan of existing feature properties with a bounded, database-side profiling workflow.
+
+Implementation scope:
+
+- aggregate property keys and JSON value types in PostgreSQL instead of loading every feature into API memory
+- apply deterministic type promotion for boolean, integer, double, date, datetime, and string values
+- sample or batch very large layers with explicit confidence and truncation metadata
+- move expensive profiling and schema backfills to the Redis worker queue
+- report progress, cancellation, warnings, inferred aliases, and field mappings in the import UI
+- keep schema creation and property-key migration transactional
+- preserve strict behavior for layers that already have an explicit schema
+
+Acceptance criteria:
+
+- profiling memory use is bounded independently of layer feature count
+- million-feature fixtures do not require materializing all property objects in Python
+- inferred schemas are deterministic across batches and worker retries
+- cancellation or failure leaves feature data and field metadata unchanged
+- existing synchronous behavior remains available for small imports
+
 ## Priority 1: Finish geometry-correct advanced editing
 
 The most important gap is not UI breadth. It is trustworthiness of advanced edits.
