@@ -15,6 +15,7 @@ services:
       - ./database/migrations/003_enterprise_capabilities.sql:/docker-entrypoint-initdb.d/003_enterprise_capabilities.sql:ro
       - ./database/migrations/004_collaboration_workflows.sql:/docker-entrypoint-initdb.d/004_collaboration_workflows.sql:ro
       - ./database/migrations/005_utility_network_v1.sql:/docker-entrypoint-initdb.d/005_utility_network_v1.sql:ro
+      - ./database/migrations/006_vector_analysis_framework.sql:/docker-entrypoint-initdb.d/006_vector_analysis_framework.sql:ro
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U postgres -d enterprise_gis']
       interval: 5s

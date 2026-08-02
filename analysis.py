@@ -1,11 +1,69 @@
 import json
+from uuid import UUID
 from flask import Blueprint, current_app, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from db import get_db
 from enterprise_utils import create_async_job, log_audit, serialize_job
 from job_queue import enqueue_job
+from vector_analysis import (
+    VectorAnalysisError,
+    attach_job_to_run,
+    create_analysis_run,
+    execute_vector_tool,
+    list_tool_specs,
+    normalize_environments,
+    serialize_analysis_run,
+    update_analysis_run,
+    validate_tool_parameters,
+)
 
 analysis_bp = Blueprint('analysis', __name__)
+
+
+@analysis_bp.route('/tools', methods=['GET'])
+def tools():
+    """Return the server-owned vector tool catalogue used by analysis clients."""
+    return jsonify({'tools': list_tool_specs()})
+
+
+@analysis_bp.route('/runs', methods=['GET'])
+@jwt_required()
+def analysis_runs():
+    user_id = get_jwt_identity()
+    try:
+        limit = max(1, min(int(request.args.get('limit', 50)), 200))
+    except ValueError:
+        return jsonify({'error': 'limit must be an integer'}), 400
+
+    cur = get_db().cursor()
+    cur.execute(
+        """
+        SELECT * FROM analysis_runs
+        WHERE created_by = %s::uuid
+        ORDER BY created_at DESC
+        LIMIT %s
+        """,
+        (user_id, limit),
+    )
+    return jsonify({'runs': [serialize_analysis_run(dict(row)) for row in cur.fetchall()]})
+
+
+@analysis_bp.route('/runs/<run_id>', methods=['GET'])
+@jwt_required()
+def analysis_run(run_id):
+    try:
+        run_id = str(UUID(run_id))
+    except ValueError:
+        return jsonify({'error': 'Analysis run not found'}), 404
+    cur = get_db().cursor()
+    cur.execute(
+        'SELECT * FROM analysis_runs WHERE id = %s::uuid AND created_by = %s::uuid',
+        (run_id, get_jwt_identity()),
+    )
+    row = cur.fetchone()
+    if not row:
+        return jsonify({'error': 'Analysis run not found'}), 404
+    return jsonify(serialize_analysis_run(dict(row)))
 
 
 def _serialize_layer(r):
@@ -73,40 +131,53 @@ def _fetch_layer_full(cur, layer_id):
 @analysis_bp.route('/buffer', methods=['POST'])
 @jwt_required()
 def buffer():
-    data      = request.get_json() or {}
-    layer_id  = data.get('layer_id')
-    distance  = data.get('distance')   # metres
-    out_name  = (data.get('output_name') or 'Buffer').strip()
-    user_id   = get_jwt_identity()
-    run_async = bool(data.get('async')) or request.args.get('async') == 'true'
-
-    if not layer_id or distance is None:
-        return jsonify({'error': 'layer_id and distance are required'}), 400
+    data = request.get_json() or {}
+    user_id = get_jwt_identity()
     try:
-        distance = float(distance)
-    except (TypeError, ValueError):
-        return jsonify({'error': 'distance must be a number'}), 400
-    if distance <= 0:
-        return jsonify({'error': 'distance must be positive'}), 400
+        parameters = validate_tool_parameters('buffer', data)
+        environments = normalize_environments(data.get('environments'))
+    except VectorAnalysisError as exc:
+        return jsonify({'error': str(exc)}), 400
 
-    db  = get_db()
+    requested_mode = str(data.get('execution_mode', '')).strip().lower()
+    run_async = bool(data.get('async')) or request.args.get('async') == 'true'
+    if requested_mode in {'asynchronous', 'async'}:
+        run_async = True
+    elif requested_mode not in {'', 'automatic', 'synchronous', 'sync'}:
+        return jsonify({'error': 'execution_mode must be automatic, synchronous, or asynchronous'}), 400
+    execution_mode = 'asynchronous' if run_async else ('automatic' if requested_mode == 'automatic' else 'synchronous')
+
+    db = get_db()
     cur = db.cursor()
-
-    src = _check_layer(cur, layer_id, user_id)
+    src = _check_layer(cur, parameters['layer_id'], user_id)
     if not src:
         return jsonify({'error': 'Source layer not found'}), 404
+
+    run = create_analysis_run(
+        cur,
+        tool_id='buffer',
+        execution_mode=execution_mode,
+        parameters=parameters,
+        environments=environments,
+        input_layer_ids=[parameters['layer_id']],
+        created_by=user_id,
+        status='queued' if run_async else 'running',
+    )
+    run_id = str(run['id'])
 
     if run_async:
         job = create_async_job(
             cur,
             job_type='analysis.buffer',
             payload={
-                'layer_id': layer_id,
-                'distance': distance,
-                'output_name': out_name,
+                'analysis_run_id': run_id,
+                'tool_id': 'buffer',
+                'parameters': parameters,
+                'environments': environments,
             },
             created_by=user_id,
         )
+        attach_job_to_run(cur, run_id, str(job['id']))
         queued = enqueue_job(
             current_app.config.get('REDIS_URL', 'redis://localhost:6379/0'),
             current_app.config.get('JOB_QUEUE_NAME', 'enterprise_gis_jobs'),
@@ -118,39 +189,60 @@ def buffer():
             action='analysis_buffer_queued',
             entity_type='async_job',
             entity_id=str(job['id']),
-            payload={'layer_id': layer_id, 'distance': distance, 'queued': queued},
+            payload={'analysis_run_id': run_id, 'layer_id': parameters['layer_id'], 'queued': queued},
         )
         db.commit()
-        return jsonify({**serialize_job(job), 'queued': queued}), 202
+        run['async_job_id'] = job['id']
+        return jsonify({
+            **serialize_job(job),
+            'queued': queued,
+            'analysis_run': serialize_analysis_run(run),
+        }), 202
 
-    out_id = _new_layer(
-        cur, out_name,
-        f'Buffer {distance} m of "{src["name"]}"', 'Polygon', user_id
-    )
-
-    # Use ::geography for accurate metre-based buffering, cast result back to geometry
-    cur.execute("""
-        INSERT INTO features (layer_id, geometry, properties, created_by)
-        SELECT %s,
-               ST_Buffer(geometry::geography, %s)::geometry,
-               properties,
-               %s::uuid
-        FROM features
-        WHERE layer_id = %s
-    """, (out_id, distance, user_id, layer_id))
-    count = cur.rowcount
-    log_audit(
-        cur,
-        user_id=user_id,
-        action='analysis_buffer_completed',
-        entity_type='layer',
-        entity_id=str(out_id),
-        layer_id=str(out_id),
-        payload={'source_layer_id': layer_id, 'count': count, 'distance': distance},
-    )
+    # Persist the run before execution so a failed transaction cannot erase provenance.
     db.commit()
-
-    return jsonify({'layer': _serialize_layer(_fetch_layer_full(cur, out_id)), 'count': count}), 201
+    try:
+        result = execute_vector_tool(
+            cur,
+            tool_id='buffer',
+            parameters=parameters,
+            environments=environments,
+            created_by=user_id,
+            run_id=run_id,
+        )
+        log_audit(
+            cur,
+            user_id=user_id,
+            action='analysis_buffer_completed',
+            entity_type='analysis_run',
+            entity_id=run_id,
+            layer_id=result['output_layer_ids'][0],
+            payload={'source_layer_id': parameters['layer_id'], 'count': result['count']},
+        )
+        cur.execute('SELECT * FROM analysis_runs WHERE id = %s::uuid', (run_id,))
+        completed_run = serialize_analysis_run(dict(cur.fetchone()))
+        db.commit()
+        return jsonify({
+            'layer': result['layer'],
+            'count': result['count'],
+            'warnings': result['warnings'],
+            'analysis_run': completed_run,
+        }), 201
+    except Exception as exc:
+        db.rollback()
+        cur = db.cursor()
+        update_analysis_run(
+            cur,
+            run_id,
+            status='failed',
+            progress=100,
+            stage='Failed',
+            error=str(exc),
+        )
+        db.commit()
+        status = 400 if isinstance(exc, VectorAnalysisError) else 500
+        current_app.logger.exception('Buffer analysis failed run_id=%s', run_id)
+        return jsonify({'error': str(exc), 'analysis_run_id': run_id}), status
 
 
 # ── Intersect ─────────────────────────────────────────────────────────────────

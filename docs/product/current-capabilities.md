@@ -102,6 +102,8 @@ Key modules:
 
 ## Analysis
 
+The vector analysis subsystem now has a server-owned tool registry, durable run history, shared execution environments, asynchronous job linkage, output schema propagation, warnings, and timing metrics. Buffer is the first tool migrated to this framework and supports all-feature or selected-feature scope plus optional precision-grid snapping. Intersect and Within remain on the legacy path while they are migrated in roadmap order.
+
 Implemented capabilities:
 
 - buffer

@@ -182,6 +182,63 @@ export interface AnalysisBufferPayload {
   layer_id: string
   distance: number
   output_name: string
+  async?: boolean
+  execution_mode?: 'automatic' | 'synchronous' | 'asynchronous'
+  environments?: AnalysisEnvironments
+}
+
+export interface AnalysisEnvironments {
+  scope?: 'all' | 'selected'
+  selected_feature_ids?: string[]
+  precision_grid?: number | null
+  output_crs?: 'EPSG:4326'
+}
+
+export interface VectorToolParameter {
+  name: string
+  label: string
+  type: 'layer' | 'number' | 'string' | 'geometry'
+  required: boolean
+  default: unknown
+  minimum: number | null
+  choices: string[]
+}
+
+export interface VectorToolSpec {
+  id: string
+  version: number
+  title: string
+  category: string
+  description: string
+  input_geometry_families: string[]
+  output_geometry_family: string | null
+  parameters: VectorToolParameter[]
+  supports_async: boolean
+  migrated: boolean
+  keywords: string[]
+}
+
+export interface AnalysisRun {
+  id: string
+  tool_id: string
+  tool_version: number
+  status: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+  execution_mode: 'automatic' | 'synchronous' | 'asynchronous'
+  parameters: Record<string, unknown>
+  environments: AnalysisEnvironments
+  input_layer_ids: string[]
+  input_layer_revisions: Record<string, string>
+  output_layer_ids: string[]
+  warnings: string[]
+  metrics: Record<string, unknown>
+  progress: number
+  progress_stage: string | null
+  error: string | null
+  async_job_id: string | null
+  created_by: string | null
+  created_at: string | null
+  started_at: string | null
+  finished_at: string | null
 }
 
 export interface AnalysisIntersectPayload {
@@ -198,6 +255,8 @@ export interface AnalysisWithinPayload {
 export interface AnalysisLayerResponse {
   layer: Layer
   count: number
+  warnings?: string[]
+  analysis_run?: AnalysisRun
 }
 
 export interface CreateViewPayload {
@@ -1080,6 +1139,23 @@ export function runWithinAnalysis(
     },
     token,
   )
+}
+
+export function fetchAnalysisTools(): Promise<VectorToolSpec[]> {
+  return apiRequest<{ tools: VectorToolSpec[] }>('/analysis/tools')
+    .then((response) => response.tools)
+}
+
+export function fetchAnalysisRuns(token: string, limit = 50): Promise<AnalysisRun[]> {
+  return apiRequest<{ runs: AnalysisRun[] }>(
+    `/analysis/runs?limit=${encodeURIComponent(limit)}`,
+    {},
+    token,
+  ).then((response) => response.runs)
+}
+
+export function fetchAnalysisRun(runId: string, token: string): Promise<AnalysisRun> {
+  return apiRequest<AnalysisRun>(`/analysis/runs/${runId}`, {}, token)
 }
 
 export function fetchViews(token: string): Promise<MapView[]> {

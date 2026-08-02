@@ -6,6 +6,7 @@ import psycopg2
 import psycopg2.extras
 
 from enterprise_utils import log_audit
+from vector_analysis import execute_vector_tool, update_analysis_run
 
 
 @contextmanager
@@ -77,45 +78,6 @@ def _serialize_layer(cur, layer_id: str):
         'created_by': row.get('created_by'),
         'created_at': row['created_at'].isoformat(),
         'updated_at': row['updated_at'].isoformat(),
-    }
-
-
-def _run_buffer(cur, payload: dict[str, Any], user_id: str | None):
-    layer_id = payload.get('layer_id')
-    distance = float(payload.get('distance'))
-    output_name = (payload.get('output_name') or 'Buffer').strip()
-
-    cur.execute('SELECT id, name FROM layers WHERE id = %s::uuid', (layer_id,))
-    source = cur.fetchone()
-    if not source:
-        raise ValueError('Source layer not found')
-
-    cur.execute(
-        """
-        INSERT INTO layers (name, description, geometry_type, is_public, created_by)
-        VALUES (%s, %s, %s, FALSE, %s::uuid)
-        RETURNING id
-        """,
-        (output_name, f'Buffer {distance} m of "{source["name"]}"', 'Polygon', user_id),
-    )
-    out_id = str(cur.fetchone()['id'])
-
-    cur.execute(
-        """
-        INSERT INTO features (layer_id, geometry, properties, created_by)
-        SELECT %s::uuid,
-               ST_Buffer(geometry::geography, %s)::geometry,
-               properties,
-               %s::uuid
-        FROM features
-        WHERE layer_id = %s::uuid
-        """,
-        (out_id, distance, user_id, layer_id),
-    )
-
-    return {
-        'layer': _serialize_layer(cur, out_id),
-        'count': cur.rowcount,
     }
 
 
@@ -210,10 +172,21 @@ def process_job(database_url: str, job_id: str) -> bool:
         job_type = job['job_type']
         payload = job['payload'] or {}
         created_by = str(job['created_by']) if job.get('created_by') else None
+        analysis_run_id = payload.get('analysis_run_id')
 
         try:
             if job_type == 'analysis.buffer':
-                result = _run_buffer(cur, payload, created_by)
+                # New jobs use the structured framework payload; retain old queued jobs.
+                parameters = payload.get('parameters') or payload
+                environments = payload.get('environments') or {}
+                result = execute_vector_tool(
+                    cur,
+                    tool_id=payload.get('tool_id') or 'buffer',
+                    parameters=parameters,
+                    environments=environments,
+                    created_by=created_by,
+                    run_id=analysis_run_id,
+                )
             elif job_type == 'analysis.intersect':
                 result = _run_intersect(cur, payload, created_by)
             elif job_type == 'analysis.within':
@@ -233,7 +206,19 @@ def process_job(database_url: str, job_id: str) -> bool:
             conn.commit()
             return True
         except Exception as exc:
+            # Spatial operations can leave PostgreSQL in an aborted transaction.
+            conn.rollback()
+            cur = conn.cursor()
             _set_job_status(cur, job_id, 'error', 100, error=str(exc))
+            if analysis_run_id:
+                update_analysis_run(
+                    cur,
+                    analysis_run_id,
+                    status='failed',
+                    progress=100,
+                    stage='Failed',
+                    error=str(exc),
+                )
             log_audit(
                 cur,
                 user_id=created_by,

@@ -47,6 +47,16 @@ Current limitations:
 
 ## Phase 0: Shared Vector Geoprocessing Framework
 
+Implementation status as of this pass:
+
+- server-owned tool registry and typed parameter metadata implemented
+- durable analysis-run migration and user-scoped history endpoints implemented
+- initial all/selected scope, precision-grid, and output-CRS environments implemented
+- shared output layer, source schema/domain cloning, feature history, warnings, and metrics implemented
+- Buffer migrated to one executor for synchronous and worker execution
+- safe existing-volume migration target added to `make github-web`
+- database-backed geometry equivalence, cancellation, and rollback tests remain before the Phase 0 exit gate is complete
+
 ### Tool registry
 
 Create declarative tool specifications containing:

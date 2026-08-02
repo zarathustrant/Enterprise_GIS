@@ -1,6 +1,6 @@
 SHELL := /bin/zsh
 
-.PHONY: help bootstrap check-clean github-sync github-web deploy-local docker-up docker-up-build docker-down docker-logs docker-ps health
+.PHONY: help bootstrap check-clean github-sync github-web deploy-local db-migrate docker-up docker-up-build docker-down docker-logs docker-ps health
 
 help:
 	@echo "Enterprise GIS local Docker workflow"
@@ -11,6 +11,7 @@ help:
 	@echo "  make github-sync    - fast-forward this clone to the latest GitHub commit"
 	@echo "  make github-web     - sync from GitHub, then build and start the app"
 	@echo "  make deploy-local   - alias for github-web"
+	@echo "  make db-migrate     - apply idempotent migrations to enterprise-gis-db only"
 	@echo "  make docker-up      - start containers in detached mode"
 	@echo "  make docker-up-build- rebuild and start containers in detached mode"
 	@echo "  make docker-down    - stop containers"
@@ -38,6 +39,7 @@ github-sync: check-clean
 
 github-web: bootstrap github-sync
 	docker compose up -d --build --remove-orphans
+	$(MAKE) db-migrate
 	@echo ""
 	@echo "Enterprise GIS is starting from the latest GitHub commit."
 	@echo "Frontend: http://localhost:5173"
@@ -47,6 +49,13 @@ github-web: bootstrap github-sync
 	@echo "Postgres volume is preserved: docker compose up/down does not remove it."
 
 deploy-local: github-web
+
+db-migrate:
+	@docker compose ps --status running --services | grep -qx db || { echo "enterprise-gis-db is not running"; exit 1; }
+	@for migration in database/migrations/*.sql; do \
+		echo "Applying $$migration to enterprise_gis"; \
+		docker compose exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d enterprise_gis < "$$migration" || exit 1; \
+	done
 
 docker-up:
 	docker compose up -d

@@ -24,6 +24,10 @@ This is designed for developers who are working from a GitHub clone and want a r
 
 ## Why it is safe for local Postgres
 
+`make github-web` applies the repository's idempotent SQL migrations after the isolated Enterprise GIS stack starts. The migration command targets the Compose service `db`, database `enterprise_gis`, and container `enterprise-gis-db`; it does not connect through a shared host PostgreSQL port and cannot select another project's container.
+
+Run `make db-migrate` to apply migrations without rebuilding images. It refuses to run unless this Compose project's `db` service is running.
+
 Enterprise GIS is intentionally isolated from another local Docker stack by host ports.
 
 Enterprise GIS host ports:
