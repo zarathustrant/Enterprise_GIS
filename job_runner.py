@@ -115,6 +115,7 @@ def process_job(database_url: str, job_id: str) -> bool:
                 'analysis.clip',
                 'analysis.erase',
                 'analysis.dissolve',
+                'analysis.spatial_join',
             }:
                 # New jobs use the structured framework payload; retain old queued jobs.
                 parameters = payload.get('parameters') or payload

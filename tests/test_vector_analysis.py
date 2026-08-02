@@ -8,6 +8,7 @@ from vector_analysis import (
     _execute_clip,
     _execute_dissolve,
     _execute_erase,
+    _execute_spatial_join,
     _execute_intersect,
     _geometry_family,
     _resolve_intersection_output_type,
@@ -52,6 +53,11 @@ class VectorToolRegistryTests(unittest.TestCase):
 
         self.assertTrue(dissolve_tool.migrated)
         self.assertEqual(dissolve_tool.category, 'Data management')
+
+    def test_spatial_join_is_a_migrated_overlay_tool(self):
+        tool = get_tool_spec('spatial_join')
+        self.assertTrue(tool.migrated)
+        self.assertEqual(tool.category, 'Overlay')
 
     def test_unknown_tool_is_rejected(self):
         with self.assertRaisesRegex(VectorAnalysisError, 'Unknown vector analysis tool'):
@@ -148,6 +154,24 @@ class VectorToolValidationTests(unittest.TestCase):
                 'statistics': [{'field': 'population', 'statistic': 'median'}],
             })
 
+    def test_spatial_join_requires_distance_and_distinct_layers(self):
+        target = str(uuid4())
+        join = str(uuid4())
+        base = {
+            'target_layer': target,
+            'join_layer': join,
+            'output_name': 'Join',
+            'predicate': 'within_distance',
+        }
+        with self.assertRaisesRegex(VectorAnalysisError, 'distance is required'):
+            validate_tool_parameters('spatial_join', base)
+        with self.assertRaisesRegex(VectorAnalysisError, 'different'):
+            validate_tool_parameters('spatial_join', {
+                **base,
+                'join_layer': target,
+                'distance': 100,
+            })
+
     def test_selected_scope_requires_valid_feature_ids(self):
         feature_id = str(uuid4())
         environments = normalize_environments({
@@ -229,6 +253,7 @@ class PlaceholderCheckingCursor:
         self.intersect_parameters = None
         self.mask_overlay_parameters = None
         self.dissolve_parameters = None
+        self.spatial_join_parameters = None
 
     def execute(self, query, parameters=()):
         parameters = tuple(parameters)
@@ -259,6 +284,9 @@ class PlaceholderCheckingCursor:
         elif normalized.startswith('WITH grouped AS MATERIALIZED'):
             self.dissolve_parameters = parameters
             self.rowcount = 1
+        elif normalized.startswith('INSERT INTO features') and ('LEFT JOIN LATERAL' in normalized or 'LEFT JOIN features matched' in normalized):
+            self.spatial_join_parameters = parameters
+            self.rowcount = 2
         elif normalized.startswith('SELECT l.*, u.username AS created_by'):
             now = datetime.now(timezone.utc)
             self._one = {
@@ -474,6 +502,50 @@ class DissolveExecutorContractTests(unittest.TestCase):
             [selected_feature],
             3,
             0.00001,
+        ))
+
+
+class SpatialJoinExecutorContractTests(unittest.TestCase):
+    def test_one_to_one_distance_join_orders_scopes_and_distance(self):
+        target_layer = str(uuid4())
+        join_layer = str(uuid4())
+        output_layer = str(uuid4())
+        user_id = str(uuid4())
+        target_feature = str(uuid4())
+        join_feature = str(uuid4())
+        cursor = PlaceholderCheckingCursor(
+            target_layer,
+            join_layer,
+            output_layer,
+            geometry_a='Point',
+            geometry_b='Polygon',
+        )
+        parameters = validate_tool_parameters('spatial_join', {
+            'target_layer': target_layer,
+            'join_layer': join_layer,
+            'output_name': 'Nearby zones',
+            'predicate': 'within_distance',
+            'distance': 500,
+        })
+        environments = normalize_environments({
+            'scope_a': 'selected',
+            'scope_b': 'selected',
+            'selected_feature_ids_a': [target_feature],
+            'selected_feature_ids_b': [join_feature],
+        })
+
+        result = _execute_spatial_join(
+            cursor, parameters, environments, user_id, lambda _progress, _stage: None
+        )
+
+        self.assertEqual(result['count'], 2)
+        self.assertEqual(result['metrics']['output_mode'], 'one_to_one')
+        self.assertEqual(cursor.spatial_join_parameters[4:], (
+            join_layer,
+            500.0,
+            [join_feature],
+            target_layer,
+            [target_feature],
         ))
 
 

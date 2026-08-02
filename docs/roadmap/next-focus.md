@@ -229,6 +229,15 @@ Exit gate:
 
 ## Phase 4: Spatial Join
 
+Implementation status:
+
+- intersects, within, contains, touches, crosses, overlaps, equals, and within-distance predicates complete
+- one-to-one deterministic selection with full match count complete
+- one-to-many and keep-all/only-matched behavior complete
+- prefixed target/join schemas, domains, source provenance, and target geometry retention complete
+- selected scopes, geography distance, indexed candidate filtering, cardinality metrics, and visual controls complete
+- nearest is assigned to Phase 6; field-map customization, aggregate strategies beyond deterministic first, database fixtures, and query-plan verification remain
+
 Predicates:
 
 - intersects

@@ -131,6 +131,7 @@ import {
   runDissolveAnalysis,
   runEraseAnalysis,
   runIntersectAnalysis,
+  runSpatialJoinAnalysis,
   runWithinAnalysis,
   sendTelemetry,
   submitEditSession,
@@ -2518,6 +2519,48 @@ export default function App() {
     },
   })
 
+  const spatialJoinMutation = useMutation({
+    mutationFn: async (payload: {
+      targetLayer: string
+      joinLayer: string
+      outputName: string
+      predicate: 'intersects' | 'within' | 'contains' | 'touches' | 'crosses' | 'overlaps' | 'equals' | 'within_distance'
+      outputMode: 'one_to_one' | 'one_to_many'
+      keepAll: boolean
+      distance: number | null
+      targetPrefix: string
+      joinPrefix: string
+    }) => {
+      if (!token) throw new Error('Sign in to run spatial join analysis.')
+      return runSpatialJoinAnalysis({
+        target_layer: payload.targetLayer,
+        join_layer: payload.joinLayer,
+        output_name: payload.outputName,
+        predicate: payload.predicate,
+        output_mode: payload.outputMode,
+        keep_all: payload.keepAll,
+        distance: payload.distance,
+        target_prefix: payload.targetPrefix,
+        join_prefix: payload.joinPrefix,
+      }, token)
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['layer-features'] })
+      setAnalysisError(null)
+      setAnalysisOverlay(null)
+      setWithinCount(null)
+      const warningText = result.warnings?.length ? ` ${result.warnings.join(' ')}` : ''
+      completeAnalysisJob(`Spatial Join complete (${result.count} features).${warningText}`)
+      notify(`Spatial Join complete (${result.count} features).${warningText}`, result.warnings?.length ? 'warning' : 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Spatial Join failed'
+      setAnalysisError(message)
+      failAnalysisJob(message)
+    },
+  })
+
   const withinMutation = useMutation({
     mutationFn: async (payload: { layerId: string; polygonText: string }) => {
       const polygon = JSON.parse(payload.polygonText) as Geometry
@@ -2542,6 +2585,7 @@ export default function App() {
     || clipMutation.isPending
     || eraseMutation.isPending
     || dissolveMutation.isPending
+    || spatialJoinMutation.isPending
     || withinMutation.isPending
 
   const handleAuthenticated = (response: AuthResponse) => {
@@ -4711,6 +4755,11 @@ export default function App() {
             setAnalysisError(null)
             startAnalysisJob('dissolve')
             dissolveMutation.mutate(payload)
+          }}
+          onRunSpatialJoin={(payload) => {
+            setAnalysisError(null)
+            startAnalysisJob('spatial_join')
+            spatialJoinMutation.mutate(payload)
           }}
           onRunWithin={(payload) => {
             setAnalysisError(null)

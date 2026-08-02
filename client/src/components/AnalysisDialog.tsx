@@ -26,7 +26,7 @@ import { fetchLayerFields } from '../api/services'
 import { useAuthStore } from '../store/auth'
 import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 
-export type AnalysisTab = 'buffer' | 'intersect' | 'clip' | 'erase' | 'dissolve' | 'within'
+export type AnalysisTab = 'buffer' | 'intersect' | 'clip' | 'erase' | 'dissolve' | 'spatial_join' | 'within'
 export type AnalysisJobStatus = 'queued' | 'running' | 'success' | 'error'
 
 export interface AnalysisJobState {
@@ -63,6 +63,17 @@ interface AnalysisDialogProps {
     multipart: boolean
     nullPolicy: 'group' | 'exclude'
   }) => void
+  onRunSpatialJoin: (payload: {
+    targetLayer: string
+    joinLayer: string
+    outputName: string
+    predicate: 'intersects' | 'within' | 'contains' | 'touches' | 'crosses' | 'overlaps' | 'equals' | 'within_distance'
+    outputMode: 'one_to_one' | 'one_to_many'
+    keepAll: boolean
+    distance: number | null
+    targetPrefix: string
+    joinPrefix: string
+  }) => void
   onRunWithin: (payload: { layerId: string; polygon: string }) => void
 }
 
@@ -80,6 +91,7 @@ export function AnalysisDialog({
   onRunClip,
   onRunErase,
   onRunDissolve,
+  onRunSpatialJoin,
   onRunWithin,
 }: AnalysisDialogProps) {
   const [tab, setTab] = useState<AnalysisTab>('buffer')
@@ -109,6 +121,16 @@ export function AnalysisDialog({
   const [statisticType, setStatisticType] = useState<AnalysisStatistic['statistic']>('count')
   const [dissolveMultipart, setDissolveMultipart] = useState(true)
   const [dissolveNullPolicy, setDissolveNullPolicy] = useState<'group' | 'exclude'>('group')
+
+  const [spatialJoinTarget, setSpatialJoinTarget] = useState('')
+  const [spatialJoinLayer, setSpatialJoinLayer] = useState('')
+  const [spatialJoinName, setSpatialJoinName] = useState('Spatial Join')
+  const [spatialJoinPredicate, setSpatialJoinPredicate] = useState<'intersects' | 'within' | 'contains' | 'touches' | 'crosses' | 'overlaps' | 'equals' | 'within_distance'>('intersects')
+  const [spatialJoinMode, setSpatialJoinMode] = useState<'one_to_one' | 'one_to_many'>('one_to_one')
+  const [spatialJoinKeepAll, setSpatialJoinKeepAll] = useState(true)
+  const [spatialJoinDistance, setSpatialJoinDistance] = useState('100')
+  const [spatialJoinTargetPrefix, setSpatialJoinTargetPrefix] = useState('target_')
+  const [spatialJoinFieldPrefix, setSpatialJoinFieldPrefix] = useState('join_')
 
   const [withinLayerId, setWithinLayerId] = useState('')
   const [withinPolygon, setWithinPolygon] = useState(
@@ -232,6 +254,7 @@ export function AnalysisDialog({
           <Tab value="clip" label="Clip" />
           <Tab value="erase" label="Erase" />
           <Tab value="dissolve" label="Dissolve" />
+          <Tab value="spatial_join" label="Spatial Join" />
           <Tab value="within" label="Within" />
         </Tabs>
 
@@ -516,6 +539,54 @@ export function AnalysisDialog({
               })}
             >
               Run Dissolve
+            </Button>
+          </Box>
+        )}
+
+        {tab === 'spatial_join' && (
+          <Box display="grid" gap={2}>
+            <TextField label="Target layer" value={spatialJoinTarget} onChange={(event) => setSpatialJoinTarget(event.target.value)} size="small" select>
+              {layerOptions.map((item) => <MenuItem key={item.value} value={item.value}>{item.label}</MenuItem>)}
+            </TextField>
+            <TextField label="Join layer" value={spatialJoinLayer} onChange={(event) => setSpatialJoinLayer(event.target.value)} size="small" select>
+              {layerOptions.map((item) => <MenuItem key={item.value} value={item.value} disabled={item.value === spatialJoinTarget}>{item.label}</MenuItem>)}
+            </TextField>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField label="Spatial relationship" value={spatialJoinPredicate} onChange={(event) => setSpatialJoinPredicate(event.target.value as typeof spatialJoinPredicate)} size="small" select>
+                {['intersects', 'within', 'contains', 'touches', 'crosses', 'overlaps', 'equals', 'within_distance'].map((predicate) => (
+                  <MenuItem key={predicate} value={predicate}>{predicate.replace('_', ' ')}</MenuItem>
+                ))}
+              </TextField>
+              <TextField label="Cardinality" value={spatialJoinMode} onChange={(event) => setSpatialJoinMode(event.target.value as typeof spatialJoinMode)} size="small" select>
+                <MenuItem value="one_to_one">One to one</MenuItem>
+                <MenuItem value="one_to_many">One to many</MenuItem>
+              </TextField>
+            </Box>
+            {spatialJoinPredicate === 'within_distance' && (
+              <TextField label="Search distance (metres)" type="number" value={spatialJoinDistance} onChange={(event) => setSpatialJoinDistance(event.target.value)} size="small" />
+            )}
+            <FormControlLabel control={<Switch checked={spatialJoinKeepAll} onChange={(event) => setSpatialJoinKeepAll(event.target.checked)} />} label="Keep unmatched target features" />
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField label="Target prefix" value={spatialJoinTargetPrefix} onChange={(event) => setSpatialJoinTargetPrefix(event.target.value)} size="small" inputProps={{ maxLength: 16 }} />
+              <TextField label="Join prefix" value={spatialJoinFieldPrefix} onChange={(event) => setSpatialJoinFieldPrefix(event.target.value)} size="small" inputProps={{ maxLength: 16 }} />
+            </Box>
+            <TextField label="Output layer name" value={spatialJoinName} onChange={(event) => setSpatialJoinName(event.target.value)} size="small" />
+            <Button
+              variant="contained"
+              disabled={running || !spatialJoinTarget || !spatialJoinLayer || spatialJoinTarget === spatialJoinLayer || !spatialJoinTargetPrefix || !spatialJoinFieldPrefix || (spatialJoinPredicate === 'within_distance' && Number(spatialJoinDistance) <= 0)}
+              onClick={() => onRunSpatialJoin({
+                targetLayer: spatialJoinTarget,
+                joinLayer: spatialJoinLayer,
+                outputName: spatialJoinName || 'Spatial Join',
+                predicate: spatialJoinPredicate,
+                outputMode: spatialJoinMode,
+                keepAll: spatialJoinKeepAll,
+                distance: spatialJoinPredicate === 'within_distance' ? Number(spatialJoinDistance) : null,
+                targetPrefix: spatialJoinTargetPrefix,
+                joinPrefix: spatialJoinFieldPrefix,
+              })}
+            >
+              Run Spatial Join
             </Button>
           </Box>
         )}

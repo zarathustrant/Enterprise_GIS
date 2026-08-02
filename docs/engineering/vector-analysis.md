@@ -125,6 +125,14 @@ Dissolve aggregates all input features or groups them by multiple authoritative 
 
 The endpoint is `POST /api/v1/analysis/dissolve`. The analysis panel loads layer fields and builds grouping and statistic rules visually.
 
+### Spatial Join
+
+Spatial Join retains target geometry and combines prefixed target and join schemas. It supports intersects, within, contains, touches, crosses, overlaps, equals, and within-distance predicates. Standard predicates use bounding-box filtering before exact tests; distance joins use indexed geography `ST_DWithin` in metres.
+
+One-to-many output emits every match. One-to-one output deterministically retains the lowest matching feature UUID and records the complete `join_match_count`. Keep-all mode retains unmatched target features with nullable join provenance. Both modes preserve domains from both inputs, record source feature IDs, support independent selections, estimate maximum pair cardinality, and share synchronous/worker execution.
+
+Nearest is intentionally implemented by the dedicated proximity kernel in Phase 6 rather than duplicated here. The endpoint is `POST /api/v1/analysis/spatial-join`.
+
 ## Transaction Guarantees
 
 - A run is committed before synchronous execution, so failures remain visible.
@@ -134,6 +142,6 @@ The endpoint is `POST /api/v1/analysis/dissolve`. The analysis panel loads layer
 
 ## Next Migration Order
 
-1. Spatial Join and Summarize Within with explicit cardinality behavior.
+1. Summarize Within with explicit boundary and measurement behavior.
 2. Near and nearest-feature tables with geodesic distances.
 3. Analysis Workbench UI generated from the registry and run-history APIs.

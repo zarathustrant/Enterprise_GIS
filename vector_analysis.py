@@ -148,6 +148,40 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
         migrated=True,
         keywords=('aggregate', 'group', 'union', 'statistics'),
     ),
+    'spatial_join': VectorToolSpec(
+        id='spatial_join',
+        version=1,
+        title='Spatial Join',
+        category='Overlay',
+        description='Join attributes using a spatial relationship while retaining target geometry.',
+        input_geometry_families=('point', 'line', 'polygon'),
+        output_geometry_family=None,
+        parameters=(
+            ToolParameter('target_layer', 'Target layer', 'layer', required=True),
+            ToolParameter('join_layer', 'Join layer', 'layer', required=True),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Spatial Join'),
+            ToolParameter(
+                'predicate',
+                'Spatial relationship',
+                'choice',
+                default='intersects',
+                choices=('intersects', 'within', 'contains', 'touches', 'crosses', 'overlaps', 'equals', 'within_distance'),
+            ),
+            ToolParameter(
+                'output_mode',
+                'Output cardinality',
+                'choice',
+                default='one_to_one',
+                choices=('one_to_one', 'one_to_many'),
+            ),
+            ToolParameter('keep_all', 'Keep unmatched targets', 'boolean', default=True),
+            ToolParameter('distance', 'Search distance (metres)', 'number', minimum=0.000001),
+            ToolParameter('target_prefix', 'Target field prefix', 'string', default='target_'),
+            ToolParameter('join_prefix', 'Join field prefix', 'string', default='join_'),
+        ),
+        migrated=True,
+        keywords=('attributes', 'relationship', 'cardinality', 'match'),
+    ),
     'within': VectorToolSpec(
         id='within',
         version=1,
@@ -316,6 +350,11 @@ def validate_tool_parameters(tool_id: str, raw: Any) -> dict[str, Any]:
                 })
             value = normalized_statistics
         parameters[definition.name] = value
+    if tool_id == 'spatial_join':
+        if parameters['target_layer'] == parameters['join_layer']:
+            raise VectorAnalysisError('Spatial Join requires different target and join layers')
+        if parameters['predicate'] == 'within_distance' and parameters['distance'] is None:
+            raise VectorAnalysisError('distance is required for within_distance')
     return parameters
 
 
@@ -1453,12 +1492,201 @@ def _execute_dissolve(
     }
 
 
+def _spatial_join_predicate(predicate: str) -> tuple[str, str | None]:
+    predicates = {
+        'intersects': 'target.geometry && candidate.geometry AND ST_Intersects(target.geometry, candidate.geometry)',
+        'within': 'target.geometry && candidate.geometry AND ST_Within(target.geometry, candidate.geometry)',
+        'contains': 'target.geometry && candidate.geometry AND ST_Contains(target.geometry, candidate.geometry)',
+        'touches': 'target.geometry && candidate.geometry AND ST_Touches(target.geometry, candidate.geometry)',
+        'crosses': 'target.geometry && candidate.geometry AND ST_Crosses(target.geometry, candidate.geometry)',
+        'overlaps': 'target.geometry && candidate.geometry AND ST_Overlaps(target.geometry, candidate.geometry)',
+        'equals': 'target.geometry && candidate.geometry AND ST_Equals(target.geometry, candidate.geometry)',
+        'within_distance': 'ST_DWithin(target.geometry::geography, candidate.geometry::geography, %s)',
+    }
+    return predicates[predicate], 'distance' if predicate == 'within_distance' else None
+
+
+def _execute_spatial_join(
+    cur,
+    parameters: dict[str, Any],
+    environments: dict[str, Any],
+    created_by: str | None,
+    progress: Callable[[int, str], None],
+) -> dict[str, Any]:
+    target_layer_id = parameters['target_layer']
+    join_layer_id = parameters['join_layer']
+    cur.execute(
+        'SELECT id, name, geometry_type FROM layers WHERE id = ANY(%s::uuid[])',
+        ([target_layer_id, join_layer_id],),
+    )
+    layers = {str(row['id']): dict(row) for row in cur.fetchall()}
+    if target_layer_id not in layers or join_layer_id not in layers:
+        raise VectorAnalysisError('One or more input layers were not found')
+    target_family = _resolve_layer_family(cur, layers[target_layer_id])
+    geometry_types = {'point': 'Point', 'line': 'LineString', 'polygon': 'Polygon'}
+
+    scope_target = environments['scope_a']
+    scope_join = environments['scope_b']
+    selected_target = environments['selected_feature_ids_a']
+    selected_join = environments['selected_feature_ids_b']
+    target_count = _count_scoped_features(cur, target_layer_id, scope_target, selected_target)
+    join_count = _count_scoped_features(cur, join_layer_id, scope_join, selected_join)
+
+    progress(15, 'Creating joined schema')
+    output_layer_id = _create_output_layer(
+        cur,
+        name=parameters['output_name'],
+        description=f'Spatial join of "{layers[target_layer_id]["name"]}" with "{layers[join_layer_id]["name"]}"',
+        geometry_type=geometry_types[target_family],
+        created_by=created_by,
+    )
+    _add_source_id_fields(cur, output_layer_id)
+    cur.execute(
+        "UPDATE layer_fields SET nullable = TRUE WHERE layer_id = %s::uuid AND name = 'source_b_id'",
+        (output_layer_id,),
+    )
+    cur.execute(
+        """
+        INSERT INTO layer_fields (
+            layer_id, name, alias, field_type, nullable, sort_order
+        ) VALUES (%s::uuid, 'join_match_count', 'Join match count', 'integer', FALSE, 2)
+        """,
+        (output_layer_id,),
+    )
+    used_fields = {'source_a_id', 'source_b_id', 'join_match_count'}
+    used_domains: set[str] = set()
+    target_mapping = _append_prefixed_layer_schema(
+        cur,
+        source_layer_id=target_layer_id,
+        output_layer_id=output_layer_id,
+        prefix=parameters['target_prefix'],
+        alias_prefix='Target',
+        sort_offset=10,
+        used_field_names=used_fields,
+        used_domain_names=used_domains,
+    )
+    join_mapping = _append_prefixed_layer_schema(
+        cur,
+        source_layer_id=join_layer_id,
+        output_layer_id=output_layer_id,
+        prefix=parameters['join_prefix'],
+        alias_prefix='Join',
+        sort_offset=10_000,
+        used_field_names=used_fields,
+        used_domain_names=used_domains,
+    )
+
+    predicate_sql, predicate_parameter = _spatial_join_predicate(parameters['predicate'])
+    join_scope_clause = _selected_clause('candidate', scope_join)
+    target_scope_clause = _selected_clause('target', scope_target)
+    lateral_parameters: list[Any] = [join_layer_id]
+    if predicate_parameter:
+        lateral_parameters.append(parameters[predicate_parameter])
+    if scope_join == 'selected':
+        lateral_parameters.append(selected_join)
+    target_parameters: list[Any] = [target_layer_id]
+    if scope_target == 'selected':
+        target_parameters.append(selected_target)
+
+    if parameters['output_mode'] == 'one_to_one':
+        match_source = f"""
+            FROM features target
+            LEFT JOIN LATERAL (
+                SELECT candidate.id,
+                       candidate.properties,
+                       COUNT(*) OVER()::integer AS match_count
+                FROM features candidate
+                WHERE candidate.layer_id = %s::uuid
+                  AND {predicate_sql}
+                  {join_scope_clause}
+                ORDER BY candidate.id
+                LIMIT 1
+            ) matched ON TRUE
+            WHERE target.layer_id = %s::uuid
+              {target_scope_clause}
+              {'AND matched.id IS NOT NULL' if not parameters['keep_all'] else ''}
+        """
+        match_id = 'matched.id'
+        match_properties = 'matched.properties'
+        match_count_expression = 'COALESCE(matched.match_count, 0)'
+    else:
+        match_source = f"""
+            FROM features target
+            LEFT JOIN features matched
+              ON matched.layer_id = %s::uuid
+             AND {predicate_sql.replace('candidate.', 'matched.')}
+             {join_scope_clause.replace('candidate.', 'matched.')}
+            WHERE target.layer_id = %s::uuid
+              {target_scope_clause}
+              {'AND matched.id IS NOT NULL' if not parameters['keep_all'] else ''}
+        """
+        match_id = 'matched.id'
+        match_properties = 'matched.properties'
+        match_count_expression = 'CASE WHEN matched.id IS NULL THEN 0 ELSE 1 END'
+
+    progress(42, 'Evaluating spatial matches')
+    cur.execute(
+        f"""
+        INSERT INTO features (layer_id, geometry, properties, created_by)
+        SELECT %s::uuid,
+               target.geometry,
+               jsonb_build_object(
+                   'source_a_id', target.id::text,
+                   'source_b_id', {match_id}::text,
+                   'join_match_count', {match_count_expression}
+               )
+               || COALESCE((
+                   SELECT jsonb_object_agg(field_map.value, source_property.value)
+                   FROM jsonb_each_text(%s::jsonb) field_map
+                   JOIN jsonb_each(target.properties) source_property ON source_property.key = field_map.key
+               ), '{{}}'::jsonb)
+               || COALESCE((
+                   SELECT jsonb_object_agg(field_map.value, source_property.value)
+                   FROM jsonb_each_text(%s::jsonb) field_map
+                   JOIN jsonb_each({match_properties}) source_property ON source_property.key = field_map.key
+               ), '{{}}'::jsonb),
+               %s::uuid
+        {match_source}
+        """,
+        tuple(
+            [output_layer_id, json.dumps(target_mapping), json.dumps(join_mapping), created_by]
+            + lateral_parameters
+            + target_parameters
+        ),
+    )
+    feature_count = cur.rowcount
+    progress(80, 'Recording output provenance')
+    _record_output_history(cur, output_layer_id, created_by)
+    warnings = [] if feature_count else ['The operation produced an empty output layer.']
+    if target_count * join_count > 1_000_000:
+        warnings.append(
+            f'The inputs contain up to {target_count * join_count:,} feature pairs; spatial indexes limit actual candidates.'
+        )
+    progress(92, 'Finalizing output')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id),
+        'count': feature_count,
+        'output_layer_ids': [output_layer_id],
+        'warnings': warnings,
+        'metrics': {
+            'target_feature_count': target_count,
+            'join_feature_count': join_count,
+            'maximum_feature_pairs': target_count * join_count,
+            'output_mode': parameters['output_mode'],
+            'predicate': parameters['predicate'],
+            'keep_all': parameters['keep_all'],
+            'output_geometry_family': target_family,
+        },
+    }
+
+
 EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     'buffer': _execute_buffer,
     'intersect': _execute_intersect,
     'clip': _execute_clip,
     'erase': _execute_erase,
     'dissolve': _execute_dissolve,
+    'spatial_join': _execute_spatial_join,
 }
 
 

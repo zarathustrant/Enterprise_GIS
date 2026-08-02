@@ -294,6 +294,21 @@ export interface AnalysisDissolvePayload {
   environments?: AnalysisEnvironments
 }
 
+export interface AnalysisSpatialJoinPayload {
+  target_layer: string
+  join_layer: string
+  output_name: string
+  predicate?: 'intersects' | 'within' | 'contains' | 'touches' | 'crosses' | 'overlaps' | 'equals' | 'within_distance'
+  output_mode?: 'one_to_one' | 'one_to_many'
+  keep_all?: boolean
+  distance?: number | null
+  target_prefix?: string
+  join_prefix?: string
+  async?: boolean
+  execution_mode?: 'automatic' | 'synchronous' | 'asynchronous'
+  environments?: AnalysisEnvironments
+}
+
 export interface AnalysisWithinPayload {
   layer_id: string
   polygon: Geometry
@@ -315,7 +330,7 @@ export interface CreateViewPayload {
 }
 
 export interface CreateJobPayload {
-  job_type: 'analysis.buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.dissolve' | 'analysis.within'
+  job_type: 'analysis.buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.dissolve' | 'analysis.spatial_join' | 'analysis.within'
   payload: Record<string, unknown>
 }
 
@@ -1208,6 +1223,20 @@ export function runDissolveAnalysis(
 ): Promise<AnalysisLayerResponse> {
   return apiRequest<AnalysisLayerResponse>(
     '/analysis/dissolve',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token,
+  )
+}
+
+export function runSpatialJoinAnalysis(
+  payload: AnalysisSpatialJoinPayload,
+  token: string,
+): Promise<AnalysisLayerResponse> {
+  return apiRequest<AnalysisLayerResponse>(
+    '/analysis/spatial-join',
     {
       method: 'POST',
       body: JSON.stringify(payload),

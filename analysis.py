@@ -270,6 +270,19 @@ def dissolve():
     )
 
 
+# ── Spatial Join ──────────────────────────────────────────────────────────────
+
+@analysis_bp.route('/spatial-join', methods=['POST'])
+@jwt_required()
+def spatial_join():
+    return _run_layer_tool(
+        'spatial_join',
+        request.get_json() or {},
+        ('target_layer', 'join_layer'),
+        'analysis_spatial_join',
+    )
+
+
 # ── Spatial query (features within a polygon) ─────────────────────────────────
 
 @analysis_bp.route('/within', methods=['POST'])
