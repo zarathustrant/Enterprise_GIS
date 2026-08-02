@@ -25,8 +25,9 @@ import type { AnalysisStatistic } from '../api/services'
 import { fetchLayerFields } from '../api/services'
 import { useAuthStore } from '../store/auth'
 import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
+import { AnalysisWorkbench } from './AnalysisWorkbench'
 
-export type AnalysisTab = 'buffer' | 'multi_ring_buffer' | 'intersect' | 'clip' | 'erase' | 'dissolve' | 'spatial_join' | 'summarize_within' | 'near' | 'polygonize' | 'geometry_construct' | 'within'
+export type AnalysisTab = 'workbench' | 'buffer' | 'multi_ring_buffer' | 'intersect' | 'clip' | 'erase' | 'dissolve' | 'spatial_join' | 'summarize_within' | 'near' | 'polygonize' | 'geometry_construct' | 'within'
 export type AnalysisJobStatus = 'queued' | 'running' | 'success' | 'error'
 
 export interface AnalysisJobState {
@@ -42,8 +43,12 @@ interface AnalysisDialogProps {
   error: string | null
   withinCount: number | null
   job: AnalysisJobState | null
+  selectedFeaturesByLayer: Record<string, string[]>
+  visibleExtent?: [number, number, number, number]
   workMode?: boolean
   onClose: () => void
+  onRunTool: (toolId: string, payload: Record<string, unknown>) => void
+  onOpenOutput: (layerId: string) => void
   onRunBuffer: (payload: { layerId: string; distance: number; outputName: string }) => void
   onRunMultiRingBuffer: (payload: { layerId: string; distances: number[]; outputName: string; ringType: 'rings' | 'disks' }) => void
   onRunIntersect: (payload: {
@@ -113,8 +118,12 @@ export function AnalysisDialog({
   error,
   withinCount,
   job,
+  selectedFeaturesByLayer,
+  visibleExtent,
   workMode = false,
   onClose,
+  onRunTool,
+  onOpenOutput,
   onRunBuffer,
   onRunMultiRingBuffer,
   onRunIntersect,
@@ -128,7 +137,7 @@ export function AnalysisDialog({
   onRunGeometryConstruct,
   onRunWithin,
 }: AnalysisDialogProps) {
-  const [tab, setTab] = useState<AnalysisTab>('buffer')
+  const [tab, setTab] = useState<AnalysisTab>('workbench')
   const [bufferLayerId, setBufferLayerId] = useState('')
   const [bufferDistance, setBufferDistance] = useState('100')
   const [bufferName, setBufferName] = useState('Buffer')
@@ -233,8 +242,8 @@ export function AnalysisDialog({
   const selectedStatisticField = availableDissolveFields.find((field) => field.name === statisticField)
   const statisticOptions: AnalysisStatistic['statistic'][] = statisticField
     ? selectedStatisticField?.field_type === 'integer' || selectedStatisticField?.field_type === 'double'
-      ? ['sum', 'minimum', 'maximum', 'mean', 'first', 'last']
-      : ['first', 'last']
+      ? ['sum', 'minimum', 'maximum', 'mean', 'first', 'last', 'concatenate']
+      : ['first', 'last', 'concatenate']
     : ['count']
   const summaryFieldsQuery = useQuery({
     queryKey: ['analysis-summary-fields', summaryFeatureLayer],
@@ -332,6 +341,7 @@ export function AnalysisDialog({
           scrollButtons="auto"
           sx={{ mb: 2 }}
         >
+          <Tab value="workbench" label="Workbench" />
           <Tab value="buffer" label="Buffer" />
           <Tab value="multi_ring_buffer" label="Multi-Ring" />
           <Tab value="intersect" label="Intersect" />
@@ -370,6 +380,17 @@ export function AnalysisDialog({
               {job.message}
             </Typography>
           </Box>
+        )}
+
+        {tab === 'workbench' && (
+          <AnalysisWorkbench
+            layers={layers}
+            running={running}
+            selectedFeaturesByLayer={selectedFeaturesByLayer}
+            visibleExtent={visibleExtent}
+            onRun={onRunTool}
+            onOpenOutput={onOpenOutput}
+          />
         )}
 
         {tab === 'buffer' && (

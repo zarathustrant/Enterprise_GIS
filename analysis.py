@@ -10,6 +10,7 @@ from vector_analysis import (
     attach_job_to_run,
     create_analysis_run,
     execute_vector_tool,
+    get_tool_spec,
     list_tool_specs,
     normalize_environments,
     serialize_analysis_run,
@@ -24,6 +25,23 @@ analysis_bp = Blueprint('analysis', __name__)
 def tools():
     """Return the server-owned vector tool catalogue used by analysis clients."""
     return jsonify({'tools': list_tool_specs()})
+
+
+@analysis_bp.route('/tools/<tool_id>/run', methods=['POST'])
+@jwt_required()
+def run_catalog_tool(tool_id):
+    try:
+        spec = get_tool_spec(tool_id)
+    except VectorAnalysisError as exc:
+        return jsonify({'error': str(exc)}), 404
+    if not spec.migrated:
+        return jsonify({'error': f'{spec.title} is not available in the shared workbench'}), 400
+    data = request.get_json() or {}
+    input_names = tuple(
+        parameter.name for parameter in spec.parameters
+        if parameter.type == 'layer' and data.get(parameter.name)
+    )
+    return _run_layer_tool(tool_id, data, input_names, f'analysis_{tool_id}')
 
 
 @analysis_bp.route('/runs', methods=['GET'])
@@ -66,6 +84,51 @@ def analysis_run(run_id):
     return jsonify(serialize_analysis_run(dict(row)))
 
 
+@analysis_bp.route('/runs/<run_id>/cancel', methods=['POST'])
+@jwt_required()
+def cancel_analysis_run(run_id):
+    try:
+        run_id = str(UUID(run_id))
+    except ValueError:
+        return jsonify({'error': 'Analysis run not found'}), 404
+    user_id = get_jwt_identity()
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        'SELECT * FROM analysis_runs WHERE id = %s::uuid AND created_by = %s::uuid FOR UPDATE',
+        (run_id, user_id),
+    )
+    run = cur.fetchone()
+    if not run:
+        return jsonify({'error': 'Analysis run not found'}), 404
+    if run['status'] not in {'queued', 'running'}:
+        return jsonify({'error': f'Only queued or running analysis can be cancelled; current status is {run["status"]}'}), 409
+    backend_cancelled = False
+    if run.get('worker_backend_pid'):
+        cur.execute('SELECT pg_cancel_backend(%s) AS cancelled', (run['worker_backend_pid'],))
+        backend_cancelled = bool(cur.fetchone()['cancelled'])
+    if run.get('async_job_id'):
+        cur.execute(
+            """UPDATE async_jobs SET status = 'cancelled', progress = 100,
+               error = 'Cancelled by user', finished_at = NOW()
+               WHERE id = %s::uuid AND status IN ('queued', 'running')""",
+            (str(run['async_job_id']),),
+        )
+    cur.execute(
+        """UPDATE analysis_runs SET status = 'cancelled', progress = 100,
+           progress_stage = 'Cancelled', error = NULL, cancellation_requested_at = NOW(),
+           finished_at = NOW() WHERE id = %s::uuid RETURNING *""",
+        (run_id,),
+    )
+    cancelled_run = dict(cur.fetchone())
+    log_audit(
+        cur, user_id=user_id, action='analysis_cancelled', entity_type='analysis_run', entity_id=run_id,
+        payload={'async_job_id': str(run['async_job_id']) if run.get('async_job_id') else None, 'backend_cancelled': backend_cancelled},
+    )
+    db.commit()
+    return jsonify(serialize_analysis_run(cancelled_run))
+
+
 def _check_layer(cur, layer_id, user_id):
     """Return layer row if accessible, else None."""
     cur.execute(
@@ -104,16 +167,50 @@ def _run_layer_tool(tool_id, data, input_parameter_names, audit_prefix):
         run_async = True
     elif requested_mode not in {'', 'automatic', 'synchronous', 'sync'}:
         return jsonify({'error': 'execution_mode must be automatic, synchronous, or asynchronous'}), 400
-    execution_mode = 'asynchronous' if run_async else (
-        'automatic' if requested_mode == 'automatic' else 'synchronous'
-    )
-
     db = get_db()
     cur = db.cursor()
     input_layer_ids = [parameters[name] for name in input_parameter_names]
     for layer_id in input_layer_ids:
         if not _check_layer(cur, layer_id, user_id):
             return jsonify({'error': f'Input layer {layer_id} not found'}), 404
+
+    unique_layer_ids = list(dict.fromkeys(input_layer_ids))
+    feature_counts: dict[str, int] = {}
+    if unique_layer_ids:
+        cur.execute(
+            'SELECT layer_id::text AS layer_id, COUNT(*)::integer AS count FROM features '
+            'WHERE layer_id = ANY(%s::uuid[]) GROUP BY layer_id',
+            (unique_layer_ids,),
+        )
+        feature_counts = {row['layer_id']: int(row['count']) for row in cur.fetchall()}
+    scoped_counts: list[int] = []
+    for index, layer_id in enumerate(input_layer_ids):
+        scope_name = 'scope_a' if index == 0 else 'scope_b'
+        selected_name = 'selected_feature_ids_a' if index == 0 else 'selected_feature_ids_b'
+        if environments.get(scope_name) == 'selected':
+            scoped_counts.append(len(environments.get(selected_name) or []))
+        else:
+            scoped_counts.append(feature_counts.get(layer_id, 0))
+    maximum_pairs = scoped_counts[0] * scoped_counts[1] if len(scoped_counts) > 1 else 0
+    estimated_units = maximum_pairs or sum(scoped_counts)
+    environments = {
+        **environments,
+        'estimated_input_counts': scoped_counts,
+        'estimated_candidate_pairs': maximum_pairs,
+    }
+    if requested_mode == 'automatic':
+        feature_threshold = int(current_app.config.get('ANALYSIS_AUTO_ASYNC_FEATURE_THRESHOLD', 50_000))
+        pair_threshold = int(current_app.config.get('ANALYSIS_AUTO_ASYNC_PAIR_THRESHOLD', 1_000_000))
+        expensive_tools = {'central_feature', 'spatial_autocorrelation', 'hot_spot'}
+        expensive_operation = str(parameters.get('operation', '')) in expensive_tools
+        run_async = (
+            sum(scoped_counts) >= feature_threshold
+            or maximum_pairs >= pair_threshold
+            or (expensive_operation and estimated_units >= 10_000)
+        )
+    execution_mode = 'asynchronous' if run_async else (
+        'automatic' if requested_mode == 'automatic' else 'synchronous'
+    )
 
     run = create_analysis_run(
         cur,
@@ -200,6 +297,11 @@ def _run_layer_tool(tool_id, data, input_parameter_names, audit_prefix):
             progress=100,
             stage='Failed',
             error=str(exc),
+            structured_errors=[{
+                'code': 'validation_error' if isinstance(exc, VectorAnalysisError) else 'execution_error',
+                'message': str(exc),
+                'retryable': not isinstance(exc, VectorAnalysisError),
+            }],
         )
         db.commit()
         status = 400 if isinstance(exc, VectorAnalysisError) else 500
@@ -337,6 +439,51 @@ def polygonize():
 @jwt_required()
 def geometry_construct():
     return _run_layer_tool('geometry_construct', request.get_json() or {}, ('layer_id',), 'analysis_geometry_construct')
+
+
+@analysis_bp.route('/split-lines-at-points', methods=['POST'])
+@jwt_required()
+def split_lines_at_points():
+    return _run_layer_tool(
+        'split_lines_at_points', request.get_json() or {}, ('line_layer', 'point_layer'),
+        'analysis_split_lines_at_points',
+    )
+
+
+@analysis_bp.route('/merge-layers', methods=['POST'])
+@jwt_required()
+def merge_layers():
+    return _run_layer_tool(
+        'merge_layers', request.get_json() or {}, ('layer_a', 'layer_b'), 'analysis_merge_layers'
+    )
+
+
+@analysis_bp.route('/reproject', methods=['POST'])
+@jwt_required()
+def reproject():
+    return _run_layer_tool('reproject', request.get_json() or {}, ('layer_id',), 'analysis_reproject')
+
+
+@analysis_bp.route('/geometry-quality', methods=['POST'])
+@jwt_required()
+def geometry_quality():
+    return _run_layer_tool('geometry_quality', request.get_json() or {}, ('layer_id',), 'analysis_geometry_quality')
+
+
+@analysis_bp.route('/topology-validate', methods=['POST'])
+@jwt_required()
+def topology_validate():
+    data = request.get_json() or {}
+    input_names = ('polygon_layer', 'coverage_layer') if data.get('coverage_layer') else ('polygon_layer',)
+    return _run_layer_tool('topology_validate', data, input_names, 'analysis_topology_validate')
+
+
+@analysis_bp.route('/spatial-statistics', methods=['POST'])
+@jwt_required()
+def spatial_statistics():
+    return _run_layer_tool(
+        'spatial_statistics', request.get_json() or {}, ('layer_id',), 'analysis_spatial_statistics'
+    )
 
 
 # ── Spatial query (features within a polygon) ─────────────────────────────────

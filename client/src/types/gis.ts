@@ -283,7 +283,7 @@ export interface UtilityNetworkSummary {
 export interface AsyncJob {
   id: string
   job_type: string
-  status: 'queued' | 'running' | 'success' | 'error'
+  status: 'queued' | 'running' | 'success' | 'error' | 'cancelled'
   progress: number
   payload: Record<string, unknown>
   result?: Record<string, unknown> | null

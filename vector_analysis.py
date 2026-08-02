@@ -19,6 +19,7 @@ class ToolParameter:
     required: bool = False
     default: Any = None
     minimum: float | None = None
+    maximum: float | None = None
     choices: tuple[str, ...] = ()
 
 
@@ -103,6 +104,9 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
             ),
             ToolParameter('prefix_a', 'Layer A field prefix', 'string', required=True, default='a_'),
             ToolParameter('prefix_b', 'Layer B field prefix', 'string', required=True, default='b_'),
+            ToolParameter('fields_a', 'Layer A fields (empty means all)', 'string_list', default=()),
+            ToolParameter('fields_b', 'Layer B fields (empty means all)', 'string_list', default=()),
+            ToolParameter('minimum_measure', 'Minimum output length/area', 'number', minimum=0.000001),
         ),
         migrated=True,
         keywords=('overlay', 'shared geometry'),
@@ -153,6 +157,8 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
             ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Dissolve'),
             ToolParameter('dissolve_fields', 'Dissolve fields', 'string_list', default=()),
             ToolParameter('statistics', 'Summary statistics', 'statistics', default=()),
+            ToolParameter('concatenate_delimiter', 'Concatenation delimiter', 'string', default=', '),
+            ToolParameter('concatenate_max_length', 'Maximum concatenated length', 'integer', default=4000, minimum=1, maximum=100000),
             ToolParameter('multipart', 'Create multipart features', 'boolean', default=True),
             ToolParameter(
                 'null_policy',
@@ -195,6 +201,8 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
             ToolParameter('distance', 'Search distance (metres)', 'number', minimum=0.000001),
             ToolParameter('target_prefix', 'Target field prefix', 'string', default='target_'),
             ToolParameter('join_prefix', 'Join field prefix', 'string', default='join_'),
+            ToolParameter('target_fields', 'Target fields (empty means all)', 'string_list', default=()),
+            ToolParameter('join_fields', 'Join fields (empty means all)', 'string_list', default=()),
         ),
         migrated=True,
         keywords=('attributes', 'relationship', 'cardinality', 'match'),
@@ -292,6 +300,83 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
             ToolParameter('concavity', 'Concave-hull target (0-1)', 'number', minimum=0),
         ), migrated=True, keywords=('singlepart', 'centroid', 'boundary', 'hull', 'points along line'),
     ),
+    'split_lines_at_points': VectorToolSpec(
+        id='split_lines_at_points', version=1, title='Split Lines At Points', category='Data management',
+        description='Split line features at nearby point locations using a geodesic search tolerance.',
+        input_geometry_families=('line', 'point'), output_geometry_family='line',
+        parameters=(
+            ToolParameter('line_layer', 'Line layer', 'layer', required=True),
+            ToolParameter('point_layer', 'Split point layer', 'layer', required=True),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Split Lines'),
+            ToolParameter('tolerance', 'Search tolerance (metres)', 'number', required=True, default=1, minimum=0.000001),
+        ), migrated=True, keywords=('split', 'line', 'points', 'stationing'),
+    ),
+    'merge_layers': VectorToolSpec(
+        id='merge_layers', version=1, title='Merge Layers', category='Data management',
+        description='Append two compatible layers into a new layer using deterministic union or common-field mapping.',
+        input_geometry_families=('point', 'line', 'polygon'), output_geometry_family=None,
+        parameters=(
+            ToolParameter('layer_a', 'First layer', 'layer', required=True),
+            ToolParameter('layer_b', 'Second layer', 'layer', required=True),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Merged Layers'),
+            ToolParameter('schema_strategy', 'Schema strategy', 'choice', default='union', choices=('union', 'intersection')),
+        ), migrated=True, keywords=('append', 'merge', 'field mapping', 'schema'),
+    ),
+    'reproject': VectorToolSpec(
+        id='reproject', version=1, title='Define And Reproject', category='Data management',
+        description='Interpret stored coordinates in a declared EPSG CRS and create a normalized EPSG:4326 layer.',
+        input_geometry_families=('point', 'line', 'polygon'), output_geometry_family=None,
+        parameters=(
+            ToolParameter('layer_id', 'Input layer', 'layer', required=True),
+            ToolParameter('source_crs', 'Coordinate CRS', 'string', required=True, default='EPSG:4326'),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Reprojected Layer'),
+        ), migrated=True, keywords=('projection', 'crs', 'epsg', 'normalize'),
+    ),
+    'geometry_quality': VectorToolSpec(
+        id='geometry_quality', version=1, title='Geometry Quality And Generalization', category='Data quality',
+        description='Inspect, repair, integrate, generalize, or aggregate feature geometry.',
+        input_geometry_families=('point', 'line', 'polygon'), output_geometry_family=None,
+        parameters=(
+            ToolParameter('layer_id', 'Input layer', 'layer', required=True),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Geometry Quality Result'),
+            ToolParameter('operation', 'Operation', 'choice', required=True, default='check', choices=(
+                'check', 'repair', 'detect_duplicates', 'snap_integrate', 'simplify', 'smooth',
+                'densify', 'eliminate_slivers', 'aggregate_polygons',
+            )),
+            ToolParameter('tolerance', 'Tolerance', 'number', minimum=0.000000001),
+            ToolParameter('area_threshold', 'Area threshold (square metres)', 'number', minimum=0.000001),
+            ToolParameter('iterations', 'Smoothing iterations', 'integer', default=1, minimum=1, maximum=5),
+            ToolParameter('only_issues', 'Return only detected issues', 'boolean', default=True),
+        ), migrated=True, keywords=('validity', 'repair', 'duplicate', 'simplify', 'smooth', 'sliver'),
+    ),
+    'topology_validate': VectorToolSpec(
+        id='topology_validate', version=1, title='Polygon Topology Validation', category='Data quality',
+        description='Create polygon diagnostics for overlaps, coverage gaps, and slivers.',
+        input_geometry_families=('polygon',), output_geometry_family='polygon',
+        parameters=(
+            ToolParameter('polygon_layer', 'Polygon layer', 'layer', required=True),
+            ToolParameter('coverage_layer', 'Optional expected coverage boundary', 'layer'),
+            ToolParameter('output_name', 'Diagnostics layer name', 'string', required=True, default='Topology Diagnostics'),
+            ToolParameter('checks', 'Checks', 'string_list', default=('overlaps',)),
+            ToolParameter('sliver_area', 'Sliver threshold (square metres)', 'number', minimum=0.000001),
+        ), migrated=True, keywords=('overlap', 'gap', 'sliver', 'topology', 'validation'),
+    ),
+    'spatial_statistics': VectorToolSpec(
+        id='spatial_statistics', version=1, title='Vector Spatial Statistics', category='Spatial statistics',
+        description='Calculate spatial centers, dispersion, nearest-neighbor patterns, autocorrelation, and hot spots.',
+        input_geometry_families=('point', 'line', 'polygon'), output_geometry_family=None,
+        parameters=(
+            ToolParameter('layer_id', 'Input layer', 'layer', required=True),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Spatial Statistics'),
+            ToolParameter('operation', 'Statistic', 'choice', required=True, default='mean_center', choices=(
+                'mean_center', 'median_center', 'central_feature', 'standard_distance',
+                'directional_distribution', 'nearest_neighbor', 'spatial_autocorrelation', 'hot_spot',
+            )),
+            ToolParameter('value_field', 'Numeric analysis field', 'string', default=''),
+            ToolParameter('distance_band', 'Distance band (metres)', 'number', minimum=0.000001),
+            ToolParameter('standard_deviations', 'Standard deviations', 'number', default=1, minimum=0.1, maximum=3),
+        ), migrated=True, keywords=('center', 'ellipse', 'nearest neighbor', 'moran', 'getis ord', 'hot spot'),
+    ),
     'within': VectorToolSpec(
         id='within',
         version=1,
@@ -325,13 +410,14 @@ def get_tool_spec(tool_id: str) -> VectorToolSpec:
 def normalize_environments(raw: Any) -> dict[str, Any]:
     data = raw if isinstance(raw, dict) else {}
     scope = str(data.get('scope', 'all')).strip().lower()
-    if scope not in {'all', 'selected'}:
-        raise VectorAnalysisError('environment scope must be all or selected')
+    allowed_scopes = {'all', 'selected', 'filtered', 'extent'}
+    if scope not in allowed_scopes:
+        raise VectorAnalysisError('environment scope must be all, selected, filtered, or extent')
 
     def normalize_scope(name: str, fallback: str) -> str:
         value = str(data.get(name, fallback)).strip().lower()
-        if value not in {'all', 'selected'}:
-            raise VectorAnalysisError(f'{name} must be all or selected')
+        if value not in allowed_scopes:
+            raise VectorAnalysisError(f'{name} must be all, selected, filtered, or extent')
         return value
 
     def normalize_ids(name: str, required: bool) -> list[str]:
@@ -370,6 +456,64 @@ def normalize_environments(raw: Any) -> dict[str, Any]:
     output_crs = str(data.get('output_crs', 'EPSG:4326')).strip().upper()
     if output_crs not in {'EPSG:4326', '4326'}:
         raise VectorAnalysisError('The current vector store supports EPSG:4326 outputs only')
+    invalid_geometry_policy = str(data.get('invalid_geometry_policy', 'reject')).strip().lower()
+    if invalid_geometry_policy not in {'reject', 'repair'}:
+        raise VectorAnalysisError('invalid_geometry_policy must be reject or repair')
+    multipart_policy = str(data.get('multipart_policy', 'preserve')).strip().lower()
+    if multipart_policy not in {'preserve', 'explode'}:
+        raise VectorAnalysisError('multipart_policy must be preserve or explode')
+    z_policy = str(data.get('z_policy', 'preserve')).strip().lower()
+    if z_policy not in {'preserve', 'drop'}:
+        raise VectorAnalysisError('z_policy must be preserve or drop')
+    output_collision_policy = str(data.get('output_collision_policy', 'suffix')).strip().lower()
+    if output_collision_policy not in {'error', 'suffix', 'overwrite'}:
+        raise VectorAnalysisError('output_collision_policy must be error, suffix, or overwrite')
+
+    def normalize_extent(name: str):
+        value = data.get(name)
+        if value in (None, ''):
+            return None
+        if not isinstance(value, (list, tuple)) or len(value) != 4:
+            raise VectorAnalysisError(f'{name} must contain [min_lng, min_lat, max_lng, max_lat]')
+        try:
+            extent = [float(item) for item in value]
+        except (TypeError, ValueError) as exc:
+            raise VectorAnalysisError(f'{name} must contain numeric coordinates') from exc
+        if extent[0] >= extent[2] or extent[1] >= extent[3] or extent[1] < -90 or extent[3] > 90:
+            raise VectorAnalysisError(f'{name} is not a valid EPSG:4326 extent')
+        return extent
+
+    def normalize_filters(name: str):
+        values = data.get(name) or []
+        if not isinstance(values, list) or len(values) > 20:
+            raise VectorAnalysisError(f'{name} must be a list with at most 20 filters')
+        normalized = []
+        for item in values:
+            if not isinstance(item, dict):
+                raise VectorAnalysisError(f'{name} entries must be objects')
+            field_name = str(item.get('field', '')).strip()
+            operator = str(item.get('operator', 'equals')).strip().lower()
+            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,63}', field_name):
+                raise VectorAnalysisError(f'{name} contains an invalid field name')
+            if operator not in {'equals', 'not_equals', 'contains', 'greater_than', 'at_least', 'less_than', 'at_most', 'is_null', 'is_not_null'}:
+                raise VectorAnalysisError(f'{name} contains an unsupported operator')
+            normalized.append({'field': field_name, 'operator': operator, 'value': item.get('value')})
+        return normalized
+
+    extent = normalize_extent('extent')
+    extent_a = normalize_extent('extent_a') or extent
+    extent_b = normalize_extent('extent_b')
+    filters = normalize_filters('filters')
+    filters_a = normalize_filters('filters_a') or filters
+    filters_b = normalize_filters('filters_b')
+    if scope_a == 'extent' and not extent_a:
+        raise VectorAnalysisError('extent_a or extent is required for extent scope')
+    if scope_b == 'extent' and not extent_b:
+        raise VectorAnalysisError('extent_b is required for second-input extent scope')
+    if scope_a == 'filtered' and not filters_a:
+        raise VectorAnalysisError('filters_a or filters is required for filtered scope')
+    if scope_b == 'filtered' and not filters_b:
+        raise VectorAnalysisError('filters_b is required for second-input filtered scope')
 
     return {
         'scope': scope,
@@ -380,8 +524,14 @@ def normalize_environments(raw: Any) -> dict[str, Any]:
         'selected_feature_ids_b': selected_ids_b,
         'precision_grid': precision_grid,
         'output_crs': 'EPSG:4326',
-        'invalid_geometry_policy': 'reject',
-        'multipart_policy': 'preserve',
+        'invalid_geometry_policy': invalid_geometry_policy,
+        'multipart_policy': multipart_policy,
+        'z_policy': z_policy,
+        'output_collision_policy': output_collision_policy,
+        'extent_a': extent_a,
+        'extent_b': extent_b,
+        'filters_a': filters_a,
+        'filters_b': filters_b,
     }
 
 
@@ -404,6 +554,8 @@ def validate_tool_parameters(tool_id: str, raw: Any) -> dict[str, Any]:
             value = int(numeric_value) if definition.type == 'integer' else numeric_value
             if definition.minimum is not None and value < definition.minimum:
                 raise VectorAnalysisError(f'{definition.name} must be at least {definition.minimum}')
+            if definition.maximum is not None and value > definition.maximum:
+                raise VectorAnalysisError(f'{definition.name} must be at most {definition.maximum}')
         if definition.type == 'string' and value is not None:
             value = str(value).strip()
             if definition.required and not value:
@@ -449,7 +601,7 @@ def validate_tool_parameters(tool_id: str, raw: Any) -> dict[str, Any]:
             if not isinstance(value, (list, tuple)):
                 raise VectorAnalysisError(f'{definition.name} must be a list')
             normalized_statistics = []
-            allowed_statistics = {'count', 'sum', 'minimum', 'maximum', 'mean', 'first', 'last'}
+            allowed_statistics = {'count', 'sum', 'minimum', 'maximum', 'mean', 'first', 'last', 'concatenate'}
             used_output_names: set[str] = set()
             for index, item in enumerate(value):
                 if not isinstance(item, dict):
@@ -498,6 +650,34 @@ def validate_tool_parameters(tool_id: str, raw: Any) -> dict[str, Any]:
                 parameters['concavity'] = 0.8
             if parameters['concavity'] > 1:
                 raise VectorAnalysisError('concavity must be between 0 and 1')
+    if tool_id == 'split_lines_at_points' and parameters['line_layer'] == parameters['point_layer']:
+        raise VectorAnalysisError('Split Lines At Points requires distinct line and point layers')
+    if tool_id == 'merge_layers' and parameters['layer_a'] == parameters['layer_b']:
+        raise VectorAnalysisError('Merge Layers requires two different input layers')
+    if tool_id == 'reproject':
+        match = re.fullmatch(r'EPSG:(\d{1,6})', parameters['source_crs'].upper())
+        if not match or int(match.group(1)) <= 0:
+            raise VectorAnalysisError('source_crs must be a valid EPSG code such as EPSG:32632')
+        parameters['source_crs'] = f'EPSG:{int(match.group(1))}'
+    if tool_id == 'geometry_quality':
+        if parameters['operation'] in {'snap_integrate', 'simplify', 'densify', 'aggregate_polygons'} and parameters['tolerance'] is None:
+            raise VectorAnalysisError(f'tolerance is required for {parameters["operation"]}')
+        if parameters['operation'] == 'eliminate_slivers' and parameters['area_threshold'] is None:
+            raise VectorAnalysisError('area_threshold is required for eliminate_slivers')
+    if tool_id == 'topology_validate':
+        allowed_checks = {'overlaps', 'gaps', 'slivers'}
+        if not parameters['checks'] or not set(parameters['checks']).issubset(allowed_checks):
+            raise VectorAnalysisError('checks must contain overlaps, gaps, or slivers')
+        if 'gaps' in parameters['checks'] and not parameters['coverage_layer']:
+            raise VectorAnalysisError('coverage_layer is required when checking gaps')
+        if 'slivers' in parameters['checks'] and parameters['sliver_area'] is None:
+            raise VectorAnalysisError('sliver_area is required when checking slivers')
+    if tool_id == 'spatial_statistics':
+        if parameters['operation'] in {'spatial_autocorrelation', 'hot_spot'}:
+            if not parameters['value_field']:
+                raise VectorAnalysisError('value_field is required for autocorrelation and hot-spot analysis')
+            if parameters['distance_band'] is None:
+                raise VectorAnalysisError('distance_band is required for autocorrelation and hot-spot analysis')
     return parameters
 
 
@@ -515,21 +695,50 @@ def create_analysis_run(
     spec = get_tool_spec(tool_id)
     cur.execute(
         """
-        SELECT id, updated_at FROM layers WHERE id = ANY(%s::uuid[])
+        SELECT l.id, l.updated_at, l.workspace_id, w.organization_id
+        FROM layers l
+        LEFT JOIN workspaces w ON w.id = l.workspace_id
+        WHERE l.id = ANY(%s::uuid[])
         """,
         (input_layer_ids,),
     )
-    revisions = {str(row['id']): row['updated_at'].isoformat() for row in cur.fetchall()}
+    input_rows = cur.fetchall()
+    revisions = {str(row['id']): row['updated_at'].isoformat() for row in input_rows}
+    workspace_ids = {str(row['workspace_id']) for row in input_rows if row.get('workspace_id')}
+    organization_ids = {str(row['organization_id']) for row in input_rows if row.get('organization_id')}
+    workspace_id = next(iter(workspace_ids)) if len(workspace_ids) == 1 else None
+    organization_id = next(iter(organization_ids)) if len(organization_ids) == 1 else None
+    normalized_record = {
+        'tool_id': tool_id,
+        'tool_version': spec.version,
+        'parameters': parameters,
+        'environments': environments,
+        'input_layer_revisions': revisions,
+    }
+    reproducibility_hash = hashlib.sha256(
+        json.dumps(normalized_record, sort_keys=True, separators=(',', ':'), default=str).encode('utf-8')
+    ).hexdigest()
+    estimated_counts = environments.get('estimated_input_counts') or []
+    total_units = int(environments.get('estimated_candidate_pairs') or sum(estimated_counts) or 0) or None
+    provenance = {
+        'engine': 'PostGIS',
+        'tool_id': tool_id,
+        'tool_version': spec.version,
+        'input_layer_ids': input_layer_ids,
+        'input_layer_revisions': revisions,
+    }
     cur.execute(
         """
         INSERT INTO analysis_runs (
             tool_id, tool_version, status, execution_mode, parameters, environments,
             input_layer_ids, input_layer_revisions, progress, progress_stage, created_by,
-            started_at
+            started_at, organization_id, workspace_id, completed_units, total_units,
+            provenance, reproducibility_hash
         ) VALUES (
             %s, %s, %s, %s, %s::jsonb, %s::jsonb,
             %s::jsonb, %s::jsonb, %s, %s, %s::uuid,
-            CASE WHEN %s = 'running' THEN NOW() ELSE NULL END
+            CASE WHEN %s = 'running' THEN NOW() ELSE NULL END,
+            %s::uuid, %s::uuid, %s, %s, %s::jsonb, %s
         )
         RETURNING *
         """,
@@ -546,6 +755,12 @@ def create_analysis_run(
             'Preparing inputs' if status == 'running' else 'Queued',
             created_by,
             status,
+            organization_id,
+            workspace_id,
+            0,
+            total_units,
+            json.dumps(provenance),
+            reproducibility_hash,
         ),
     )
     return dict(cur.fetchone())
@@ -562,6 +777,9 @@ def update_analysis_run(
     warnings: list[str] | None = None,
     metrics: dict[str, Any] | None = None,
     error: str | None = None,
+    completed_units: int | None = None,
+    total_units: int | None = None,
+    structured_errors: list[dict[str, Any]] | None = None,
 ) -> None:
     cur.execute(
         """
@@ -573,6 +791,9 @@ def update_analysis_run(
             warnings = COALESCE(%s::jsonb, warnings),
             metrics = COALESCE(%s::jsonb, metrics),
             error = %s,
+            completed_units = COALESCE(%s, completed_units),
+            total_units = COALESCE(%s, total_units),
+            structured_errors = COALESCE(%s::jsonb, structured_errors),
             started_at = CASE WHEN %s = 'running' THEN COALESCE(started_at, NOW()) ELSE started_at END,
             finished_at = CASE WHEN %s IN ('succeeded', 'failed', 'cancelled') THEN NOW() ELSE finished_at END
         WHERE id = %s::uuid
@@ -585,6 +806,9 @@ def update_analysis_run(
             json.dumps(warnings) if warnings is not None else None,
             json.dumps(metrics) if metrics is not None else None,
             error,
+            completed_units,
+            total_units,
+            json.dumps(structured_errors) if structured_errors is not None else None,
             status,
             status,
             run_id,
@@ -615,8 +839,17 @@ def serialize_analysis_run(row: dict[str, Any]) -> dict[str, Any]:
         'metrics': row.get('metrics') or {},
         'progress': row['progress'],
         'progress_stage': row.get('progress_stage'),
+        'completed_units': row.get('completed_units', 0),
+        'total_units': row.get('total_units'),
         'error': row.get('error'),
+        'structured_errors': row.get('structured_errors') or [],
+        'organization_id': str(row['organization_id']) if row.get('organization_id') else None,
+        'workspace_id': str(row['workspace_id']) if row.get('workspace_id') else None,
+        'provenance': row.get('provenance') or {},
+        'reproducibility_hash': row.get('reproducibility_hash'),
         'async_job_id': str(row['async_job_id']) if row.get('async_job_id') else None,
+        'worker_backend_pid': row.get('worker_backend_pid'),
+        'cancellation_requested_at': row['cancellation_requested_at'].isoformat() if row.get('cancellation_requested_at') else None,
         'created_by': str(row['created_by']) if row.get('created_by') else None,
         'created_at': row['created_at'].isoformat() if row.get('created_at') else None,
         'started_at': row['started_at'].isoformat() if row.get('started_at') else None,
@@ -720,6 +953,7 @@ def _append_prefixed_layer_schema(
     sort_offset: int,
     used_field_names: set[str],
     used_domain_names: set[str],
+    include_fields: set[str] | None = None,
 ) -> dict[str, str]:
     if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,15}', prefix):
         raise VectorAnalysisError(
@@ -765,6 +999,8 @@ def _append_prefixed_layer_schema(
     )
     field_mapping: dict[str, str] = {}
     for index, source_field in enumerate(cur.fetchall()):
+        if include_fields is not None and source_field['name'] not in include_fields:
+            continue
         output_name = _bounded_identifier(prefix, source_field['name'], used_field_names)
         source_domain_id = str(source_field['domain_id']) if source_field.get('domain_id') else None
         cur.execute(
@@ -923,13 +1159,12 @@ def _execute_buffer(
         source_layer_id=layer_id,
     )
 
-    scope_clause = ''
+    scope_clause = _selected_clause('source', environments['scope'])
     query_params: list[Any] = [output_layer_id, distance, created_by, layer_id]
     if environments['scope'] == 'selected':
-        scope_clause = 'AND id = ANY(%s::uuid[])'
         query_params.append(environments['selected_feature_ids'])
 
-    geometry_expression = 'ST_Buffer(geometry::geography, %s)::geometry'
+    geometry_expression = 'ST_Buffer(source.geometry::geography, %s)::geometry'
     if environments['precision_grid'] is not None:
         geometry_expression = f'ST_SnapToGrid({geometry_expression}, %s)'
         query_params = [output_layer_id, distance, environments['precision_grid'], created_by, layer_id] + (
@@ -942,10 +1177,10 @@ def _execute_buffer(
         INSERT INTO features (layer_id, geometry, properties, created_by)
         SELECT %s::uuid,
                {geometry_expression},
-               properties,
+               source.properties,
                %s::uuid
-        FROM features
-        WHERE layer_id = %s::uuid
+        FROM features source
+        WHERE source.layer_id = %s::uuid
           {scope_clause}
         """,
         tuple(query_params),
@@ -1133,10 +1368,20 @@ def _resolve_intersection_output_type(family_a: str, family_b: str, requested: s
 
 
 def _selected_clause(alias: str, scope: str) -> str:
-    return f'AND {alias}.id = ANY(%s::uuid[])' if scope == 'selected' else ''
+    if scope == 'selected':
+        return f'AND {alias}.id = ANY(%s::uuid[])'
+    if scope == 'prepared_a':
+        return f'AND {alias}.id IN (SELECT id FROM analysis_scope_a_ids)'
+    if scope == 'prepared_b':
+        return f'AND {alias}.id IN (SELECT id FROM analysis_scope_b_ids)'
+    return ''
 
 
 def _count_scoped_features(cur, layer_id: str, scope: str, selected_ids: list[str]) -> int:
+    if scope in {'prepared_a', 'prepared_b'}:
+        table_name = 'analysis_scope_a_ids' if scope == 'prepared_a' else 'analysis_scope_b_ids'
+        cur.execute(f'SELECT COUNT(*) AS count FROM {table_name}')
+        return int(cur.fetchone()['count'])
     clause = 'AND id = ANY(%s::uuid[])' if scope == 'selected' else ''
     parameters: list[Any] = [layer_id]
     if scope == 'selected':
@@ -1146,6 +1391,210 @@ def _count_scoped_features(cur, layer_id: str, scope: str, selected_ids: list[st
         tuple(parameters),
     )
     return int(cur.fetchone()['count'])
+
+
+def _filter_scope_sql(filters: list[dict[str, Any]]) -> tuple[list[str], list[Any]]:
+    clauses: list[str] = []
+    parameters: list[Any] = []
+    for item in filters:
+        field_name, operator, value = item['field'], item['operator'], item.get('value')
+        if operator == 'equals':
+            clauses.append('properties ->> %s = %s')
+            parameters.extend([field_name, str(value)])
+        elif operator == 'not_equals':
+            clauses.append('properties ->> %s IS DISTINCT FROM %s')
+            parameters.extend([field_name, str(value)])
+        elif operator == 'contains':
+            clauses.append('properties ->> %s ILIKE %s')
+            parameters.extend([field_name, f'%{value}%'])
+        elif operator in {'greater_than', 'at_least', 'less_than', 'at_most'}:
+            try:
+                numeric_value = float(value)
+            except (TypeError, ValueError) as exc:
+                raise VectorAnalysisError(f'{operator} filter requires a numeric value for {field_name}') from exc
+            comparison = {'greater_than': '>', 'at_least': '>=', 'less_than': '<', 'at_most': '<='}[operator]
+            clauses.append(
+                f"CASE WHEN jsonb_typeof(properties -> %s) = 'number' "
+                f'THEN (properties ->> %s)::double precision END {comparison} %s'
+            )
+            parameters.extend([field_name, field_name, numeric_value])
+        elif operator == 'is_null':
+            clauses.append('properties ->> %s IS NULL')
+            parameters.append(field_name)
+        else:
+            clauses.append('properties ->> %s IS NOT NULL')
+            parameters.append(field_name)
+    return clauses, parameters
+
+
+def _prepare_environment_scopes(cur, tool_id, parameters, environments):
+    layer_ids = [
+        parameters.get(definition.name)
+        for definition in get_tool_spec(tool_id).parameters
+        if definition.type == 'layer' and parameters.get(definition.name)
+    ]
+    prepared = dict(environments)
+    for index, suffix in enumerate(('a', 'b')):
+        if index >= len(layer_ids):
+            break
+        scope_key = f'scope_{suffix}'
+        scope = environments[scope_key]
+        if scope not in {'filtered', 'extent'}:
+            continue
+        clauses = ['layer_id = %s::uuid']
+        query_parameters: list[Any] = [layer_ids[index]]
+        if scope == 'filtered':
+            filter_clauses, filter_parameters = _filter_scope_sql(environments[f'filters_{suffix}'])
+            clauses.extend(filter_clauses)
+            query_parameters.extend(filter_parameters)
+        else:
+            extent = environments[f'extent_{suffix}']
+            clauses.append('geometry && ST_MakeEnvelope(%s, %s, %s, %s, 4326)')
+            query_parameters.extend(extent)
+        table_name = f'analysis_scope_{suffix}_ids'
+        cur.execute(f'DROP TABLE IF EXISTS {table_name}')
+        cur.execute(
+            f'CREATE TEMP TABLE {table_name} ON COMMIT DROP AS '
+            f'SELECT id FROM features WHERE {" AND ".join(clauses)}',
+            tuple(query_parameters),
+        )
+        cur.execute(f'CREATE UNIQUE INDEX ON {table_name}(id)')
+        prepared[scope_key] = f'prepared_{suffix}'
+        if index == 0:
+            prepared['scope'] = 'prepared_a'
+    return prepared
+
+
+def _tool_input_layer_ids(tool_id: str, parameters: dict[str, Any]) -> list[str]:
+    return [
+        parameters[definition.name]
+        for definition in get_tool_spec(tool_id).parameters
+        if definition.type == 'layer' and parameters.get(definition.name)
+    ]
+
+
+def _prepare_input_geometry_policy(cur, tool_id, parameters, environments) -> int:
+    layer_ids = _tool_input_layer_ids(tool_id, parameters)
+    invalid_count = 0
+    if environments['invalid_geometry_policy'] == 'repair':
+        cur.execute(
+            'CREATE TEMP TABLE IF NOT EXISTS analysis_original_geometries '
+            '(id uuid PRIMARY KEY, geometry geometry(Geometry, 4326)) ON COMMIT DROP'
+        )
+    for index, layer_id in enumerate(layer_ids[:2]):
+        suffix = 'a' if index == 0 else 'b'
+        scope = environments[f'scope_{suffix}']
+        alias = 'feature'
+        scope_clause = _selected_clause(alias, scope)
+        query_parameters: list[Any] = [layer_id]
+        if scope == 'selected':
+            query_parameters.append(environments[f'selected_feature_ids_{suffix}'])
+        cur.execute(
+            f'SELECT COUNT(*) AS count FROM features {alias} WHERE layer_id = %s::uuid '
+            f'{scope_clause} AND NOT ST_IsValid(geometry)',
+            tuple(query_parameters),
+        )
+        layer_invalid_count = int(cur.fetchone()['count'])
+        invalid_count += layer_invalid_count
+        if layer_invalid_count and environments['invalid_geometry_policy'] == 'reject':
+            raise VectorAnalysisError(
+                f'Input layer contains {layer_invalid_count} invalid geometries in the processing scope; '
+                'choose the repair policy or run Check Geometry.'
+            )
+        if layer_invalid_count:
+            cur.execute(
+                f"""INSERT INTO analysis_original_geometries (id, geometry)
+                    SELECT id, geometry FROM features {alias}
+                    WHERE layer_id = %s::uuid {scope_clause} AND NOT ST_IsValid(geometry)
+                    ON CONFLICT (id) DO NOTHING""",
+                tuple(query_parameters),
+            )
+            cur.execute(
+                f"""UPDATE features {alias} SET geometry = ST_MakeValid(geometry)
+                    WHERE layer_id = %s::uuid {scope_clause} AND NOT ST_IsValid(geometry)""",
+                tuple(query_parameters),
+            )
+    return invalid_count
+
+
+def _restore_input_geometries(cur) -> None:
+    cur.execute("SELECT to_regclass('pg_temp.analysis_original_geometries') AS table_name")
+    if cur.fetchone()['table_name']:
+        cur.execute(
+            'UPDATE features feature SET geometry = original.geometry '
+            'FROM analysis_original_geometries original WHERE feature.id = original.id'
+        )
+
+
+def _apply_output_geometry_policies(cur, result, environments, created_by) -> dict[str, Any]:
+    rewrite_history = environments['multipart_policy'] == 'explode' or environments['z_policy'] == 'drop'
+    if not rewrite_history:
+        return result
+    for output_layer_id in result['output_layer_ids']:
+        if environments['z_policy'] == 'drop':
+            cur.execute(
+                'UPDATE features SET geometry = ST_Force2D(geometry) WHERE layer_id = %s::uuid',
+                (output_layer_id,),
+            )
+        if environments['multipart_policy'] == 'explode':
+            cur.execute(
+                'SELECT geometry_type FROM layers WHERE id = %s::uuid', (output_layer_id,)
+            )
+            family = _geometry_family(cur.fetchone()['geometry_type'])
+            dimension = {'point': 1, 'line': 2, 'polygon': 3}.get(family)
+            if dimension:
+                cur.execute(
+                    f"""WITH removed AS (
+                            DELETE FROM features WHERE layer_id = %s::uuid
+                            RETURNING geometry, properties, version, created_by
+                        )
+                        INSERT INTO features (layer_id, geometry, properties, version, created_by)
+                        SELECT %s::uuid, dumped.geom, removed.properties, removed.version, removed.created_by
+                        FROM removed CROSS JOIN LATERAL ST_Dump(
+                            ST_CollectionExtract(removed.geometry, {dimension})
+                        ) dumped WHERE NOT ST_IsEmpty(dumped.geom)""",
+                    (output_layer_id, output_layer_id),
+                )
+        cur.execute('DELETE FROM feature_history WHERE layer_id = %s::uuid', (output_layer_id,))
+        _record_output_history(cur, output_layer_id, created_by)
+    primary_layer_id = result['output_layer_ids'][0]
+    cur.execute('SELECT COUNT(*) AS count FROM features WHERE layer_id = %s::uuid', (primary_layer_id,))
+    result['count'] = int(cur.fetchone()['count'])
+    result.setdefault('metrics', {})['output_feature_count_after_policy'] = result['count']
+    return result
+
+
+def _prepare_output_collision(cur, parameters, environments, created_by, input_layer_ids):
+    output_name = parameters.get('output_name')
+    if not output_name:
+        return parameters
+    cur.execute(
+        'SELECT id::text AS id, name FROM layers WHERE created_by = %s::uuid AND LOWER(name) = LOWER(%s) ORDER BY created_at',
+        (created_by, output_name),
+    )
+    conflicts = [dict(row) for row in cur.fetchall()]
+    if not conflicts:
+        return parameters
+    policy = environments['output_collision_policy']
+    if policy == 'error':
+        raise VectorAnalysisError(f'An owned layer named "{output_name}" already exists')
+    if policy == 'overwrite':
+        conflict_ids = [row['id'] for row in conflicts]
+        if set(conflict_ids) & set(input_layer_ids):
+            raise VectorAnalysisError('Overwrite cannot delete an input layer; choose a different output name')
+        cur.execute('DELETE FROM layers WHERE id = ANY(%s::uuid[])', (conflict_ids,))
+        return parameters
+    cur.execute(
+        'SELECT name FROM layers WHERE created_by = %s::uuid AND name ILIKE %s',
+        (created_by, f'{output_name} (%)'),
+    )
+    used_names = {row['name'].lower() for row in cur.fetchall()} | {output_name.lower()}
+    counter = 2
+    candidate = f'{output_name} ({counter})'
+    while candidate.lower() in used_names:
+        counter += 1
+        candidate = f'{output_name} ({counter})'
+    return {**parameters, 'output_name': candidate}
 
 
 def _execute_intersect(
@@ -1177,6 +1626,8 @@ def _execute_intersect(
     )
     geometry_types = {'point': ('Point', 1), 'line': ('LineString', 2), 'polygon': ('Polygon', 3)}
     layer_geometry_type, collection_type = geometry_types[output_family]
+    if parameters['minimum_measure'] is not None and output_family == 'point':
+        raise VectorAnalysisError('minimum_measure applies only to line length or polygon area outputs')
 
     scope_a = environments['scope_a']
     scope_b = environments['scope_b']
@@ -1206,6 +1657,7 @@ def _execute_intersect(
         sort_offset=10,
         used_field_names=used_fields,
         used_domain_names=used_domains,
+        include_fields=set(parameters['fields_a']) if parameters['fields_a'] else None,
     )
     mapping_b = _append_prefixed_layer_schema(
         cur,
@@ -1216,7 +1668,14 @@ def _execute_intersect(
         sort_offset=10_000,
         used_field_names=used_fields,
         used_domain_names=used_domains,
+        include_fields=set(parameters['fields_b']) if parameters['fields_b'] else None,
     )
+    missing_a = set(parameters['fields_a']) - set(mapping_a)
+    missing_b = set(parameters['fields_b']) - set(mapping_b)
+    if missing_a or missing_b:
+        raise VectorAnalysisError(
+            f'Unknown field-map entries: {", ".join(sorted(missing_a | missing_b))}'
+        )
 
     raw_parameters: list[Any] = [layer_a_id, layer_b_id]
     if scope_a == 'selected':
@@ -1231,6 +1690,12 @@ def _execute_intersect(
         geometry_parameters.append(environments['precision_grid'])
 
     progress(40, 'Intersecting candidate features')
+    minimum_filter = ''
+    minimum_parameters: list[Any] = []
+    if parameters['minimum_measure'] is not None:
+        measurement = 'ST_Length(geometry::geography)' if output_family == 'line' else 'ST_Area(geometry::geography)'
+        minimum_filter = f'AND {measurement} >= %s'
+        minimum_parameters.append(parameters['minimum_measure'])
     cur.execute(
         f"""
         WITH raw_intersections AS MATERIALIZED (
@@ -1274,13 +1739,14 @@ def _execute_intersect(
                ), '{{}}'::jsonb),
                %s::uuid
         FROM typed_intersections
-        WHERE geometry IS NOT NULL AND NOT ST_IsEmpty(geometry)
+        WHERE geometry IS NOT NULL AND NOT ST_IsEmpty(geometry) {minimum_filter}
         """,
         tuple(
             geometry_parameters
             + raw_parameters
             + [collection_type]
             + [output_layer_id, json.dumps(mapping_a), json.dumps(mapping_b), created_by]
+            + minimum_parameters
         ),
     )
     feature_count = cur.rowcount
@@ -1310,6 +1776,7 @@ def _execute_intersect(
             'input_feature_count_b': input_count_b,
             'maximum_feature_pairs': maximum_pairs,
             'output_geometry_family': output_family,
+            'minimum_measure': parameters['minimum_measure'],
         },
     }
 
@@ -1620,12 +2087,17 @@ def _execute_dissolve(
             length = None
             precision = source_field.get('precision')
             scale = source_field.get('scale')
-        else:
+        elif statistic_name in {'first', 'last'}:
             field_type = source_field['field_type']
             alias = f'{statistic_name.title()} {source_field.get("alias") or statistic["field"]}'
             length = source_field.get('length')
             precision = source_field.get('precision')
             scale = source_field.get('scale')
+        else:
+            field_type = 'string'
+            alias = f'Concatenated {source_field.get("alias") or statistic["field"]}'
+            length = parameters['concatenate_max_length']
+            precision = scale = None
         cur.execute(
             """
             INSERT INTO layer_fields (
@@ -1650,6 +2122,7 @@ def _execute_dissolve(
     ]
     group_by = [f"source.properties -> '{field_name}'" for field_name in dissolve_fields]
     statistic_selects: list[str] = []
+    statistic_parameters: list[Any] = []
     for index, statistic in enumerate(statistics):
         statistic_name = statistic['statistic']
         field_name = statistic['field']
@@ -1664,8 +2137,15 @@ def _execute_dissolve(
             expression = f'{function}({numeric_value})'
         elif statistic_name == 'first':
             expression = f"(array_agg(source.properties -> '{field_name}' ORDER BY source.id))[1]"
-        else:
+        elif statistic_name == 'last':
             expression = f"(array_agg(source.properties -> '{field_name}' ORDER BY source.id DESC))[1]"
+        else:
+            expression = (
+                f"to_jsonb(LEFT(STRING_AGG(source.properties ->> '{field_name}', %s ORDER BY source.id), %s))"
+            )
+            statistic_parameters.extend([
+                parameters['concatenate_delimiter'], parameters['concatenate_max_length'],
+            ])
         statistic_selects.append(f'{expression} AS statistic_{index}')
 
     property_pairs = [
@@ -1681,8 +2161,10 @@ def _execute_dissolve(
     )
     where_clauses = ['source.layer_id = %s::uuid']
     query_parameters: list[Any] = [layer_id]
+    scope_condition = _selected_clause('source', scope).removeprefix('AND ')
+    if scope_condition:
+        where_clauses.append(scope_condition)
     if scope == 'selected':
-        where_clauses.append('source.id = ANY(%s::uuid[])')
         query_parameters.append(selected_ids)
     if parameters['null_policy'] == 'exclude':
         for field_name in dissolve_fields:
@@ -1692,7 +2174,7 @@ def _execute_dissolve(
             )
 
     aggregate_columns = group_selects + [
-        'ST_UnaryUnion(ST_Collect(source.geometry)) AS geometry',
+        'ST_MemUnion(source.geometry) AS geometry',
     ] + statistic_selects
     grouped_sql = ',\n                       '.join(aggregate_columns)
     precision_expression = 'ST_CollectionExtract(geometry, %s)'
@@ -1726,7 +2208,7 @@ def _execute_dissolve(
         FROM {final_from}
         WHERE {final_geometry} IS NOT NULL AND NOT ST_IsEmpty({final_geometry})
         """,
-        tuple(query_parameters + prepared_parameters + [output_layer_id, created_by]),
+        tuple(statistic_parameters + query_parameters + prepared_parameters + [output_layer_id, created_by]),
     )
     feature_count = cur.rowcount
 
@@ -1822,6 +2304,7 @@ def _execute_spatial_join(
         sort_offset=10,
         used_field_names=used_fields,
         used_domain_names=used_domains,
+        include_fields=set(parameters['target_fields']) if parameters['target_fields'] else None,
     )
     join_mapping = _append_prefixed_layer_schema(
         cur,
@@ -1832,7 +2315,14 @@ def _execute_spatial_join(
         sort_offset=10_000,
         used_field_names=used_fields,
         used_domain_names=used_domains,
+        include_fields=set(parameters['join_fields']) if parameters['join_fields'] else None,
     )
+    missing_target = set(parameters['target_fields']) - set(target_mapping)
+    missing_join = set(parameters['join_fields']) - set(join_mapping)
+    if missing_target or missing_join:
+        raise VectorAnalysisError(
+            f'Unknown field-map entries: {", ".join(sorted(missing_target | missing_join))}'
+        )
 
     predicate_sql, predicate_parameter = _spatial_join_predicate(parameters['predicate'])
     join_scope_clause = _selected_clause('candidate', scope_join)
@@ -2326,7 +2816,7 @@ def _execute_near(
                       {self_clause}
                       {distance_clause}
                       {near_scope_clause}
-                    ORDER BY candidate.geometry <-> source.geometry, candidate.id
+                    ORDER BY candidate.geometry::geography <-> source.geometry::geography, candidate.id
                     LIMIT %s
                 ) candidates
             ) exact
@@ -2344,7 +2834,7 @@ def _execute_near(
     warnings = [] if feature_count else ['No candidate features met the Near search criteria.']
     if near_count > candidate_limit:
         warnings.append(
-            f'Geodesic ranking was refined from the closest {candidate_limit} indexed candidates per source.'
+            f'Exact spheroid ranking was refined from the closest {candidate_limit} geography-index candidates per source.'
         )
     progress(92, 'Finalizing output')
     return {
@@ -2360,7 +2850,7 @@ def _execute_near(
             'max_distance_m': parameters['max_distance'],
             'exclude_self': parameters['exclude_self'],
             'distance_method': 'PostGIS spheroid geography',
-            'candidate_method': 'GiST KNN geometry operator',
+            'candidate_method': 'GiST KNN geography operator',
             'output_geometry': parameters['output_geometry'],
         },
     }
@@ -2493,6 +2983,9 @@ def _execute_polygonize(
             ), network AS MATERIALIZED (
                 SELECT ST_Node(ST_UnaryUnion(ST_Collect(geometry))) AS geometry
                 FROM scoped_lines
+            ), network_parts AS MATERIALIZED (
+                SELECT (ST_Dump(ST_CollectionExtract(geometry, 2))).geom AS geometry
+                FROM network
             ), polygons AS MATERIALIZED (
                 SELECT (ST_Dump(ST_Polygonize(geometry))).geom AS geometry
                 FROM network
@@ -2506,14 +2999,33 @@ def _execute_polygonize(
             ), parts AS (
                 SELECT (ST_Dump(ST_CollectionExtract(geometry, 2))).geom AS geometry
                 FROM unused
+            ), classified AS (
+                SELECT parts.geometry,
+                       CASE
+                           WHEN ST_IsClosed(parts.geometry) AND NOT ST_IsRing(parts.geometry)
+                               THEN 'invalid_ring'
+                           WHEN (
+                               SELECT MIN(endpoint_degree)
+                               FROM (
+                                   SELECT COUNT(*)::integer AS endpoint_degree
+                                   FROM (VALUES (ST_StartPoint(parts.geometry)), (ST_EndPoint(parts.geometry))) endpoints(point)
+                                   JOIN network_parts segment
+                                     ON ST_Equals(ST_StartPoint(segment.geometry), endpoints.point)
+                                     OR ST_Equals(ST_EndPoint(segment.geometry), endpoints.point)
+                                   GROUP BY endpoints.point
+                               ) degrees
+                           ) <= 1 THEN 'dangle'
+                           ELSE 'cut_edge'
+                       END AS issue_type
+                FROM parts
+                WHERE NOT ST_IsEmpty(parts.geometry) AND ST_Length(parts.geometry) > 0
             )
             INSERT INTO features (layer_id, geometry, properties, created_by)
             SELECT %s::uuid,
                    geometry,
-                   jsonb_build_object('issue_type', 'unconsumed_edge', 'length_map_units', ST_Length(geometry)),
+                   jsonb_build_object('issue_type', issue_type, 'length_map_units', ST_Length(geometry)),
                    %s::uuid
-            FROM parts
-            WHERE NOT ST_IsEmpty(geometry) AND ST_Length(geometry) > 0
+            FROM classified
             """,
             tuple(base_parameters + [diagnostic_layer_id, created_by]),
         )
@@ -2524,7 +3036,7 @@ def _execute_polygonize(
     if not feature_count:
         warnings.append('No closed rings formed polygons; inspect the diagnostics layer for gaps and dangles.')
     if diagnostic_count:
-        warnings.append(f'{diagnostic_count} unconsumed line part(s) were written to the diagnostics layer.')
+        warnings.append(f'{diagnostic_count} dangle, cut-edge, or invalid-ring diagnostic(s) were written.')
     progress(92, 'Finalizing polygonized output')
     output_layer_ids = [output_layer_id] + ([diagnostic_layer_id] if diagnostic_layer_id else [])
     return {
@@ -2621,6 +3133,713 @@ def _execute_geometry_construct(cur, parameters, environments, created_by, progr
     }
 
 
+def _execute_split_lines_at_points(cur, parameters, environments, created_by, progress):
+    line_layer_id = parameters['line_layer']
+    point_layer_id = parameters['point_layer']
+    cur.execute(
+        'SELECT id, name, geometry_type FROM layers WHERE id = ANY(%s::uuid[])',
+        ([line_layer_id, point_layer_id],),
+    )
+    layers = {str(row['id']): dict(row) for row in cur.fetchall()}
+    if line_layer_id not in layers or point_layer_id not in layers:
+        raise VectorAnalysisError('One or more input layers were not found')
+    if _resolve_layer_family(cur, layers[line_layer_id]) != 'line':
+        raise VectorAnalysisError('line_layer must contain line geometry')
+    if _resolve_layer_family(cur, layers[point_layer_id]) != 'point':
+        raise VectorAnalysisError('point_layer must contain point geometry')
+
+    progress(15, 'Creating split-line schema')
+    output_layer_id = _create_output_layer(
+        cur, name=parameters['output_name'],
+        description=f'Lines from "{layers[line_layer_id]["name"]}" split at "{layers[point_layer_id]["name"]}"',
+        geometry_type='LineString', created_by=created_by, source_layer_id=line_layer_id,
+    )
+    _inherit_layer_style(cur, output_layer_id, line_layer_id)
+    source_id_field, segment_field = _add_provenance_fields(cur, output_layer_id, [
+        ('source_feature_id', 'Source line feature ID'), ('segment_index', 'Segment index'),
+    ])
+    # Segment index is numeric even though provenance fields default to strings.
+    cur.execute(
+        'UPDATE layer_fields SET field_type = %s, length = NULL WHERE layer_id = %s::uuid AND name = %s',
+        ('integer', output_layer_id, segment_field),
+    )
+    line_scope = environments['scope_a']
+    point_scope = environments['scope_b']
+    line_scope_clause = _selected_clause('line', line_scope)
+    point_scope_clause = _selected_clause('point', point_scope)
+    query_parameters: list[Any] = [
+        output_layer_id, created_by, point_layer_id, parameters['tolerance'], parameters['tolerance'],
+    ]
+    if point_scope == 'selected':
+        query_parameters.append(environments['selected_feature_ids_b'])
+    query_parameters.append(line_layer_id)
+    if line_scope == 'selected':
+        query_parameters.append(environments['selected_feature_ids_a'])
+    progress(42, 'Snapping split points and cutting lines')
+    cur.execute(f"""
+        INSERT INTO features (layer_id, geometry, properties, created_by)
+        SELECT %s::uuid, segment.geom,
+               line.properties || jsonb_build_object(
+                   '{source_id_field}', line.id::text,
+                   '{segment_field}', segment.path[1]
+               ), %s::uuid
+        FROM features line
+        LEFT JOIN LATERAL (
+            SELECT ST_UnaryUnion(ST_Collect(ST_ClosestPoint(line.geometry, point.geometry))) AS blade
+            FROM features point
+            WHERE point.layer_id = %s::uuid
+              AND line.geometry && ST_Expand(point.geometry, %s / 111320.0)
+              AND ST_DWithin(line.geometry::geography, point.geometry::geography, %s)
+              {point_scope_clause}
+        ) split_points ON TRUE
+        CROSS JOIN LATERAL ST_Dump(
+            ST_CollectionExtract(
+                ST_Split(line.geometry, COALESCE(split_points.blade, ST_GeomFromText('MULTIPOINT EMPTY', 4326))), 2
+            )
+        ) segment
+        WHERE line.layer_id = %s::uuid {line_scope_clause}
+          AND NOT ST_IsEmpty(segment.geom)
+    """, tuple(query_parameters))
+    feature_count = cur.rowcount
+    _record_output_history(cur, output_layer_id, created_by)
+    warnings = [] if feature_count else ['No line segments were produced.']
+    progress(92, 'Finalizing split lines')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id), 'count': feature_count,
+        'output_layer_ids': [output_layer_id], 'warnings': warnings,
+        'metrics': {'tolerance_m': parameters['tolerance'], 'output_segment_count': feature_count},
+    }
+
+
+def _prepare_merged_schema(cur, layer_a: str, layer_b: str, output_layer_id: str, strategy: str) -> set[str]:
+    cur.execute(
+        """SELECT layer_id::text AS layer_id, name, alias, field_type, nullable, length, precision, scale, sort_order
+           FROM layer_fields WHERE layer_id = ANY(%s::uuid[]) ORDER BY sort_order, created_at""",
+        ([layer_a, layer_b],),
+    )
+    rows = [dict(row) for row in cur.fetchall()]
+    fields_a = {row['name']: row for row in rows if row['layer_id'] == layer_a}
+    fields_b = {row['name']: row for row in rows if row['layer_id'] == layer_b}
+    output_names = set(fields_a)
+    if strategy == 'intersection':
+        output_names &= set(fields_b)
+        cur.execute(
+            'DELETE FROM layer_fields WHERE layer_id = %s::uuid AND NOT (name = ANY(%s::text[]))',
+            (output_layer_id, sorted(output_names)),
+        )
+    else:
+        for name, field_definition in fields_b.items():
+            if name in output_names:
+                continue
+            output_names.add(name)
+            cur.execute(
+                """INSERT INTO layer_fields
+                   (layer_id, name, alias, field_type, nullable, length, precision, scale, sort_order)
+                   VALUES (%s::uuid, %s, %s, %s, TRUE, %s, %s, %s, %s)""",
+                (
+                    output_layer_id, name, field_definition.get('alias'), field_definition['field_type'],
+                    field_definition.get('length'), field_definition.get('precision'), field_definition.get('scale'),
+                    10_000 + (field_definition.get('sort_order') or 0),
+                ),
+            )
+    for name in output_names & set(fields_a) & set(fields_b):
+        if fields_a[name]['field_type'] != fields_b[name]['field_type']:
+            cur.execute(
+                """UPDATE layer_fields SET field_type = 'string', domain_id = NULL,
+                   alias = COALESCE(alias, %s), length = NULL, precision = NULL, scale = NULL
+                   WHERE layer_id = %s::uuid AND name = %s""",
+                (name, output_layer_id, name),
+            )
+    return output_names
+
+
+def _execute_merge_layers(cur, parameters, environments, created_by, progress):
+    layer_a, layer_b = parameters['layer_a'], parameters['layer_b']
+    cur.execute(
+        'SELECT id, name, geometry_type FROM layers WHERE id = ANY(%s::uuid[])', ([layer_a, layer_b],),
+    )
+    layers = {str(row['id']): dict(row) for row in cur.fetchall()}
+    if layer_a not in layers or layer_b not in layers:
+        raise VectorAnalysisError('One or more input layers were not found')
+    family_a = _resolve_layer_family(cur, layers[layer_a])
+    family_b = _resolve_layer_family(cur, layers[layer_b])
+    if family_a != family_b:
+        raise VectorAnalysisError('Merge Layers requires matching geometry families')
+    geometry_type = {'point': 'Point', 'line': 'LineString', 'polygon': 'Polygon'}[family_a]
+    progress(15, 'Reconciling merged field schema')
+    output_layer_id = _create_output_layer(
+        cur, name=parameters['output_name'],
+        description=f'Merged "{layers[layer_a]["name"]}" and "{layers[layer_b]["name"]}"',
+        geometry_type=geometry_type, created_by=created_by, source_layer_id=layer_a,
+    )
+    _inherit_layer_style(cur, output_layer_id, layer_a)
+    output_fields = _prepare_merged_schema(cur, layer_a, layer_b, output_layer_id, parameters['schema_strategy'])
+    source_layer_field, source_feature_field = _add_provenance_fields(cur, output_layer_id, [
+        ('source_layer_id', 'Source layer ID'), ('source_feature_id', 'Source feature ID'),
+    ])
+    scope_a, scope_b = environments['scope_a'], environments['scope_b']
+    query_parameters: list[Any] = [
+        output_layer_id, sorted(output_fields), source_layer_field, source_feature_field,
+        created_by, layer_a,
+    ]
+    if scope_a == 'selected':
+        query_parameters.append(environments['selected_feature_ids_a'])
+    query_parameters.append(layer_b)
+    if scope_b == 'selected':
+        query_parameters.append(environments['selected_feature_ids_b'])
+    progress(44, 'Appending compatible features')
+    cur.execute(f"""
+        INSERT INTO features (layer_id, geometry, properties, created_by)
+        SELECT %s::uuid, source.geometry,
+               (SELECT COALESCE(jsonb_object_agg(item.key, item.value), '{{}}'::jsonb)
+                FROM jsonb_each(source.properties) item WHERE item.key = ANY(%s::text[]))
+               || jsonb_build_object(%s, source.layer_id::text, %s, source.id::text),
+               %s::uuid
+        FROM features source
+        WHERE (source.layer_id = %s::uuid {_selected_clause('source', scope_a)})
+           OR (source.layer_id = %s::uuid {_selected_clause('source', scope_b)})
+    """, tuple(query_parameters))
+    feature_count = cur.rowcount
+    _record_output_history(cur, output_layer_id, created_by)
+    progress(92, 'Finalizing merged layer')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id), 'count': feature_count,
+        'output_layer_ids': [output_layer_id],
+        'warnings': [] if feature_count else ['The merged output is empty.'],
+        'metrics': {'schema_strategy': parameters['schema_strategy'], 'output_field_count': len(output_fields), 'geometry_family': family_a},
+    }
+
+
+def _execute_reproject(cur, parameters, environments, created_by, progress):
+    layer_id = parameters['layer_id']
+    cur.execute('SELECT id, name, geometry_type FROM layers WHERE id = %s::uuid', (layer_id,))
+    source = cur.fetchone()
+    if not source:
+        raise VectorAnalysisError('Input layer was not found')
+    family = _resolve_layer_family(cur, dict(source))
+    source_srid = int(parameters['source_crs'].split(':')[1])
+    progress(15, 'Creating normalized output schema')
+    output_layer_id = _create_output_layer(
+        cur, name=parameters['output_name'], description=f'Reprojected from EPSG:{source_srid} to EPSG:4326',
+        geometry_type={'point': 'Point', 'line': 'LineString', 'polygon': 'Polygon'}[family],
+        created_by=created_by, source_layer_id=layer_id,
+    )
+    _inherit_layer_style(cur, output_layer_id, layer_id)
+    [source_id_field] = _add_provenance_fields(cur, output_layer_id, [('source_feature_id', 'Source feature ID')])
+    scope_clause = _selected_clause('source', environments['scope'])
+    query_parameters: list[Any] = [output_layer_id, source_srid, source_id_field, created_by, layer_id]
+    if environments['scope'] == 'selected':
+        query_parameters.append(environments['selected_feature_ids'])
+    progress(45, f'Transforming EPSG:{source_srid} coordinates to EPSG:4326')
+    cur.execute(f"""
+        INSERT INTO features (layer_id, geometry, properties, created_by)
+        SELECT %s::uuid,
+               ST_Force2D(ST_Transform(ST_SetSRID(source.geometry, %s), 4326)),
+               source.properties || jsonb_build_object(%s, source.id::text), %s::uuid
+        FROM features source
+        WHERE source.layer_id = %s::uuid {scope_clause}
+    """, tuple(query_parameters))
+    feature_count = cur.rowcount
+    _record_output_history(cur, output_layer_id, created_by)
+    progress(92, 'Finalizing normalized layer')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id), 'count': feature_count,
+        'output_layer_ids': [output_layer_id],
+        'warnings': ['This operation reinterprets stored coordinate numbers in the declared source CRS.'] if source_srid != 4326 else [],
+        'metrics': {'source_crs': f'EPSG:{source_srid}', 'output_crs': 'EPSG:4326'},
+    }
+
+
+def _add_generated_fields(cur, output_layer_id: str, definitions: list[tuple[str, str, str]]) -> dict[str, str]:
+    cur.execute('SELECT name FROM layer_fields WHERE layer_id = %s::uuid', (output_layer_id,))
+    used = {row['name'] for row in cur.fetchall()}
+    mapped: dict[str, str] = {}
+    for index, (name, alias, field_type) in enumerate(definitions):
+        output_name = _bounded_identifier('', name, used)
+        mapped[name] = output_name
+        cur.execute(
+            """INSERT INTO layer_fields (layer_id, name, alias, field_type, nullable, sort_order)
+               VALUES (%s::uuid, %s, %s, %s, TRUE, %s)""",
+            (output_layer_id, output_name, alias, field_type, 100_000 + index),
+        )
+    return mapped
+
+
+def _execute_geometry_quality(cur, parameters, environments, created_by, progress):
+    layer_id, operation = parameters['layer_id'], parameters['operation']
+    cur.execute('SELECT id, name, geometry_type FROM layers WHERE id = %s::uuid', (layer_id,))
+    source = cur.fetchone()
+    if not source:
+        raise VectorAnalysisError('Input layer was not found')
+    family = _resolve_layer_family(cur, dict(source))
+    if operation in {'eliminate_slivers', 'aggregate_polygons'} and family != 'polygon':
+        raise VectorAnalysisError(f'{operation.replace("_", " ").title()} requires polygon input')
+    if operation == 'smooth' and family == 'point':
+        raise VectorAnalysisError('Smooth requires line or polygon input')
+    geometry_type = {'point': 'Point', 'line': 'LineString', 'polygon': 'Polygon'}[family]
+    clone_schema = operation != 'aggregate_polygons'
+    progress(15, 'Creating quality-result schema')
+    output_layer_id = _create_output_layer(
+        cur, name=parameters['output_name'],
+        description=f'{operation.replace("_", " ").title()} result for "{source["name"]}"',
+        geometry_type=geometry_type, created_by=created_by,
+        source_layer_id=layer_id if clone_schema else None,
+    )
+    if clone_schema:
+        _inherit_layer_style(cur, output_layer_id, layer_id)
+    generated = _add_generated_fields(cur, output_layer_id, [('source_feature_id', 'Source feature ID', 'string')])
+    if operation == 'check':
+        generated.update(_add_generated_fields(cur, output_layer_id, [
+            ('is_valid', 'Geometry is valid', 'boolean'), ('validity_reason', 'Validity reason', 'string'),
+        ]))
+    elif operation == 'detect_duplicates':
+        generated.update(_add_generated_fields(cur, output_layer_id, [
+            ('duplicate_count', 'Duplicate geometry count', 'integer'), ('duplicate_rank', 'Duplicate rank', 'integer'),
+        ]))
+    elif operation == 'aggregate_polygons':
+        generated.update(_add_generated_fields(cur, output_layer_id, [('member_count', 'Aggregated feature count', 'integer')]))
+    scope_clause = _selected_clause('source', environments['scope'])
+    scope_parameters: list[Any] = [layer_id]
+    if environments['scope'] == 'selected':
+        scope_parameters.append(environments['selected_feature_ids'])
+
+    progress(42, f'Running {operation.replace("_", " ")}')
+    query_parameters: list[Any]
+    if operation == 'check':
+        issue_clause = 'AND NOT ST_IsValid(source.geometry)' if parameters['only_issues'] else ''
+        query_parameters = [output_layer_id, generated['source_feature_id'], generated['is_valid'], generated['validity_reason'], created_by] + scope_parameters
+        cur.execute(f"""
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, source.geometry,
+                   source.properties || jsonb_build_object(
+                       %s, source.id::text, %s, ST_IsValid(source.geometry), %s, ST_IsValidReason(source.geometry)
+                   ), %s::uuid
+            FROM features source WHERE source.layer_id = %s::uuid {scope_clause} {issue_clause}
+        """, tuple(query_parameters))
+    elif operation == 'detect_duplicates':
+        issue_clause = 'WHERE duplicate_count > 1' if parameters['only_issues'] else ''
+        query_parameters = scope_parameters + [output_layer_id, generated['source_feature_id'], generated['duplicate_count'], generated['duplicate_rank'], created_by]
+        cur.execute(f"""
+            WITH fingerprinted AS MATERIALIZED (
+                SELECT source.*,
+                       COUNT(*) OVER (PARTITION BY ST_AsEWKB(ST_Normalize(source.geometry)))::integer AS duplicate_count,
+                       ROW_NUMBER() OVER (PARTITION BY ST_AsEWKB(ST_Normalize(source.geometry)) ORDER BY source.id)::integer AS duplicate_rank
+                FROM features source WHERE source.layer_id = %s::uuid {scope_clause}
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, geometry,
+                   properties || jsonb_build_object(%s, id::text, %s, duplicate_count, %s, duplicate_rank),
+                   %s::uuid FROM fingerprinted {issue_clause}
+        """, tuple(query_parameters))
+    elif operation == 'aggregate_polygons':
+        query_parameters = scope_parameters + [parameters['tolerance'], output_layer_id, generated['source_feature_id'], generated['member_count'], created_by]
+        cur.execute(f"""
+            WITH scoped AS MATERIALIZED (
+                SELECT source.* FROM features source WHERE source.layer_id = %s::uuid {scope_clause}
+            ), clustered AS MATERIALIZED (
+                SELECT *, ST_ClusterDBSCAN(geometry, eps := %s, minpoints := 1) OVER () AS cluster_id FROM scoped
+            ), grouped AS (
+                SELECT cluster_id, MIN(id::text) AS source_id, COUNT(*)::integer AS member_count,
+                       ST_UnaryUnion(ST_Collect(geometry)) AS geometry FROM clustered GROUP BY cluster_id
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, geometry, jsonb_build_object(%s, source_id, %s, member_count), %s::uuid FROM grouped
+        """, tuple(query_parameters))
+    elif operation == 'eliminate_slivers':
+        query_parameters = scope_parameters + [parameters['area_threshold'], output_layer_id, generated['source_feature_id'], created_by]
+        cur.execute(f"""
+            WITH scoped AS MATERIALIZED (
+                SELECT source.* FROM features source WHERE source.layer_id = %s::uuid {scope_clause}
+            ), classified AS MATERIALIZED (
+                SELECT *, ST_Area(geometry::geography) < %s AS is_sliver FROM scoped
+            ), assignments AS MATERIALIZED (
+                SELECT sliver.id AS sliver_id, target.id AS target_id, sliver.geometry
+                FROM classified sliver
+                LEFT JOIN LATERAL (
+                    SELECT candidate.id FROM classified candidate
+                    WHERE NOT candidate.is_sliver AND candidate.geometry && sliver.geometry
+                      AND ST_Touches(candidate.geometry, sliver.geometry)
+                    ORDER BY ST_Length(ST_Intersection(ST_Boundary(candidate.geometry), ST_Boundary(sliver.geometry))) DESC, candidate.id
+                    LIMIT 1
+                ) target ON TRUE WHERE sliver.is_sliver
+            ), outputs AS (
+                SELECT retained.id, retained.properties,
+                       ST_UnaryUnion(ST_Collect(retained.geometry, ST_Collect(assignments.geometry))) AS geometry
+                FROM classified retained LEFT JOIN assignments ON assignments.target_id = retained.id
+                WHERE NOT retained.is_sliver GROUP BY retained.id, retained.properties, retained.geometry
+                UNION ALL
+                SELECT sliver.id, sliver.properties, sliver.geometry FROM classified sliver
+                WHERE sliver.is_sliver AND NOT EXISTS (
+                    SELECT 1 FROM assignments WHERE assignments.sliver_id = sliver.id AND assignments.target_id IS NOT NULL
+                )
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, geometry, properties || jsonb_build_object(%s, id::text), %s::uuid FROM outputs
+        """, tuple(query_parameters))
+    else:
+        family_dimension = {'point': 1, 'line': 2, 'polygon': 3}[family]
+        geometry_expression = {
+            'repair': f'ST_CollectionExtract(ST_MakeValid(source.geometry), {family_dimension})',
+            'snap_integrate': 'ST_Snap(source.geometry, network.geometry, %s)',
+            'simplify': 'ST_SimplifyPreserveTopology(source.geometry, %s)',
+            'smooth': 'ST_ChaikinSmoothing(source.geometry, %s, TRUE)',
+            'densify': 'ST_Segmentize(source.geometry::geography, %s)::geometry',
+        }[operation]
+        expression_parameters: list[Any] = []
+        if operation in {'snap_integrate', 'simplify', 'densify'}:
+            expression_parameters.append(parameters['tolerance'])
+        elif operation == 'smooth':
+            expression_parameters.append(parameters['iterations'])
+        network_cte = (
+            f"WITH scoped AS MATERIALIZED (SELECT source.* FROM features source WHERE source.layer_id = %s::uuid {scope_clause}), "
+            "network AS MATERIALIZED (SELECT ST_UnaryUnion(ST_Collect(geometry)) AS geometry FROM scoped) "
+            if operation == 'snap_integrate' else ''
+        )
+        source_from = 'scoped source CROSS JOIN network' if operation == 'snap_integrate' else 'features source'
+        where_clause = '' if operation == 'snap_integrate' else f'WHERE source.layer_id = %s::uuid {scope_clause}'
+        if operation == 'snap_integrate':
+            query_parameters = scope_parameters + [output_layer_id, generated['source_feature_id'], created_by] + expression_parameters
+        else:
+            query_parameters = [output_layer_id, generated['source_feature_id'], created_by] + expression_parameters + scope_parameters
+        cur.execute(f"""
+            {network_cte}
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, derived.geometry,
+                   source.properties || jsonb_build_object(%s, source.id::text), %s::uuid
+            FROM {source_from}
+            CROSS JOIN LATERAL (SELECT {geometry_expression} AS geometry) derived
+            {where_clause}
+            {'AND' if where_clause else 'WHERE'} derived.geometry IS NOT NULL AND NOT ST_IsEmpty(derived.geometry)
+        """, tuple(query_parameters))
+    feature_count = cur.rowcount
+    _record_output_history(cur, output_layer_id, created_by)
+    warnings = [] if feature_count else ['The quality operation produced an empty result layer.']
+    progress(92, 'Finalizing geometry-quality result')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id), 'count': feature_count,
+        'output_layer_ids': [output_layer_id], 'warnings': warnings,
+        'metrics': {'operation': operation, 'input_geometry_family': family, 'output_feature_count': feature_count},
+    }
+
+
+def _execute_topology_validate(cur, parameters, environments, created_by, progress):
+    polygon_layer = parameters['polygon_layer']
+    input_ids = [polygon_layer] + ([parameters['coverage_layer']] if parameters['coverage_layer'] else [])
+    cur.execute('SELECT id, name, geometry_type FROM layers WHERE id = ANY(%s::uuid[])', (input_ids,))
+    layers = {str(row['id']): dict(row) for row in cur.fetchall()}
+    if any(layer_id not in layers for layer_id in input_ids):
+        raise VectorAnalysisError('One or more topology input layers were not found')
+    for layer_id in input_ids:
+        if _resolve_layer_family(cur, layers[layer_id]) != 'polygon':
+            raise VectorAnalysisError('Topology validation requires polygon inputs')
+    progress(15, 'Creating topology diagnostics schema')
+    output_layer_id = _create_output_layer(
+        cur, name=parameters['output_name'],
+        description=f'Topology diagnostics for "{layers[polygon_layer]["name"]}"',
+        geometry_type='Polygon', created_by=created_by,
+    )
+    fields = _add_generated_fields(cur, output_layer_id, [
+        ('issue_type', 'Topology issue', 'string'), ('source_a_id', 'First source feature ID', 'string'),
+        ('source_b_id', 'Second source feature ID', 'string'), ('area_sqm', 'Issue area (square metres)', 'double'),
+    ])
+    scope_a = environments['scope_a']
+    source_scope_clause = _selected_clause('source', scope_a)
+    total_count = 0
+    checks = parameters['checks']
+    progress(38, 'Evaluating polygon topology')
+    if 'overlaps' in checks:
+        query_parameters: list[Any] = [
+            output_layer_id, fields['issue_type'], fields['source_a_id'], fields['source_b_id'], fields['area_sqm'],
+            created_by, polygon_layer,
+        ]
+        if scope_a == 'selected':
+            query_parameters.append(environments['selected_feature_ids_a'])
+        query_parameters.append(polygon_layer)
+        if scope_a == 'selected':
+            query_parameters.append(environments['selected_feature_ids_a'])
+        cur.execute(f"""
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, overlap.geometry,
+                   jsonb_build_object(%s, 'overlap', %s, source.id::text, %s, candidate.id::text,
+                                      %s, ST_Area(overlap.geometry::geography)), %s::uuid
+            FROM features source JOIN features candidate
+              ON candidate.layer_id = %s::uuid AND source.id < candidate.id
+             AND source.geometry && candidate.geometry AND ST_Overlaps(source.geometry, candidate.geometry)
+             {_selected_clause('candidate', scope_a)}
+            CROSS JOIN LATERAL (SELECT ST_CollectionExtract(ST_Intersection(source.geometry, candidate.geometry), 3) AS geometry) overlap
+            WHERE source.layer_id = %s::uuid {source_scope_clause}
+              AND NOT ST_IsEmpty(overlap.geometry)
+        """, tuple(query_parameters))
+        total_count += cur.rowcount
+    if 'gaps' in checks:
+        coverage_layer = parameters['coverage_layer']
+        scope_b = environments['scope_b']
+        query_parameters = [polygon_layer]
+        if scope_a == 'selected':
+            query_parameters.append(environments['selected_feature_ids_a'])
+        query_parameters.append(coverage_layer)
+        if scope_b == 'selected':
+            query_parameters.append(environments['selected_feature_ids_b'])
+        query_parameters.extend([
+            output_layer_id, fields['issue_type'], fields['source_a_id'], fields['source_b_id'], fields['area_sqm'], created_by,
+        ])
+        cur.execute(f"""
+            WITH data_coverage AS MATERIALIZED (
+                SELECT ST_UnaryUnion(ST_Collect(source.geometry)) AS geometry FROM features source
+                WHERE source.layer_id = %s::uuid {source_scope_clause}
+            ), expected_coverage AS MATERIALIZED (
+                SELECT ST_UnaryUnion(ST_Collect(coverage.geometry)) AS geometry FROM features coverage
+                WHERE coverage.layer_id = %s::uuid {_selected_clause('coverage', scope_b)}
+            ), gaps AS (
+                SELECT (ST_Dump(ST_CollectionExtract(ST_Difference(expected_coverage.geometry, data_coverage.geometry), 3))).geom AS geometry
+                FROM expected_coverage CROSS JOIN data_coverage
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, geometry,
+                   jsonb_build_object(%s, 'gap', %s, NULL, %s, NULL, %s, ST_Area(geometry::geography)), %s::uuid
+            FROM gaps WHERE NOT ST_IsEmpty(geometry)
+        """, tuple(query_parameters))
+        total_count += cur.rowcount
+    if 'slivers' in checks:
+        query_parameters = [
+            output_layer_id, fields['issue_type'], fields['source_a_id'], fields['source_b_id'], fields['area_sqm'],
+            created_by, polygon_layer,
+        ]
+        if scope_a == 'selected':
+            query_parameters.append(environments['selected_feature_ids_a'])
+        query_parameters.append(parameters['sliver_area'])
+        cur.execute(f"""
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, source.geometry,
+                   jsonb_build_object(%s, 'sliver', %s, source.id::text, %s, NULL,
+                                      %s, ST_Area(source.geometry::geography)), %s::uuid
+            FROM features source WHERE source.layer_id = %s::uuid {source_scope_clause}
+              AND ST_Area(source.geometry::geography) < %s
+        """, tuple(query_parameters))
+        total_count += cur.rowcount
+    _record_output_history(cur, output_layer_id, created_by)
+    progress(92, 'Finalizing topology diagnostics')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id), 'count': total_count,
+        'output_layer_ids': [output_layer_id],
+        'warnings': [] if total_count else ['No requested topology issues were detected.'],
+        'metrics': {'checks': checks, 'issue_count': total_count, 'coverage_layer_id': parameters['coverage_layer']},
+    }
+
+
+def _execute_spatial_statistics(cur, parameters, environments, created_by, progress):
+    layer_id, operation = parameters['layer_id'], parameters['operation']
+    cur.execute('SELECT id, name, geometry_type FROM layers WHERE id = %s::uuid', (layer_id,))
+    source = cur.fetchone()
+    if not source:
+        raise VectorAnalysisError('Input layer was not found')
+    family = _resolve_layer_family(cur, dict(source))
+    value_field = parameters['value_field']
+    if value_field:
+        cur.execute(
+            'SELECT name, field_type FROM layer_fields WHERE layer_id = %s::uuid AND name = %s',
+            (layer_id, value_field),
+        )
+        field_definition = cur.fetchone()
+        if not field_definition or field_definition['field_type'] not in {'integer', 'double'}:
+            raise VectorAnalysisError(f'Analysis field must be numeric: {value_field}')
+    output_family = family if operation in {'central_feature', 'hot_spot'} else (
+        'polygon' if operation in {'standard_distance', 'directional_distribution'} else 'point'
+    )
+    clone_schema = operation in {'central_feature', 'hot_spot'}
+    progress(15, 'Creating spatial-statistics schema')
+    output_layer_id = _create_output_layer(
+        cur, name=parameters['output_name'], description=f'{operation.replace("_", " ").title()} for "{source["name"]}"',
+        geometry_type={'point': 'Point', 'line': 'LineString', 'polygon': 'Polygon'}[output_family],
+        created_by=created_by, source_layer_id=layer_id if clone_schema else None,
+    )
+    if clone_schema:
+        _inherit_layer_style(cur, output_layer_id, layer_id)
+    statistic_definitions: dict[str, list[tuple[str, str, str]]] = {
+        'mean_center': [('feature_count', 'Input feature count', 'integer')],
+        'median_center': [('feature_count', 'Input feature count', 'integer')],
+        'central_feature': [('source_feature_id', 'Central source feature ID', 'string'), ('total_distance_m', 'Total distance to all features', 'double')],
+        'standard_distance': [('feature_count', 'Input feature count', 'integer'), ('radius_m', 'Standard distance radius (metres)', 'double')],
+        'directional_distribution': [('feature_count', 'Input feature count', 'integer'), ('major_axis_m', 'Major semi-axis (metres)', 'double'), ('minor_axis_m', 'Minor semi-axis (metres)', 'double'), ('rotation_deg', 'Ellipse rotation (degrees)', 'double')],
+        'nearest_neighbor': [('feature_count', 'Input feature count', 'integer'), ('observed_mean_m', 'Observed mean nearest distance', 'double'), ('expected_mean_m', 'Expected random mean distance', 'double'), ('nn_ratio', 'Nearest-neighbor ratio', 'double'), ('z_score', 'Nearest-neighbor z-score', 'double')],
+        'spatial_autocorrelation': [('feature_count', 'Input feature count', 'integer'), ('moran_i', "Global Moran's I", 'double'), ('expected_i', 'Expected Moran I', 'double'), ('neighbor_links', 'Neighbor links', 'integer')],
+        'hot_spot': [('source_feature_id', 'Source feature ID', 'string'), ('gi_z_score', 'Getis-Ord Gi* z-score', 'double'), ('hot_spot_class', 'Hot/cold spot class', 'string'), ('neighbor_count', 'Neighbor count', 'integer')],
+    }
+    fields = _add_generated_fields(cur, output_layer_id, statistic_definitions[operation])
+    scope_clause = _selected_clause('source', environments['scope'])
+    scope_parameters: list[Any] = [layer_id]
+    if environments['scope'] == 'selected':
+        scope_parameters.append(environments['selected_feature_ids'])
+    representative = 'ST_PointOnSurface(source.geometry)'
+    points_cte = f"""
+        scoped AS MATERIALIZED (
+            SELECT source.id, source.geometry, source.properties, {representative} AS point
+            FROM features source WHERE source.layer_id = %s::uuid {scope_clause}
+        )
+    """
+    progress(42, f'Calculating {operation.replace("_", " ")}')
+    if operation in {'mean_center', 'median_center'}:
+        center_expression = (
+            'ST_Transform(ST_Centroid(ST_Collect(ST_Transform(point, 3857))), 4326)'
+            if operation == 'mean_center'
+            else 'ST_Transform(ST_GeometricMedian(ST_Collect(ST_Transform(point, 3857))), 4326)'
+        )
+        query_parameters = scope_parameters + [output_layer_id, fields['feature_count'], created_by]
+        cur.execute(f"""
+            WITH {points_cte}, result AS (
+                SELECT {center_expression} AS geometry, COUNT(*)::integer AS feature_count FROM scoped
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, geometry, jsonb_build_object(%s, feature_count), %s::uuid
+            FROM result WHERE geometry IS NOT NULL
+        """, tuple(query_parameters))
+    elif operation == 'central_feature':
+        query_parameters = scope_parameters + [output_layer_id, fields['source_feature_id'], fields['total_distance_m'], created_by]
+        cur.execute(f"""
+            WITH {points_cte}, scored AS (
+                SELECT candidate.id, candidate.geometry, candidate.properties,
+                       SUM(ST_Distance(candidate.point::geography, other.point::geography)) AS total_distance
+                FROM scoped candidate CROSS JOIN scoped other
+                GROUP BY candidate.id, candidate.geometry, candidate.properties
+                ORDER BY total_distance, candidate.id LIMIT 1
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, geometry,
+                   properties || jsonb_build_object(%s, id::text, %s, total_distance), %s::uuid FROM scored
+        """, tuple(query_parameters))
+    elif operation == 'standard_distance':
+        query_parameters = scope_parameters + [parameters['standard_deviations'], output_layer_id, fields['feature_count'], fields['radius_m'], created_by]
+        cur.execute(f"""
+            WITH {points_cte}, center AS (
+                SELECT ST_Transform(ST_Centroid(ST_Collect(ST_Transform(point, 3857))), 4326) AS geometry,
+                       COUNT(*)::integer AS feature_count FROM scoped
+            ), radius AS (
+                SELECT center.geometry, center.feature_count,
+                       SQRT(AVG(POWER(ST_Distance(scoped.point::geography, center.geometry::geography), 2))) * %s AS radius_m
+                FROM center CROSS JOIN scoped GROUP BY center.geometry, center.feature_count
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, ST_Buffer(geometry::geography, radius_m)::geometry,
+                   jsonb_build_object(%s, feature_count, %s, radius_m), %s::uuid FROM radius
+            WHERE radius_m IS NOT NULL
+        """, tuple(query_parameters))
+    elif operation == 'directional_distribution':
+        query_parameters = scope_parameters + [parameters['standard_deviations'], parameters['standard_deviations'], output_layer_id, fields['feature_count'], fields['major_axis_m'], fields['minor_axis_m'], fields['rotation_deg'], created_by]
+        cur.execute(f"""
+            WITH {points_cte}, projected AS (
+                SELECT id, ST_Transform(point, 3857) AS point FROM scoped
+            ), moments AS (
+                SELECT COUNT(*)::integer AS n, AVG(ST_X(point)) AS mx, AVG(ST_Y(point)) AS my,
+                       VAR_POP(ST_X(point)) AS var_x, VAR_POP(ST_Y(point)) AS var_y,
+                       COVAR_POP(ST_X(point), ST_Y(point)) AS covariance FROM projected
+            ), axes AS (
+                SELECT *, 0.5 * ATAN2(2 * covariance, var_x - var_y) AS angle,
+                       SQRT(GREATEST(0, (var_x + var_y + SQRT(POWER(var_x-var_y,2)+4*POWER(covariance,2))) / 2)) * %s AS major_axis,
+                       SQRT(GREATEST(0, (var_x + var_y - SQRT(POWER(var_x-var_y,2)+4*POWER(covariance,2))) / 2)) * %s AS minor_axis
+                FROM moments
+            ), ellipse AS (
+                SELECT *, ST_SetSRID(ST_MakePoint(mx, my), 3857) AS center FROM axes
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid,
+                   ST_Transform(
+                       ST_SetSRID(ST_Translate(
+                           ST_Rotate(ST_Scale(ST_Buffer(ST_MakePoint(0, 0), 1, 64), major_axis, minor_axis), angle),
+                           mx, my
+                       ), 3857),
+                       4326
+                   ),
+                   jsonb_build_object(%s, n, %s, major_axis, %s, minor_axis, %s, DEGREES(angle)), %s::uuid
+            FROM ellipse WHERE n > 1 AND major_axis > 0 AND minor_axis > 0
+        """, tuple(query_parameters))
+    elif operation == 'nearest_neighbor':
+        query_parameters = scope_parameters + [output_layer_id, fields['feature_count'], fields['observed_mean_m'], fields['expected_mean_m'], fields['nn_ratio'], fields['z_score'], created_by]
+        cur.execute(f"""
+            WITH {points_cte}, nearest AS (
+                SELECT source.id,
+                       ST_Distance(source.point::geography, candidate.point::geography) AS distance_m
+                FROM scoped source CROSS JOIN LATERAL (
+                    SELECT near.point FROM scoped near WHERE near.id <> source.id
+                    ORDER BY near.point <-> source.point, near.id LIMIT 1
+                ) candidate
+            ), summary AS (
+                SELECT (SELECT COUNT(*)::integer FROM nearest) AS n,
+                       (SELECT AVG(distance_m) FROM nearest) AS observed,
+                       ST_Area(ST_ConvexHull(ST_Collect(point))::geography) AS study_area,
+                       ST_Centroid(ST_Collect(point)) AS center FROM scoped
+            ), statistic AS (
+                SELECT *, 0.5 / SQRT(n / NULLIF(study_area, 0)) AS expected,
+                       0.26136 / SQRT(POWER(n, 2) / NULLIF(study_area, 0)) AS standard_error FROM summary
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, center,
+                   jsonb_build_object(%s, n, %s, observed, %s, expected, %s, observed/NULLIF(expected,0),
+                                      %s, (observed-expected)/NULLIF(standard_error,0)), %s::uuid
+            FROM statistic WHERE n > 1
+        """, tuple(query_parameters))
+    elif operation == 'spatial_autocorrelation':
+        query_parameters = scope_parameters + [parameters['distance_band'], parameters['distance_band'], output_layer_id, fields['feature_count'], fields['moran_i'], fields['expected_i'], fields['neighbor_links'], created_by]
+        cur.execute(f"""
+            WITH {points_cte}, valued AS MATERIALIZED (
+                SELECT *, (properties ->> {repr(value_field)})::double precision AS value FROM scoped
+                WHERE jsonb_typeof(properties -> {repr(value_field)}) = 'number'
+            ), stats AS (SELECT COUNT(*)::double precision AS n, AVG(value) AS mean FROM valued),
+            links AS MATERIALIZED (
+                SELECT a.id AS a_id, b.id AS b_id, a.value AS a_value, b.value AS b_value
+                FROM valued a JOIN valued b ON a.id <> b.id AND a.point && ST_Expand(b.point, %s / 111320.0)
+                 AND ST_DWithin(a.point::geography, b.point::geography, %s)
+            ), result AS (
+                SELECT stats.n::integer AS n, COUNT(*)::integer AS w,
+                       (stats.n / NULLIF(COUNT(*),0)) *
+                       SUM((a_value-stats.mean)*(b_value-stats.mean)) /
+                       NULLIF((SELECT SUM(POWER(value-stats.mean,2)) FROM valued),0) AS moran_i,
+                       -1 / NULLIF(stats.n-1,0) AS expected_i,
+                       (SELECT ST_Centroid(ST_Collect(point)) FROM valued) AS center
+                FROM links CROSS JOIN stats GROUP BY stats.n, stats.mean
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, center, jsonb_build_object(%s,n,%s,moran_i,%s,expected_i,%s,w), %s::uuid FROM result
+            WHERE center IS NOT NULL
+        """, tuple(query_parameters))
+    else:
+        query_parameters = scope_parameters + [parameters['distance_band'], parameters['distance_band'], output_layer_id, fields['source_feature_id'], fields['gi_z_score'], fields['hot_spot_class'], fields['neighbor_count'], created_by]
+        cur.execute(f"""
+            WITH {points_cte}, valued AS MATERIALIZED (
+                SELECT *, (properties ->> {repr(value_field)})::double precision AS value FROM scoped
+                WHERE jsonb_typeof(properties -> {repr(value_field)}) = 'number'
+            ), global_stats AS (
+                SELECT COUNT(*)::double precision AS n, AVG(value) AS mean, STDDEV_POP(value) AS stddev FROM valued
+            ), scored AS (
+                SELECT source.*, neighbors.neighbor_count,
+                       (neighbors.local_sum - neighbors.neighbor_count * global_stats.mean) /
+                       NULLIF(global_stats.stddev * SQRT((global_stats.n * neighbors.neighbor_count - POWER(neighbors.neighbor_count,2)) / NULLIF(global_stats.n-1,0)),0) AS z_score
+                FROM valued source CROSS JOIN global_stats CROSS JOIN LATERAL (
+                    SELECT COUNT(*)::double precision AS neighbor_count, SUM(candidate.value) AS local_sum
+                    FROM valued candidate
+                    WHERE source.point && ST_Expand(candidate.point, %s / 111320.0)
+                      AND ST_DWithin(source.point::geography, candidate.point::geography, %s)
+                ) neighbors
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid, geometry,
+                   properties || jsonb_build_object(%s,id::text,%s,z_score,%s,
+                       CASE WHEN z_score >= 2.58 THEN 'hot_99' WHEN z_score >= 1.96 THEN 'hot_95'
+                            WHEN z_score <= -2.58 THEN 'cold_99' WHEN z_score <= -1.96 THEN 'cold_95' ELSE 'not_significant' END,
+                       %s,neighbor_count::integer), %s::uuid FROM scored
+        """, tuple(query_parameters))
+    feature_count = cur.rowcount
+    _record_output_history(cur, output_layer_id, created_by)
+    warnings = [] if feature_count else ['The statistic could not be calculated from the available features.']
+    if operation in {'central_feature', 'spatial_autocorrelation', 'hot_spot'}:
+        warnings.append('This statistic can be expensive for dense layers; use a selected or filtered scope for exploratory runs.')
+    progress(92, 'Finalizing spatial-statistics result')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id), 'count': feature_count,
+        'output_layer_ids': [output_layer_id], 'warnings': warnings,
+        'metrics': {'operation': operation, 'value_field': value_field or None, 'distance_band_m': parameters['distance_band']},
+    }
+
+
 EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     'buffer': _execute_buffer,
     'multi_ring_buffer': _execute_multi_ring_buffer,
@@ -2633,6 +3852,12 @@ EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     'near': _execute_near,
     'polygonize': _execute_polygonize,
     'geometry_construct': _execute_geometry_construct,
+    'split_lines_at_points': _execute_split_lines_at_points,
+    'merge_layers': _execute_merge_layers,
+    'reproject': _execute_reproject,
+    'geometry_quality': _execute_geometry_quality,
+    'topology_validate': _execute_topology_validate,
+    'spatial_statistics': _execute_spatial_statistics,
 }
 
 
@@ -2650,8 +3875,30 @@ def execute_vector_tool(
     if not spec.migrated or not executor:
         raise VectorAnalysisError(f'{spec.title} has not been migrated to the vector framework')
 
+    estimated_counts = environments.get('estimated_input_counts') or []
+    estimated_total_units = int(
+        environments.get('estimated_candidate_pairs') or sum(estimated_counts) or 0
+    )
     normalized_parameters = validate_tool_parameters(tool_id, parameters)
     normalized_environments = normalize_environments(environments)
+    normalized_environments = _prepare_environment_scopes(
+        cur, tool_id, normalized_parameters, normalized_environments
+    )
+    normalized_parameters = _prepare_output_collision(
+        cur,
+        normalized_parameters,
+        normalized_environments,
+        created_by,
+        _tool_input_layer_ids(tool_id, normalized_parameters),
+    )
+    if run_id:
+        cur.execute(
+            'UPDATE analysis_runs SET parameters = %s::jsonb WHERE id = %s::uuid',
+            (json.dumps(normalized_parameters), run_id),
+        )
+    repaired_input_count = _prepare_input_geometry_policy(
+        cur, tool_id, normalized_parameters, normalized_environments
+    )
     started = time.perf_counter()
 
     def report(progress: int, stage: str) -> None:
@@ -2662,12 +3909,25 @@ def execute_vector_tool(
                 status='running',
                 progress=progress,
                 stage=stage,
+                completed_units=(estimated_total_units * progress // 100) if estimated_total_units else None,
+                total_units=estimated_total_units or None,
             )
 
     result = executor(cur, normalized_parameters, normalized_environments, created_by, report)
+    _restore_input_geometries(cur)
+    result = _apply_output_geometry_policies(
+        cur, result, normalized_environments, created_by
+    )
+    if repaired_input_count:
+        result.setdefault('warnings', []).append(
+            f'{repaired_input_count} invalid input geometries were repaired transactionally for processing.'
+        )
     elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
     result['metrics'] = {
         **result.get('metrics', {}),
+        'repaired_input_geometry_count': repaired_input_count,
+        'multipart_policy': normalized_environments['multipart_policy'],
+        'z_policy': normalized_environments['z_policy'],
         'elapsed_ms': elapsed_ms,
         'output_feature_count': result['count'],
     }
@@ -2681,5 +3941,7 @@ def execute_vector_tool(
             output_layer_ids=result['output_layer_ids'],
             warnings=result['warnings'],
             metrics=result['metrics'],
+            completed_units=result['count'],
+            total_units=result['count'],
         )
     return result

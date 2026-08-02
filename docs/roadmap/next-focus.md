@@ -55,7 +55,9 @@ Implementation status as of this pass:
 - shared output layer, source schema/domain cloning, feature history, warnings, and metrics implemented
 - Buffer migrated to one executor for synchronous and worker execution
 - safe existing-volume migration target added to `make github-web`
-- database-backed geometry equivalence, cancellation, and rollback tests remain before the Phase 0 exit gate is complete
+- database-backed sync/worker equivalence, cancellation, rollback, repair isolation, scopes, and output-policy tests complete
+- registry-driven workbench search, favorites, history, rerun, cancellation, and show-output actions complete
+- organization/workspace context, progress units, structured errors, provenance, and reproducibility hashes complete
 
 ### Tool registry
 
@@ -145,7 +147,7 @@ Implementation status:
 - geometry-family inference and explicit component extraction complete
 - prefixed Layer A/Layer B schema, domain, and property propagation complete
 - source feature IDs, independent selected-input environments, metrics, and warnings complete
-- field-map preview, automatic cost-based async selection, sliver controls, and database geometry fixtures remain
+- field selection, automatic cost-based async selection, sliver controls, and database geometry fixtures complete
 
 Capabilities:
 
@@ -177,7 +179,7 @@ Implementation status:
 - Erase mask union, unaffected-feature retention, and fully removed counts complete
 - source schema, domains, styling, geometry family, and provenance propagation complete
 - independent input/mask selections, precision grid, sync/worker execution, metrics, and warnings complete
-- database area/length conservation fixtures, repair policy, multipart explode mode, and automatic async threshold remain
+- database area conservation fixtures, repair policy, multipart explode mode, and automatic async threshold complete
 
 ### Clip
 
@@ -210,7 +212,7 @@ Implementation status:
 - count, sum, minimum, maximum, mean, first, and last statistics complete
 - grouping schema/domain retention and generated statistic schema complete
 - selected scope, precision grid, shared worker execution, visual field/statistic builder, metrics, and warnings complete
-- database aggregate fixtures, concatenated values, invalid-geometry repair, and bounded staged unions for very large groups remain
+- database aggregate and concatenated-value fixtures, invalid-geometry repair, and bounded-memory union complete
 
 Capabilities:
 
@@ -300,7 +302,7 @@ Implementation status:
 - connecting-line, closest-source-point, and closest-near-point outputs complete
 - prefixed source/near schemas, worker execution, visual controls, metrics, and provenance complete
 - multi-ring geodesic bands/disks complete
-- antimeridian/multi-region database fixtures and EXPLAIN plan assertions remain
+- antimeridian database fixtures and geography GiST EXPLAIN plan assertions complete; broader regional accuracy fixtures remain a hardening item
 
 Capabilities:
 
@@ -331,7 +333,7 @@ Implementation status:
 - deterministic first-intersecting and majority-boundary attribute transfer complete
 - companion unconsumed-edge diagnostics layer complete
 - selected scope, shared worker execution, visual controls, run metrics, and provenance complete
-- explicit dangle/cut-edge classification, invalid-ring diagnostics, and database topology fixtures remain
+- dangle, cut-edge, and invalid-ring classification plus database topology fixtures complete
 
 Capabilities:
 
@@ -357,7 +359,7 @@ Implementation status:
 - multipart to singlepart, interior point, polygon boundary, and points along lines complete
 - per-feature convex hull, concave hull, and oriented minimum bounding geometry complete
 - schema/style preservation, source provenance, selected scope, shared worker execution, and visual controls complete
-- split lines at points, merge/append field mapping, and explicit project/reproject remain
+- split lines at points, merge/append schema reconciliation, and explicit project/reproject complete
 
 Next tool group:
 
@@ -374,6 +376,13 @@ Next tool group:
 
 ## Phase 9: Geometry Quality And Generalization
 
+Implementation status:
+
+- geometry checking, repair output, duplicate detection, and snap/integrate complete
+- overlap, explicit coverage-gap, and sliver validation complete
+- sliver elimination, simplify, smooth, densify, and aggregate polygons complete
+- full/selected/filter/extent scopes, shared worker execution, provenance, and PostGIS fixtures complete
+
 Next tool group:
 
 - check geometry
@@ -389,7 +398,7 @@ Next tool group:
 
 ## Phase 10: Vector Spatial Statistics
 
-Deferred until the geoprocessing framework and core vector tools are stable:
+Implementation status: the initial vector-statistics program is complete with PostGIS fixtures for every operation:
 
 - mean and median center
 - central feature

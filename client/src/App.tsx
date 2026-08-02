@@ -138,6 +138,7 @@ import {
   runSpatialJoinAnalysis,
   runSummarizeWithinAnalysis,
   runWithinAnalysis,
+  runVectorTool,
   sendTelemetry,
   submitEditSession,
   publishEditSession,
@@ -2725,6 +2726,33 @@ export default function App() {
     },
   })
 
+  const catalogToolMutation = useMutation({
+    mutationFn: async (request: { toolId: string; payload: Record<string, unknown> }) => {
+      if (!token) throw new Error('Sign in to run analysis tools.')
+      return runVectorTool(request.toolId, request.payload, token)
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['analysis-runs'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      if ('count' in result) {
+        queryClient.invalidateQueries({ queryKey: ['layers'] })
+        queryClient.invalidateQueries({ queryKey: ['layer-features'] })
+        const warningText = result.warnings?.length ? ` ${result.warnings.join(' ')}` : ''
+        completeAnalysisJob(`Analysis complete (${result.count} features).${warningText}`)
+        notify(`Analysis complete (${result.count} features).${warningText}`, result.warnings?.length ? 'warning' : 'success')
+      } else {
+        setAnalysisJob({ status: 'queued', progress: 5, message: 'Analysis queued for worker execution.' })
+        notify('Analysis queued. Track it in Recent Runs or Jobs.', 'info')
+      }
+      setAnalysisError(null)
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Analysis tool failed'
+      setAnalysisError(message)
+      failAnalysisJob(message)
+    },
+  })
+
   const withinMutation = useMutation({
     mutationFn: async (payload: { layerId: string; polygonText: string }) => {
       const polygon = JSON.parse(payload.polygonText) as Geometry
@@ -2755,6 +2783,7 @@ export default function App() {
     || nearMutation.isPending
     || polygonizeMutation.isPending
     || geometryConstructMutation.isPending
+    || catalogToolMutation.isPending
     || withinMutation.isPending
 
   const handleAuthenticated = (response: AuthResponse) => {
@@ -4899,7 +4928,20 @@ export default function App() {
           error={analysisError}
           withinCount={withinCount}
           job={analysisJob}
+          selectedFeaturesByLayer={selectedFeaturesByLayer}
+          visibleExtent={currentMapView?.bounds}
           onClose={() => setAnalysisOpen(false)}
+          onRunTool={(toolId, payload) => {
+            setAnalysisError(null)
+            startAnalysisJob('workbench')
+            catalogToolMutation.mutate({ toolId, payload })
+          }}
+          onOpenOutput={(layerId) => {
+            setVisibleByLayerId((previous) => ({ ...previous, [layerId]: true }))
+            queryClient.invalidateQueries({ queryKey: ['layers'] })
+            queryClient.invalidateQueries({ queryKey: ['layer-features', layerId] })
+            notify('Analysis output is visible on the map.', 'info')
+          }}
           onRunBuffer={(payload) => {
             setAnalysisError(null)
             startAnalysisJob('buffer')

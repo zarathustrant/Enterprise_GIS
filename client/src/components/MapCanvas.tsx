@@ -44,6 +44,7 @@ export interface MapViewportState {
   zoom: number
   bearing: number
   pitch: number
+  bounds?: [number, number, number, number]
 }
 
 export type MeasurementMode = 'distance' | 'area' | null
@@ -4612,11 +4613,13 @@ export function MapCanvas({
       const zoom = map?.getZoom() ?? 12
       setMapZoom(zoom)
       if (center) {
+        const bounds = map?.getBounds()
         onViewStateChange?.({
           center: { lng: center.lng, lat: center.lat },
           zoom,
           bearing: map?.getBearing() ?? 0,
           pitch: map?.getPitch() ?? 0,
+          bounds: bounds ? [bounds.getWest(), bounds.getSouth(), bounds.getEast(), bounds.getNorth()] : undefined,
         })
       }
     }

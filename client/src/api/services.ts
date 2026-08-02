@@ -188,23 +188,34 @@ export interface AnalysisBufferPayload {
 }
 
 export interface AnalysisEnvironments {
-  scope?: 'all' | 'selected'
+  scope?: 'all' | 'selected' | 'filtered' | 'extent'
   selected_feature_ids?: string[]
-  scope_a?: 'all' | 'selected'
-  scope_b?: 'all' | 'selected'
+  scope_a?: 'all' | 'selected' | 'filtered' | 'extent'
+  scope_b?: 'all' | 'selected' | 'filtered' | 'extent'
   selected_feature_ids_a?: string[]
   selected_feature_ids_b?: string[]
   precision_grid?: number | null
   output_crs?: 'EPSG:4326'
+  extent?: [number, number, number, number] | null
+  extent_a?: [number, number, number, number] | null
+  extent_b?: [number, number, number, number] | null
+  filters?: Array<{ field: string; operator: string; value?: unknown }>
+  filters_a?: Array<{ field: string; operator: string; value?: unknown }>
+  filters_b?: Array<{ field: string; operator: string; value?: unknown }>
+  invalid_geometry_policy?: 'reject' | 'repair'
+  multipart_policy?: 'preserve' | 'explode'
+  z_policy?: 'preserve' | 'drop'
+  output_collision_policy?: 'error' | 'suffix' | 'overwrite'
 }
 
 export interface VectorToolParameter {
   name: string
   label: string
-  type: 'layer' | 'number' | 'string' | 'geometry' | 'choice'
+  type: 'layer' | 'number' | 'integer' | 'string' | 'geometry' | 'choice' | 'boolean' | 'string_list' | 'number_list' | 'statistics'
   required: boolean
   default: unknown
   minimum: number | null
+  maximum: number | null
   choices: string[]
 }
 
@@ -237,8 +248,17 @@ export interface AnalysisRun {
   metrics: Record<string, unknown>
   progress: number
   progress_stage: string | null
+  completed_units: number
+  total_units: number | null
   error: string | null
+  structured_errors: Array<{ code: string; message: string; retryable?: boolean }>
+  organization_id: string | null
+  workspace_id: string | null
+  provenance: Record<string, unknown>
+  reproducibility_hash: string | null
   async_job_id: string | null
+  worker_backend_pid: number | null
+  cancellation_requested_at: string | null
   created_by: string | null
   created_at: string | null
   started_at: string | null
@@ -288,7 +308,7 @@ export interface AnalysisErasePayload {
 
 export interface AnalysisStatistic {
   field?: string | null
-  statistic: 'count' | 'sum' | 'minimum' | 'maximum' | 'mean' | 'first' | 'last'
+  statistic: 'count' | 'sum' | 'minimum' | 'maximum' | 'mean' | 'first' | 'last' | 'concatenate'
   output_field?: string
 }
 
@@ -1381,6 +1401,18 @@ export function fetchAnalysisTools(): Promise<VectorToolSpec[]> {
     .then((response) => response.tools)
 }
 
+export function runVectorTool(
+  toolId: string,
+  payload: Record<string, unknown>,
+  token: string,
+): Promise<AnalysisLayerResponse | (AsyncJob & { queued?: boolean; analysis_run?: AnalysisRun })> {
+  return apiRequest(
+    `/analysis/tools/${encodeURIComponent(toolId)}/run`,
+    { method: 'POST', body: JSON.stringify(payload) },
+    token,
+  )
+}
+
 export function fetchAnalysisRuns(token: string, limit = 50): Promise<AnalysisRun[]> {
   return apiRequest<{ runs: AnalysisRun[] }>(
     `/analysis/runs?limit=${encodeURIComponent(limit)}`,
@@ -1391,6 +1423,14 @@ export function fetchAnalysisRuns(token: string, limit = 50): Promise<AnalysisRu
 
 export function fetchAnalysisRun(runId: string, token: string): Promise<AnalysisRun> {
   return apiRequest<AnalysisRun>(`/analysis/runs/${runId}`, {}, token)
+}
+
+export function cancelAnalysisRun(runId: string, token: string): Promise<AnalysisRun> {
+  return apiRequest<AnalysisRun>(
+    `/analysis/runs/${encodeURIComponent(runId)}/cancel`,
+    { method: 'POST' },
+    token,
+  )
 }
 
 export function fetchViews(token: string): Promise<MapView[]> {

@@ -14,6 +14,7 @@ from vector_analysis import (
     _execute_multi_ring_buffer,
     _execute_near,
     _execute_polygonize,
+    _filter_scope_sql,
     _geometry_family,
     _resolve_intersection_output_type,
     get_tool_spec,
@@ -71,6 +72,18 @@ class VectorToolRegistryTests(unittest.TestCase):
     def test_unknown_tool_is_rejected(self):
         with self.assertRaisesRegex(VectorAnalysisError, 'Unknown vector analysis tool'):
             get_tool_spec('not-a-tool')
+
+    def test_remaining_vector_roadmap_tools_are_migrated(self):
+        migrated_ids = {tool['id'] for tool in list_tool_specs() if tool['migrated']}
+        self.assertTrue({
+            'split_lines_at_points', 'merge_layers', 'reproject', 'geometry_quality',
+            'topology_validate', 'spatial_statistics',
+        }.issubset(migrated_ids))
+        iterations = next(
+            parameter for parameter in get_tool_spec('geometry_quality').parameters
+            if parameter.name == 'iterations'
+        )
+        self.assertEqual(iterations.maximum, 5)
 
 
 class VectorToolValidationTests(unittest.TestCase):
@@ -239,6 +252,46 @@ class VectorToolValidationTests(unittest.TestCase):
         })
         self.assertEqual(parameters['concavity'], 0.8)
 
+    def test_phase_eight_management_validation(self):
+        line_layer, point_layer = str(uuid4()), str(uuid4())
+        split = validate_tool_parameters('split_lines_at_points', {
+            'line_layer': line_layer, 'point_layer': point_layer, 'output_name': 'Segments',
+        })
+        self.assertEqual(split['tolerance'], 1.0)
+        with self.assertRaisesRegex(VectorAnalysisError, 'distinct'):
+            validate_tool_parameters('split_lines_at_points', {
+                'line_layer': line_layer, 'point_layer': line_layer, 'output_name': 'Invalid',
+            })
+        reproject = validate_tool_parameters('reproject', {
+            'layer_id': line_layer, 'source_crs': 'epsg:32632', 'output_name': 'WGS84',
+        })
+        self.assertEqual(reproject['source_crs'], 'EPSG:32632')
+        with self.assertRaisesRegex(VectorAnalysisError, 'valid EPSG'):
+            validate_tool_parameters('reproject', {
+                'layer_id': line_layer, 'source_crs': 'WGS84', 'output_name': 'Invalid',
+            })
+
+    def test_quality_topology_and_statistics_requirements(self):
+        layer_id = str(uuid4())
+        with self.assertRaisesRegex(VectorAnalysisError, 'tolerance is required'):
+            validate_tool_parameters('geometry_quality', {
+                'layer_id': layer_id, 'output_name': 'Simple', 'operation': 'simplify',
+            })
+        with self.assertRaisesRegex(VectorAnalysisError, 'coverage_layer is required'):
+            validate_tool_parameters('topology_validate', {
+                'polygon_layer': layer_id, 'output_name': 'Gaps', 'checks': ['gaps'],
+            })
+        with self.assertRaisesRegex(VectorAnalysisError, 'value_field is required'):
+            validate_tool_parameters('spatial_statistics', {
+                'layer_id': layer_id, 'output_name': 'Moran', 'operation': 'spatial_autocorrelation',
+                'distance_band': 1000,
+            })
+        hot_spot = validate_tool_parameters('spatial_statistics', {
+            'layer_id': layer_id, 'output_name': 'Hot spots', 'operation': 'hot_spot',
+            'value_field': 'incidents', 'distance_band': 1000,
+        })
+        self.assertEqual(hot_spot['distance_band'], 1000.0)
+
     def test_selected_scope_requires_valid_feature_ids(self):
         feature_id = str(uuid4())
         environments = normalize_environments({
@@ -272,6 +325,24 @@ class VectorToolValidationTests(unittest.TestCase):
 
         self.assertEqual(environments['selected_feature_ids_a'], [feature_a])
         self.assertEqual(environments['selected_feature_ids_b'], [feature_b])
+
+    def test_extent_filter_and_geometry_policies_are_normalized(self):
+        extent_environment = normalize_environments({
+            'scope': 'extent', 'extent': [3.0, 4.0, 5.0, 6.0],
+            'invalid_geometry_policy': 'repair', 'multipart_policy': 'explode',
+            'z_policy': 'drop', 'output_collision_policy': 'error',
+        })
+        self.assertEqual(extent_environment['extent_a'], [3.0, 4.0, 5.0, 6.0])
+        self.assertEqual(extent_environment['invalid_geometry_policy'], 'repair')
+        self.assertEqual(extent_environment['multipart_policy'], 'explode')
+        filtered = normalize_environments({
+            'scope': 'filtered',
+            'filters': [{'field': 'population', 'operator': 'greater_than', 'value': 100}],
+        })
+        self.assertEqual(filtered['filters_a'][0]['field'], 'population')
+        clauses, parameters = _filter_scope_sql(filtered['filters_a'])
+        self.assertIn('double precision', clauses[0])
+        self.assertEqual(parameters, ['population', 'population', 100.0])
 
 
 class IntersectGeometryTests(unittest.TestCase):
@@ -363,7 +434,7 @@ class PlaceholderCheckingCursor:
         elif normalized.startswith('WITH matches AS MATERIALIZED'):
             self.summarize_within_parameters = parameters
             self.rowcount = 2
-        elif normalized.startswith('INSERT INTO features') and 'Finding indexed nearest candidates' not in normalized and 'candidate.geometry <-> source.geometry' in normalized:
+        elif normalized.startswith('INSERT INTO features') and 'candidate.geometry::geography <-> source.geometry::geography' in normalized:
             self.near_parameters = parameters
             self.rowcount = 3
         elif normalized.startswith('WITH distance_steps AS MATERIALIZED'):
