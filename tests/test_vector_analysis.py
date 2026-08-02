@@ -228,6 +228,17 @@ class VectorToolValidationTests(unittest.TestCase):
         self.assertEqual(parameters['distances'], [100.0, 250.0, 500.0])
         self.assertEqual(parameters['ring_type'], 'rings')
 
+    def test_geometry_construct_requires_operation_parameters(self):
+        layer_id = str(uuid4())
+        with self.assertRaisesRegex(VectorAnalysisError, 'interval is required'):
+            validate_tool_parameters('geometry_construct', {
+                'layer_id': layer_id, 'output_name': 'Stations', 'operation': 'points_along_lines',
+            })
+        parameters = validate_tool_parameters('geometry_construct', {
+            'layer_id': layer_id, 'output_name': 'Hull', 'operation': 'concave_hull',
+        })
+        self.assertEqual(parameters['concavity'], 0.8)
+
     def test_selected_scope_requires_valid_feature_ids(self):
         feature_id = str(uuid4())
         environments = normalize_environments({

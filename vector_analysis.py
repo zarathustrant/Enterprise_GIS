@@ -277,6 +277,21 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
         migrated=True,
         keywords=('line network', 'topology', 'closed rings', 'dangles', 'cut edges'),
     ),
+    'geometry_construct': VectorToolSpec(
+        id='geometry_construct', version=1, title='Geometry Construction', category='Data management',
+        description='Construct derived geometry while preserving source attributes and provenance.',
+        input_geometry_families=('point', 'line', 'polygon'), output_geometry_family=None,
+        parameters=(
+            ToolParameter('layer_id', 'Input layer', 'layer', required=True),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Constructed Geometry'),
+            ToolParameter('operation', 'Operation', 'choice', required=True, default='multipart_to_singlepart', choices=(
+                'multipart_to_singlepart', 'interior_point', 'polygon_boundary', 'points_along_lines',
+                'convex_hull', 'concave_hull', 'minimum_bounding_geometry',
+            )),
+            ToolParameter('interval', 'Point interval (metres)', 'number', minimum=0.000001),
+            ToolParameter('concavity', 'Concave-hull target (0-1)', 'number', minimum=0),
+        ), migrated=True, keywords=('singlepart', 'centroid', 'boundary', 'hull', 'points along line'),
+    ),
     'within': VectorToolSpec(
         id='within',
         version=1,
@@ -475,6 +490,14 @@ def validate_tool_parameters(tool_id: str, raw: Any) -> dict[str, Any]:
             raise VectorAnalysisError('Summarize Within supports count, sum, minimum, maximum, and mean')
     if tool_id == 'near' and parameters['nearest_count'] > 100:
         raise VectorAnalysisError('nearest_count is limited to 100 features per source')
+    if tool_id == 'geometry_construct':
+        if parameters['operation'] == 'points_along_lines' and parameters['interval'] is None:
+            raise VectorAnalysisError('interval is required for points_along_lines')
+        if parameters['operation'] == 'concave_hull':
+            if parameters['concavity'] is None:
+                parameters['concavity'] = 0.8
+            if parameters['concavity'] > 1:
+                raise VectorAnalysisError('concavity must be between 0 and 1')
     return parameters
 
 
@@ -2521,6 +2544,83 @@ def _execute_polygonize(
     }
 
 
+def _execute_geometry_construct(cur, parameters, environments, created_by, progress):
+    layer_id = parameters['layer_id']
+    cur.execute('SELECT id, name, geometry_type FROM layers WHERE id = %s::uuid', (layer_id,))
+    source = cur.fetchone()
+    if not source:
+        raise VectorAnalysisError('Input layer was not found')
+    family = _resolve_layer_family(cur, dict(source))
+    operation = parameters['operation']
+    if operation in {'polygon_boundary'} and family != 'polygon':
+        raise VectorAnalysisError('Polygon Boundary requires polygon input')
+    if operation == 'points_along_lines' and family != 'line':
+        raise VectorAnalysisError('Points Along Lines requires line input')
+    output_family = {
+        'interior_point': 'point', 'points_along_lines': 'point', 'polygon_boundary': 'line',
+        'convex_hull': 'polygon', 'concave_hull': 'polygon', 'minimum_bounding_geometry': 'polygon',
+    }.get(operation, family)
+    geometry_types = {'point': 'Point', 'line': 'LineString', 'polygon': 'Polygon'}
+    progress(15, 'Creating derived geometry schema')
+    output_layer_id = _create_output_layer(
+        cur, name=parameters['output_name'], description=f'{operation.replace("_", " ").title()} from "{source["name"]}"',
+        geometry_type=geometry_types[output_family], created_by=created_by, source_layer_id=layer_id,
+    )
+    _inherit_layer_style(cur, output_layer_id, layer_id)
+    [source_id_field] = _add_provenance_fields(cur, output_layer_id, [('source_feature_id', 'Source feature ID')])
+    scope_clause = _selected_clause('source', environments['scope'])
+    query_parameters: list[Any] = [output_layer_id]
+    lateral = ''
+    geometry_expression = 'source.geometry'
+    if operation == 'multipart_to_singlepart':
+        lateral = 'CROSS JOIN LATERAL ST_Dump(source.geometry) dumped'
+        geometry_expression = 'dumped.geom'
+    elif operation == 'interior_point':
+        geometry_expression = 'ST_PointOnSurface(source.geometry)'
+    elif operation == 'polygon_boundary':
+        geometry_expression = 'ST_CollectionExtract(ST_Boundary(source.geometry), 2)'
+    elif operation == 'points_along_lines':
+        lateral = (
+            'CROSS JOIN LATERAL generate_series(0::double precision, '
+            'ST_Length(source.geometry::geography), %s::double precision) station'
+        )
+        query_parameters.append(parameters['interval'])
+        geometry_expression = (
+            'ST_LineInterpolatePoint(source.geometry, LEAST(station / '
+            'NULLIF(ST_Length(source.geometry::geography), 0), 1))'
+        )
+    elif operation == 'convex_hull':
+        geometry_expression = 'ST_CollectionExtract(ST_ConvexHull(source.geometry), 3)'
+    elif operation == 'concave_hull':
+        geometry_expression = 'ST_CollectionExtract(ST_ConcaveHull(source.geometry, %s, TRUE), 3)'
+        query_parameters.append(parameters['concavity'])
+    elif operation == 'minimum_bounding_geometry':
+        geometry_expression = 'ST_OrientedEnvelope(source.geometry)'
+    query_parameters.extend([created_by, layer_id])
+    if environments['scope'] == 'selected':
+        query_parameters.append(environments['selected_feature_ids'])
+    progress(42, f'Running {operation.replace("_", " ")}')
+    cur.execute(f"""
+        INSERT INTO features (layer_id, geometry, properties, created_by)
+        SELECT %s::uuid, derived.geometry,
+               source.properties || jsonb_build_object('{source_id_field}', source.id::text), %s::uuid
+        FROM features source
+        {lateral}
+        CROSS JOIN LATERAL (SELECT {geometry_expression} AS geometry) derived
+        WHERE source.layer_id = %s::uuid {scope_clause}
+          AND derived.geometry IS NOT NULL AND NOT ST_IsEmpty(derived.geometry)
+    """, tuple(query_parameters))
+    feature_count = cur.rowcount
+    _record_output_history(cur, output_layer_id, created_by)
+    progress(92, 'Finalizing constructed geometry')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id), 'count': feature_count,
+        'output_layer_ids': [output_layer_id],
+        'warnings': [] if feature_count else ['The operation produced no compatible output geometry.'],
+        'metrics': {'operation': operation, 'input_geometry_family': family, 'output_geometry_family': output_family},
+    }
+
+
 EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     'buffer': _execute_buffer,
     'multi_ring_buffer': _execute_multi_ring_buffer,
@@ -2532,6 +2632,7 @@ EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     'summarize_within': _execute_summarize_within,
     'near': _execute_near,
     'polygonize': _execute_polygonize,
+    'geometry_construct': _execute_geometry_construct,
 }
 
 

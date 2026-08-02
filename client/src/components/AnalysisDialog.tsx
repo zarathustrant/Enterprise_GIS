@@ -26,7 +26,7 @@ import { fetchLayerFields } from '../api/services'
 import { useAuthStore } from '../store/auth'
 import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 
-export type AnalysisTab = 'buffer' | 'multi_ring_buffer' | 'intersect' | 'clip' | 'erase' | 'dissolve' | 'spatial_join' | 'summarize_within' | 'near' | 'polygonize' | 'within'
+export type AnalysisTab = 'buffer' | 'multi_ring_buffer' | 'intersect' | 'clip' | 'erase' | 'dissolve' | 'spatial_join' | 'summarize_within' | 'near' | 'polygonize' | 'geometry_construct' | 'within'
 export type AnalysisJobStatus = 'queued' | 'running' | 'success' | 'error'
 
 export interface AnalysisJobState {
@@ -102,6 +102,7 @@ interface AnalysisDialogProps {
     attributeTransfer: 'none' | 'first_intersecting' | 'majority_boundary'
     createDiagnostics: boolean
   }) => void
+  onRunGeometryConstruct: (payload: { layerId: string; outputName: string; operation: 'multipart_to_singlepart' | 'interior_point' | 'polygon_boundary' | 'points_along_lines' | 'convex_hull' | 'concave_hull' | 'minimum_bounding_geometry'; interval: number | null; concavity: number | null }) => void
   onRunWithin: (payload: { layerId: string; polygon: string }) => void
 }
 
@@ -124,6 +125,7 @@ export function AnalysisDialog({
   onRunSummarizeWithin,
   onRunNear,
   onRunPolygonize,
+  onRunGeometryConstruct,
   onRunWithin,
 }: AnalysisDialogProps) {
   const [tab, setTab] = useState<AnalysisTab>('buffer')
@@ -193,6 +195,11 @@ export function AnalysisDialog({
   const [polygonizeTolerance, setPolygonizeTolerance] = useState('')
   const [polygonizeTransfer, setPolygonizeTransfer] = useState<'none' | 'first_intersecting' | 'majority_boundary'>('majority_boundary')
   const [polygonizeDiagnostics, setPolygonizeDiagnostics] = useState(true)
+  const [constructLayer, setConstructLayer] = useState('')
+  const [constructName, setConstructName] = useState('Constructed Geometry')
+  const [constructOperation, setConstructOperation] = useState<'multipart_to_singlepart' | 'interior_point' | 'polygon_boundary' | 'points_along_lines' | 'convex_hull' | 'concave_hull' | 'minimum_bounding_geometry'>('multipart_to_singlepart')
+  const [constructInterval, setConstructInterval] = useState('100')
+  const [constructConcavity, setConstructConcavity] = useState('0.8')
 
   const [withinLayerId, setWithinLayerId] = useState('')
   const [withinPolygon, setWithinPolygon] = useState(
@@ -335,6 +342,7 @@ export function AnalysisDialog({
           <Tab value="summarize_within" label="Summarize Within" />
           <Tab value="near" label="Near" />
           <Tab value="polygonize" label="Polygonize" />
+          <Tab value="geometry_construct" label="Construct" />
           <Tab value="within" label="Within" />
         </Tabs>
 
@@ -844,6 +852,31 @@ export function AnalysisDialog({
                 createDiagnostics: polygonizeDiagnostics,
               })}
             >Run Polygonize</Button>
+          </Box>
+        )}
+
+        {tab === 'geometry_construct' && (
+          <Box display="grid" gap={2}>
+            <TextField label="Input layer" value={constructLayer} onChange={(event) => setConstructLayer(event.target.value)} size="small" select>
+              {layerOptions.map((item) => <MenuItem key={item.value} value={item.value}>{item.label}</MenuItem>)}
+            </TextField>
+            <TextField label="Construction operation" value={constructOperation} onChange={(event) => setConstructOperation(event.target.value as typeof constructOperation)} size="small" select>
+              <MenuItem value="multipart_to_singlepart">Multipart to singlepart</MenuItem>
+              <MenuItem value="interior_point">Feature to interior point</MenuItem>
+              <MenuItem value="polygon_boundary">Polygon boundaries to lines</MenuItem>
+              <MenuItem value="points_along_lines">Points along lines</MenuItem>
+              <MenuItem value="convex_hull">Convex hull</MenuItem>
+              <MenuItem value="concave_hull">Concave hull</MenuItem>
+              <MenuItem value="minimum_bounding_geometry">Minimum bounding geometry</MenuItem>
+            </TextField>
+            {constructOperation === 'points_along_lines' && <TextField label="Interval (metres)" type="number" value={constructInterval} onChange={(event) => setConstructInterval(event.target.value)} size="small" />}
+            {constructOperation === 'concave_hull' && <TextField label="Target convexity (0-1)" type="number" value={constructConcavity} onChange={(event) => setConstructConcavity(event.target.value)} inputProps={{ min: 0, max: 1, step: 0.05 }} size="small" />}
+            <TextField label="Output layer name" value={constructName} onChange={(event) => setConstructName(event.target.value)} size="small" />
+            <Button variant="contained" disabled={running || !constructLayer} onClick={() => onRunGeometryConstruct({
+              layerId: constructLayer, outputName: constructName || 'Constructed Geometry', operation: constructOperation,
+              interval: constructOperation === 'points_along_lines' ? Number(constructInterval) : null,
+              concavity: constructOperation === 'concave_hull' ? Number(constructConcavity) : null,
+            })}>Run Geometry Construction</Button>
           </Box>
         )}
 

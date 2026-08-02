@@ -157,6 +157,10 @@ Polygonize constructs polygons without mutating source linework. It optionally s
 
 Attribute transfer can be disabled, use the deterministic lowest intersecting feature UUID, or choose the source line contributing the greatest polygon-boundary length. An optional companion diagnostics layer contains line components not consumed by the generated polygon boundaries, making gaps, dangles, and cut edges inspectable on the map. Independent run metrics identify polygon and diagnostic counts. The endpoint is `POST /api/v1/analysis/polygonize`.
 
+### Geometry Construction
+
+The consolidated Geometry Construction tool provides multipart-to-singlepart expansion, interior points, polygon boundaries, geodesically spaced points along lines, convex hulls, concave hulls, and oriented minimum bounding geometry. Every operation preserves the authoritative source schema, style, source-feature provenance, selected scope, worker compatibility, and run metrics. Geometry-family checks prevent polygon-boundary and points-along-line operations from accepting incompatible layers. The endpoint is `POST /api/v1/analysis/geometry-construct`.
+
 ## Transaction Guarantees
 
 - A run is committed before synchronous execution, so failures remain visible.
@@ -166,5 +170,7 @@ Attribute transfer can be disabled, use the deterministic lowest intersecting fe
 
 ## Next Migration Order
 
-1. Geometry construction, quality, and statistics tool groups.
-2. Analysis Workbench UI generated from the registry and run-history APIs.
+1. Split-lines-at-points, merge/append field mapping, and explicit reprojection.
+2. Geometry quality and generalization tool group.
+3. Vector spatial statistics tool group.
+4. Analysis Workbench UI generated from the registry and run-history APIs.

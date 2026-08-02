@@ -333,6 +333,12 @@ def polygonize():
     )
 
 
+@analysis_bp.route('/geometry-construct', methods=['POST'])
+@jwt_required()
+def geometry_construct():
+    return _run_layer_tool('geometry_construct', request.get_json() or {}, ('layer_id',), 'analysis_geometry_construct')
+
+
 # ── Spatial query (features within a polygon) ─────────────────────────────────
 
 @analysis_bp.route('/within', methods=['POST'])

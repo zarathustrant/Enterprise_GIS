@@ -352,6 +352,13 @@ Exit gate:
 
 ## Phase 8: Geometry Construction And Management
 
+Implementation status:
+
+- multipart to singlepart, interior point, polygon boundary, and points along lines complete
+- per-feature convex hull, concave hull, and oriented minimum bounding geometry complete
+- schema/style preservation, source provenance, selected scope, shared worker execution, and visual controls complete
+- split lines at points, merge/append field mapping, and explicit project/reproject remain
+
 Next tool group:
 
 - multipart to singlepart

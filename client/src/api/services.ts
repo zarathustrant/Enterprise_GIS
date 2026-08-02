@@ -358,6 +358,14 @@ export interface AnalysisPolygonizePayload {
   environments?: AnalysisEnvironments
 }
 
+export interface AnalysisGeometryConstructPayload {
+  layer_id: string
+  output_name: string
+  operation: 'multipart_to_singlepart' | 'interior_point' | 'polygon_boundary' | 'points_along_lines' | 'convex_hull' | 'concave_hull' | 'minimum_bounding_geometry'
+  interval?: number | null
+  concavity?: number | null
+}
+
 export interface AnalysisWithinPayload {
   layer_id: string
   polygon: Geometry
@@ -379,7 +387,7 @@ export interface CreateViewPayload {
 }
 
 export interface CreateJobPayload {
-  job_type: 'analysis.buffer' | 'analysis.multi_ring_buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.dissolve' | 'analysis.spatial_join' | 'analysis.summarize_within' | 'analysis.near' | 'analysis.polygonize' | 'analysis.within'
+  job_type: 'analysis.buffer' | 'analysis.multi_ring_buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.dissolve' | 'analysis.spatial_join' | 'analysis.summarize_within' | 'analysis.near' | 'analysis.polygonize' | 'analysis.geometry_construct' | 'analysis.within'
   payload: Record<string, unknown>
 }
 
@@ -1348,6 +1356,10 @@ export function runPolygonizeAnalysis(
     },
     token,
   )
+}
+
+export function runGeometryConstructAnalysis(payload: AnalysisGeometryConstructPayload, token: string): Promise<AnalysisLayerResponse> {
+  return apiRequest<AnalysisLayerResponse>('/analysis/geometry-construct', { method: 'POST', body: JSON.stringify(payload) }, token)
 }
 
 export function runWithinAnalysis(

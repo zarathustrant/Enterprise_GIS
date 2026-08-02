@@ -134,6 +134,7 @@ import {
   runMultiRingBufferAnalysis,
   runNearAnalysis,
   runPolygonizeAnalysis,
+  runGeometryConstructAnalysis,
   runSpatialJoinAnalysis,
   runSummarizeWithinAnalysis,
   runWithinAnalysis,
@@ -2705,6 +2706,25 @@ export default function App() {
     },
   })
 
+  const geometryConstructMutation = useMutation({
+    mutationFn: async (payload: { layerId: string; outputName: string; operation: 'multipart_to_singlepart' | 'interior_point' | 'polygon_boundary' | 'points_along_lines' | 'convex_hull' | 'concave_hull' | 'minimum_bounding_geometry'; interval: number | null; concavity: number | null }) => {
+      if (!token) throw new Error('Sign in to construct geometry.')
+      return runGeometryConstructAnalysis({ layer_id: payload.layerId, output_name: payload.outputName, operation: payload.operation, interval: payload.interval, concavity: payload.concavity }, token)
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['layer-features'] })
+      setAnalysisError(null)
+      completeAnalysisJob(`Geometry construction complete (${result.count} features)`)
+      notify(`Geometry construction complete (${result.count} features)`, 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Geometry construction failed'
+      setAnalysisError(message)
+      failAnalysisJob(message)
+    },
+  })
+
   const withinMutation = useMutation({
     mutationFn: async (payload: { layerId: string; polygonText: string }) => {
       const polygon = JSON.parse(payload.polygonText) as Geometry
@@ -2734,6 +2754,7 @@ export default function App() {
     || summarizeWithinMutation.isPending
     || nearMutation.isPending
     || polygonizeMutation.isPending
+    || geometryConstructMutation.isPending
     || withinMutation.isPending
 
   const handleAuthenticated = (response: AuthResponse) => {
@@ -4928,6 +4949,11 @@ export default function App() {
             setAnalysisError(null)
             startAnalysisJob('polygonize')
             polygonizeMutation.mutate(payload)
+          }}
+          onRunGeometryConstruct={(payload) => {
+            setAnalysisError(null)
+            startAnalysisJob('geometry_construct')
+            geometryConstructMutation.mutate(payload)
           }}
           onRunWithin={(payload) => {
             setAnalysisError(null)
