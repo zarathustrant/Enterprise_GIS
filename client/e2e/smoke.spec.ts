@@ -14,7 +14,7 @@ test('auth + layer + feature smoke flow', async ({ page, request }) => {
   await page.getByLabel('Password (min 8 chars)').fill(password)
   await page.getByRole('button', { name: 'Create account' }).click()
 
-  await expect(page.getByRole('button', { name: 'New Layer' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'New Layer' })).toBeVisible({ timeout: 15_000 })
 
   await page.getByRole('button', { name: 'New Layer' }).click()
   await page.getByLabel('Layer name').fill('Smoke Layer')

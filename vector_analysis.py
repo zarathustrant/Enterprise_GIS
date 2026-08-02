@@ -2555,7 +2555,9 @@ def _execute_summarize_within(
         query_parameters.append(selected_zones)
 
     group_select = f", summary.properties -> '{group_field}' AS group_value" if group_field else ', NULL::jsonb AS group_value'
-    group_clause = ', group_value' if group_field else ''
+    # group_value is selected by the grouped CTE even when it is the typed NULL
+    # placeholder used for an ungrouped summary, so PostgreSQL still requires it.
+    group_clause = ', group_value'
     statistic_selects: list[str] = []
     for index, statistic in enumerate(parameters['statistics']):
         if statistic['statistic'] == 'count':
@@ -3081,7 +3083,7 @@ def _execute_geometry_construct(cur, parameters, environments, created_by, progr
     _inherit_layer_style(cur, output_layer_id, layer_id)
     [source_id_field] = _add_provenance_fields(cur, output_layer_id, [('source_feature_id', 'Source feature ID')])
     scope_clause = _selected_clause('source', environments['scope'])
-    query_parameters: list[Any] = [output_layer_id]
+    expression_parameters: list[Any] = []
     lateral = ''
     geometry_expression = 'source.geometry'
     if operation == 'multipart_to_singlepart':
@@ -3093,22 +3095,22 @@ def _execute_geometry_construct(cur, parameters, environments, created_by, progr
         geometry_expression = 'ST_CollectionExtract(ST_Boundary(source.geometry), 2)'
     elif operation == 'points_along_lines':
         lateral = (
-            'CROSS JOIN LATERAL generate_series(0::double precision, '
-            'ST_Length(source.geometry::geography), %s::double precision) station'
+            'CROSS JOIN LATERAL generate_series(0, CEIL('
+            'ST_Length(source.geometry::geography) / %s::double precision)::integer) station_index'
         )
-        query_parameters.append(parameters['interval'])
+        expression_parameters.extend([parameters['interval'], parameters['interval']])
         geometry_expression = (
-            'ST_LineInterpolatePoint(source.geometry, LEAST(station / '
+            'ST_LineInterpolatePoint(source.geometry, LEAST((station_index * %s::double precision) / '
             'NULLIF(ST_Length(source.geometry::geography), 0), 1))'
         )
     elif operation == 'convex_hull':
         geometry_expression = 'ST_CollectionExtract(ST_ConvexHull(source.geometry), 3)'
     elif operation == 'concave_hull':
         geometry_expression = 'ST_CollectionExtract(ST_ConcaveHull(source.geometry, %s, TRUE), 3)'
-        query_parameters.append(parameters['concavity'])
+        expression_parameters.append(parameters['concavity'])
     elif operation == 'minimum_bounding_geometry':
         geometry_expression = 'ST_OrientedEnvelope(source.geometry)'
-    query_parameters.extend([created_by, layer_id])
+    query_parameters: list[Any] = [output_layer_id, created_by, *expression_parameters, layer_id]
     if environments['scope'] == 'selected':
         query_parameters.append(environments['selected_feature_ids'])
     progress(42, f'Running {operation.replace("_", " ")}')

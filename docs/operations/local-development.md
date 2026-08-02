@@ -69,6 +69,25 @@ make github-sync
 make health
 ```
 
+## Capability sample data
+
+After the stack is running, create or replace the local vector-analysis and cartography fixtures:
+
+```bash
+make seed-capabilities
+```
+
+The command is idempotent and is deliberately scoped to the dedicated `capability_demo` account. It replaces only that account's `Capability Samples` layers, `QA - ...` analysis outputs, and capability utility network; it does not modify other users' layers.
+
+Local QA login:
+
+- username: `capability_demo`
+- password: `EnterpriseGIS!2026`
+
+The fixture pack includes nine public layers and one water utility network. It covers categorized and class-break rendering, icons, labels, line casing and markers, polygon patterns, multipart geometry, overlay masks, polygonize linework, topology gaps, duplicates, slivers, spatial statistics, and utility node/edge/service-point records.
+
+This account and password are local QA fixtures only. Do not seed them into a public or production deployment.
+
 ## Environment defaults
 
 Safe local defaults are configured to match the isolated Docker setup:

@@ -1,6 +1,6 @@
 SHELL := /bin/zsh
 
-.PHONY: help bootstrap check-clean github-sync github-web deploy-local db-migrate docker-up docker-up-build docker-down docker-logs docker-ps health
+.PHONY: help bootstrap check-clean github-sync github-web deploy-local db-migrate seed-capabilities docker-up docker-up-build docker-down docker-logs docker-ps health
 
 help:
 	@echo "Enterprise GIS local Docker workflow"
@@ -12,6 +12,7 @@ help:
 	@echo "  make github-web     - sync from GitHub, then build and start the app"
 	@echo "  make deploy-local   - alias for github-web"
 	@echo "  make db-migrate     - apply idempotent migrations to enterprise-gis-db only"
+	@echo "  make seed-capabilities - replace the isolated local QA sample dataset"
 	@echo "  make docker-up      - start containers in detached mode"
 	@echo "  make docker-up-build- rebuild and start containers in detached mode"
 	@echo "  make docker-down    - stop containers"
@@ -56,6 +57,10 @@ db-migrate:
 		echo "Applying $$migration to enterprise_gis"; \
 		docker compose exec -T db psql -v ON_ERROR_STOP=1 -U postgres -d enterprise_gis < "$$migration" || exit 1; \
 	done
+
+seed-capabilities:
+	@docker compose ps --status running --services | grep -qx api || { echo "enterprise-gis-api is not running"; exit 1; }
+	docker compose exec -T api python - < scripts/seed_capability_layers.py
 
 docker-up:
 	docker compose up -d

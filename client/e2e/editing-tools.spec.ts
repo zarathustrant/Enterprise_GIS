@@ -23,6 +23,7 @@ test('polygon editing tools enforce geometry and update cursor by advanced mode'
   await page.getByLabel('Password (min 8 chars)').fill(password)
   await page.getByRole('button', { name: 'Create account' }).click()
 
+  await expect(page.getByRole('button', { name: 'New Layer' })).toBeVisible({ timeout: 15_000 })
   await page.getByRole('button', { name: 'New Layer' }).click()
   await page.getByLabel('Layer name').fill(layerName)
   await page.getByRole('combobox', { name: 'Geometry type' }).click()
@@ -75,7 +76,27 @@ test('polygon editing tools enforce geometry and update cursor by advanced mode'
   await page.mouse.click(p2.x, p2.y)
   await page.mouse.click(p3.x, p3.y)
   await page.mouse.dblclick(p4.x, p4.y)
-  await page.waitForTimeout(600)
+
+  await expect
+    .poll(async () => {
+      const response = await request.get(`/api/v1/layers/${layerId}/features`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!response.ok()) {
+        return 0
+      }
+      const collection = (await response.json()) as { features: unknown[] }
+      return collection.features.length
+    })
+    .toBeGreaterThan(0)
+
+  // Switching from drawing to an advanced tool restores simple-select after
+  // the persisted feature refresh replaces the temporary draw feature.
+  const rotateScaleButton = page.getByRole('button', { name: 'Rotate / Scale', exact: true }).first()
+  await rotateScaleButton.scrollIntoViewIfNeeded()
+  await rotateScaleButton.focus()
+  await rotateScaleButton.press('Enter')
+  await expect(page.getByLabel('Rotate (°)')).toBeVisible()
 
   const centerX = Math.floor((p1.x + p3.x) / 2)
   const centerY = Math.floor((p1.y + p3.y) / 2)
@@ -108,6 +129,14 @@ test('polygon editing tools enforce geometry and update cursor by advanced mode'
   }
 
   expect(selectedCount).toBeGreaterThan(0)
+  await expect
+    .poll(async () =>
+      page.evaluate(() => {
+        const canvasEl = document.querySelector('.maplibregl-canvas') as HTMLCanvasElement | null
+        return canvasEl ? getComputedStyle(canvasEl).cursor : ''
+      }),
+    )
+    .toBe('move')
 
   const featuresBeforeResp = await request.get(`/api/v1/layers/${layerId}/features`, {
     headers: { Authorization: `Bearer ${token}` },
@@ -118,7 +147,9 @@ test('polygon editing tools enforce geometry and update cursor by advanced mode'
   const geometryBefore = JSON.stringify(featuresBefore.features[0]?.geometry ?? null)
 
   const expectCursorForTool = async (toolName: string, expectedCursor: string) => {
-    await page.getByRole('button', { name: toolName }).first().click()
+    const toolButton = page.getByRole('button', { name: toolName, exact: true }).first()
+    await toolButton.focus()
+    await toolButton.press('Enter')
 
     await expect
       .poll(async () =>
@@ -138,8 +169,6 @@ test('polygon editing tools enforce geometry and update cursor by advanced mode'
       )
       .toContain(`Cursor: ${expectedCursor}`)
   }
-
-  await expectCursorForTool('Rotate / Scale', 'move')
 
   const handleStart = {
     x: Math.floor((p1.x + p2.x) / 2),

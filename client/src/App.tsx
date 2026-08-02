@@ -984,6 +984,7 @@ export default function App() {
   const queryClient = useQueryClient()
   const theme = useTheme()
   const isDesktop = useMediaQuery(theme.breakpoints.up('md'))
+  const isWideToolbar = useMediaQuery('(min-width:1800px)')
 
   const token = useAuthStore((state) => state.token)
   const user = useAuthStore((state) => state.user)
@@ -4250,7 +4251,7 @@ export default function App() {
           ml: isDesktop ? `${drawerWidth}px` : 0,
         }}
       >
-        <Toolbar sx={{ minHeight: 72, gap: 1 }}>
+        <Toolbar sx={{ minHeight: 72, gap: 1, overflow: 'hidden' }}>
           {!isDesktop && (
             <IconButton edge="start" color="inherit" onClick={() => setMobileDrawerOpen((value) => !value)}>
               <MenuIcon />
@@ -4261,6 +4262,7 @@ export default function App() {
           <Typography
             variant="h6"
             sx={{
+              display: isWideToolbar ? 'block' : 'none',
               fontFamily: '"Space Grotesk", sans-serif',
               fontWeight: 700,
               letterSpacing: 0.2,
@@ -4269,44 +4271,68 @@ export default function App() {
             Enterprise GIS
           </Typography>
 
-          <Chip label={`${totalFeatures} visible features`} color="primary" variant="outlined" size="small" />
-          <Chip label={isOnline ? 'Online' : 'Offline'} color={isOnline ? 'success' : 'warning'} variant="outlined" size="small" />
-          <Chip
-            label={appMode === 'utilities' ? 'Mode: Utilities' : 'Mode: Standard'}
-            color={appMode === 'utilities' ? 'success' : 'default'}
-            variant="outlined"
-            size="small"
-          />
-          {appMode === 'utilities' && selectedUtilityNetwork && (
-            <Chip label={`Network: ${selectedUtilityNetwork.name}`} color="success" variant="outlined" size="small" />
+          {isWideToolbar && (
+            <>
+              <Chip label={`${totalFeatures} visible features`} color="primary" variant="outlined" size="small" />
+              <Chip label={isOnline ? 'Online' : 'Offline'} color={isOnline ? 'success' : 'warning'} variant="outlined" size="small" />
+              <Chip
+                label={appMode === 'utilities' ? 'Mode: Utilities' : 'Mode: Standard'}
+                color={appMode === 'utilities' ? 'success' : 'default'}
+                variant="outlined"
+                size="small"
+              />
+              {appMode === 'utilities' && selectedUtilityNetwork && (
+                <Chip label={`Network: ${selectedUtilityNetwork.name}`} color="success" variant="outlined" size="small" />
+              )}
+            </>
           )}
 
           {measurementLabel && <Chip label={measurementLabel} color="info" variant="outlined" size="small" />}
 
           <Tooltip title={appMode === 'utilities' ? 'Return to standard GIS mode' : 'Activate utility network workflows'}>
-            <Button
-              size="small"
-              variant={appMode === 'utilities' ? 'contained' : 'outlined'}
-              color={appMode === 'utilities' ? 'success' : 'inherit'}
-              startIcon={<AccountTreeIcon fontSize="small" />}
-              onClick={handleToggleAppMode}
-              sx={{ textTransform: 'none' }}
-            >
-              Utility Mode
-            </Button>
+            {isWideToolbar ? (
+              <Button
+                size="small"
+                variant={appMode === 'utilities' ? 'contained' : 'outlined'}
+                color={appMode === 'utilities' ? 'success' : 'inherit'}
+                startIcon={<AccountTreeIcon fontSize="small" />}
+                onClick={handleToggleAppMode}
+                sx={{ textTransform: 'none' }}
+              >
+                Utility Mode
+              </Button>
+            ) : (
+              <IconButton
+                aria-label={appMode === 'utilities' ? 'Return to standard GIS mode' : 'Activate utility network workflows'}
+                color={appMode === 'utilities' ? 'success' : 'default'}
+                onClick={handleToggleAppMode}
+              >
+                <AccountTreeIcon fontSize="small" />
+              </IconButton>
+            )}
           </Tooltip>
 
           <Tooltip title={workMode ? 'Work mode on: dialogs open as right-side panels' : 'Enable right-side work panels'}>
-            <Button
-              size="small"
-              variant={workMode ? 'contained' : 'outlined'}
-              color={workMode ? 'primary' : 'inherit'}
-              startIcon={<ViewSidebarIcon fontSize="small" />}
-              onClick={() => setWorkMode((value) => !value)}
-              sx={{ textTransform: 'none' }}
-            >
-              Work Mode
-            </Button>
+            {isWideToolbar ? (
+              <Button
+                size="small"
+                variant={workMode ? 'contained' : 'outlined'}
+                color={workMode ? 'primary' : 'inherit'}
+                startIcon={<ViewSidebarIcon fontSize="small" />}
+                onClick={() => setWorkMode((value) => !value)}
+                sx={{ textTransform: 'none' }}
+              >
+                Work Mode
+              </Button>
+            ) : (
+              <IconButton
+                aria-label={workMode ? 'Disable work mode' : 'Enable work mode'}
+                color={workMode ? 'primary' : 'default'}
+                onClick={() => setWorkMode((value) => !value)}
+              >
+                <ViewSidebarIcon fontSize="small" />
+              </IconButton>
+            )}
           </Tooltip>
 
           <TextField
@@ -4314,7 +4340,7 @@ export default function App() {
             onChange={(event) => setSearchText(event.target.value)}
             size="small"
             placeholder="Search place or address"
-            sx={{ width: 240 }}
+            sx={{ width: 240, display: { xs: 'none', lg: 'block' } }}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 void handleSearch()
@@ -4322,11 +4348,11 @@ export default function App() {
             }}
           />
           <Tooltip title="Search location">
-            <span>
+            <Box component="span" sx={{ display: { xs: 'none', lg: 'inline-flex' } }}>
               <IconButton onClick={() => void handleSearch()} disabled={searching}>
                 {searching ? <CircularProgress size={16} /> : <SearchIcon fontSize="small" />}
               </IconButton>
-            </span>
+            </Box>
           </Tooltip>
 
           <Tooltip title="Fit visible layers">
@@ -4387,12 +4413,12 @@ export default function App() {
             </Tooltip>
           )}
 
-          <Box sx={{ flexGrow: 1 }} />
+          <Box sx={{ flexGrow: 1, minWidth: 0 }} />
 
           {currentUserQuery.isFetching && token ? (
             <CircularProgress size={18} />
           ) : user ? (
-            <Stack direction="row" alignItems="center" spacing={1}>
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ flexShrink: 0 }}>
               <Button
                 startIcon={<AddCircleOutlineIcon />}
                 variant="outlined"
@@ -4404,7 +4430,7 @@ export default function App() {
               >
                 New Layer
               </Button>
-              <Typography variant="body2" sx={{ fontWeight: 600 }}>
+              <Typography variant="body2" sx={{ fontWeight: 600, display: { xs: 'none', sm: 'block' } }}>
                 {user.username}
               </Typography>
               <Tooltip title="Logout">

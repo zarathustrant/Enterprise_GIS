@@ -299,6 +299,56 @@ class VectorAnalysisPostgisTests(unittest.TestCase):
         self.assertAlmostEqual(coordinate['x'], 3.0, places=3)
         self.assertAlmostEqual(coordinate['y'], 6.0, places=3)
 
+    def test_geometry_construction_and_zonal_summary_parameter_order(self):
+        lines = self.add_layer('construction lines', 'LineString', [
+            ({'type': 'LineString', 'coordinates': [[0, 0], [0.03, 0.01]]}, {'name': 'route'}),
+        ], [('name', 'string')])
+        polygons = self.add_layer('construction polygons', 'Polygon', [
+            ({'type': 'Polygon', 'coordinates': [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]]},
+             {'name': 'zone'}),
+        ], [('name', 'string')])
+        multipart = self.add_layer('construction multipart', 'MultiPolygon', [
+            ({'type': 'MultiPolygon', 'coordinates': [
+                [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]],
+                [[[2, 0], [3, 0], [3, 1], [2, 1], [2, 0]]],
+            ]}, {'name': 'multipart'}),
+        ], [('name', 'string')])
+
+        construction_cases = [
+            ('multipart_to_singlepart', multipart, {}),
+            ('interior_point', polygons, {}),
+            ('polygon_boundary', polygons, {}),
+            ('points_along_lines', lines, {'interval': 500}),
+            ('convex_hull', polygons, {}),
+            ('concave_hull', polygons, {'concavity': 0.75}),
+            ('minimum_bounding_geometry', polygons, {}),
+        ]
+        for operation, layer_id, extra in construction_cases:
+            result = self.run_tool('geometry_construct', {
+                'layer_id': layer_id,
+                'output_name': f'construction {operation}',
+                'operation': operation,
+                **extra,
+            })
+            self.assertGreater(result['count'], 0, operation)
+
+        zones = self.add_layer('summary zones', 'Polygon', [
+            ({'type': 'Polygon', 'coordinates': [[[0, 0], [2, 0], [2, 2], [0, 2], [0, 0]]]}, {}),
+        ])
+        summary_points = self.add_layer('summary points', 'Point', [
+            ({'type': 'Point', 'coordinates': [0.5, 0.5]}, {'kind': 'a', 'score': 10}),
+            ({'type': 'Point', 'coordinates': [1.5, 1.5]}, {'kind': 'b', 'score': 20}),
+        ], [('kind', 'string'), ('score', 'double')])
+        for group_field, expected_count in [('', 1), ('kind', 2)]:
+            result = self.run_tool('summarize_within', {
+                'zone_layer': zones,
+                'summary_layer': summary_points,
+                'output_name': f'summary {group_field or "all"}',
+                'group_field': group_field,
+                'statistics': [{'field': 'score', 'statistic': 'mean'}],
+            })
+            self.assertEqual(result['count'], expected_count)
+
     def test_geometry_quality_and_topology_diagnostics(self):
         duplicate_points = self.add_layer('duplicate points', 'Point', [
             ({'type': 'Point', 'coordinates': [0, 0]}, {}),
