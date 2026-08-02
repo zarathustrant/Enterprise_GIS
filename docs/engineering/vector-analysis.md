@@ -133,6 +133,12 @@ One-to-many output emits every match. One-to-one output deterministically retain
 
 Nearest is intentionally implemented by the dedicated proximity kernel in Phase 6 rather than duplicated here. The endpoint is `POST /api/v1/analysis/spatial-join`.
 
+### Summarize Within
+
+Summarize Within retains polygon zone geometry and schema while calculating counts and measurements for a second feature layer. Boundary behavior is explicit: `intersects` clips crossing features to each zone, while `within` includes only completely contained features.
+
+The tool calculates geodesic line length in metres, polygon area in square metres, zone area, percentage of zone area, and percentage of each source measurement represented inside the zone. It supports optional categorical grouping, repeatable sum/minimum/maximum/mean statistics, empty-zone retention, independent input selections, and source-family-aware metrics. Grouped summaries intentionally produce one zone-geometry row per category. The endpoint is `POST /api/v1/analysis/summarize-within`.
+
 ## Transaction Guarantees
 
 - A run is committed before synchronous execution, so failures remain visible.
@@ -142,6 +148,7 @@ Nearest is intentionally implemented by the dedicated proximity kernel in Phase 
 
 ## Next Migration Order
 
-1. Summarize Within with explicit boundary and measurement behavior.
-2. Near and nearest-feature tables with geodesic distances.
-3. Analysis Workbench UI generated from the registry and run-history APIs.
+1. Near and nearest-feature tables with geodesic distances.
+2. Polygonize line networks with diagnostics.
+3. Geometry construction, quality, and statistics tool groups.
+4. Analysis Workbench UI generated from the registry and run-history APIs.

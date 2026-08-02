@@ -283,6 +283,19 @@ def spatial_join():
     )
 
 
+# ── Summarize Within ──────────────────────────────────────────────────────────
+
+@analysis_bp.route('/summarize-within', methods=['POST'])
+@jwt_required()
+def summarize_within():
+    return _run_layer_tool(
+        'summarize_within',
+        request.get_json() or {},
+        ('zone_layer', 'summary_layer'),
+        'analysis_summarize_within',
+    )
+
+
 # ── Spatial query (features within a polygon) ─────────────────────────────────
 
 @analysis_bp.route('/within', methods=['POST'])

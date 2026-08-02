@@ -9,6 +9,7 @@ from vector_analysis import (
     _execute_dissolve,
     _execute_erase,
     _execute_spatial_join,
+    _execute_summarize_within,
     _execute_intersect,
     _geometry_family,
     _resolve_intersection_output_type,
@@ -58,6 +59,11 @@ class VectorToolRegistryTests(unittest.TestCase):
         tool = get_tool_spec('spatial_join')
         self.assertTrue(tool.migrated)
         self.assertEqual(tool.category, 'Overlay')
+
+    def test_summarize_within_is_a_migrated_analysis_tool(self):
+        tool = get_tool_spec('summarize_within')
+        self.assertTrue(tool.migrated)
+        self.assertEqual(tool.output_geometry_family, 'polygon')
 
     def test_unknown_tool_is_rejected(self):
         with self.assertRaisesRegex(VectorAnalysisError, 'Unknown vector analysis tool'):
@@ -172,6 +178,15 @@ class VectorToolValidationTests(unittest.TestCase):
                 'distance': 100,
             })
 
+    def test_summarize_within_rejects_unsupported_statistics(self):
+        with self.assertRaisesRegex(VectorAnalysisError, 'supports count'):
+            validate_tool_parameters('summarize_within', {
+                'zone_layer': str(uuid4()),
+                'summary_layer': str(uuid4()),
+                'output_name': 'Summary',
+                'statistics': [{'field': 'name', 'statistic': 'first'}],
+            })
+
     def test_selected_scope_requires_valid_feature_ids(self):
         feature_id = str(uuid4())
         environments = normalize_environments({
@@ -254,6 +269,7 @@ class PlaceholderCheckingCursor:
         self.mask_overlay_parameters = None
         self.dissolve_parameters = None
         self.spatial_join_parameters = None
+        self.summarize_within_parameters = None
 
     def execute(self, query, parameters=()):
         parameters = tuple(parameters)
@@ -286,6 +302,9 @@ class PlaceholderCheckingCursor:
             self.rowcount = 1
         elif normalized.startswith('INSERT INTO features') and ('LEFT JOIN LATERAL' in normalized or 'LEFT JOIN features matched' in normalized):
             self.spatial_join_parameters = parameters
+            self.rowcount = 2
+        elif normalized.startswith('WITH matches AS MATERIALIZED'):
+            self.summarize_within_parameters = parameters
             self.rowcount = 2
         elif normalized.startswith('SELECT l.*, u.username AS created_by'):
             now = datetime.now(timezone.utc)
@@ -547,6 +566,73 @@ class SpatialJoinExecutorContractTests(unittest.TestCase):
             target_layer,
             [target_feature],
         ))
+
+
+class SummarizeWithinExecutorContractTests(unittest.TestCase):
+    def test_line_summary_uses_dual_selected_scopes(self):
+        zone_layer = str(uuid4())
+        summary_layer = str(uuid4())
+        output_layer = str(uuid4())
+        user_id = str(uuid4())
+        zone_feature = str(uuid4())
+        summary_feature = str(uuid4())
+        cursor = PlaceholderCheckingCursor(
+            zone_layer,
+            summary_layer,
+            output_layer,
+            geometry_a='Polygon',
+            geometry_b='LineString',
+        )
+        parameters = validate_tool_parameters('summarize_within', {
+            'zone_layer': zone_layer,
+            'summary_layer': summary_layer,
+            'output_name': 'Roads by zone',
+        })
+        environments = normalize_environments({
+            'scope_a': 'selected',
+            'scope_b': 'selected',
+            'selected_feature_ids_a': [zone_feature],
+            'selected_feature_ids_b': [summary_feature],
+        })
+
+        result = _execute_summarize_within(
+            cursor, parameters, environments, user_id, lambda _progress, _stage: None
+        )
+
+        self.assertEqual(result['count'], 2)
+        self.assertEqual(result['metrics']['summary_geometry_family'], 'line')
+        self.assertEqual(cursor.summarize_within_parameters, (
+            summary_layer,
+            [summary_feature],
+            zone_layer,
+            [zone_feature],
+            output_layer,
+            user_id,
+        ))
+
+    def test_zone_layer_must_be_polygon(self):
+        zone_layer = str(uuid4())
+        summary_layer = str(uuid4())
+        cursor = PlaceholderCheckingCursor(
+            zone_layer,
+            summary_layer,
+            str(uuid4()),
+            geometry_a='LineString',
+            geometry_b='Point',
+        )
+        parameters = validate_tool_parameters('summarize_within', {
+            'zone_layer': zone_layer,
+            'summary_layer': summary_layer,
+            'output_name': 'Invalid zones',
+        })
+        with self.assertRaisesRegex(VectorAnalysisError, 'polygon'):
+            _execute_summarize_within(
+                cursor,
+                parameters,
+                normalize_environments({}),
+                str(uuid4()),
+                lambda _progress, _stage: None,
+            )
 
 
 if __name__ == '__main__':

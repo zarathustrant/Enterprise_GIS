@@ -182,6 +182,32 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
         migrated=True,
         keywords=('attributes', 'relationship', 'cardinality', 'match'),
     ),
+    'summarize_within': VectorToolSpec(
+        id='summarize_within',
+        version=1,
+        title='Summarize Within',
+        category='Analysis',
+        description='Summarize feature counts, measurements, groups, and attributes within polygon zones.',
+        input_geometry_families=('point', 'line', 'polygon'),
+        output_geometry_family='polygon',
+        parameters=(
+            ToolParameter('zone_layer', 'Polygon zone layer', 'layer', required=True),
+            ToolParameter('summary_layer', 'Summary feature layer', 'layer', required=True),
+            ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Summarize Within'),
+            ToolParameter('group_field', 'Optional categorical group field', 'string', default=''),
+            ToolParameter('statistics', 'Numeric summary statistics', 'statistics', default=()),
+            ToolParameter('include_empty', 'Include zones without matches', 'boolean', default=True),
+            ToolParameter(
+                'boundary_predicate',
+                'Boundary relationship',
+                'choice',
+                default='intersects',
+                choices=('intersects', 'within'),
+            ),
+        ),
+        migrated=True,
+        keywords=('zones', 'count', 'length', 'area', 'grouped summary'),
+    ),
     'within': VectorToolSpec(
         id='within',
         version=1,
@@ -355,6 +381,15 @@ def validate_tool_parameters(tool_id: str, raw: Any) -> dict[str, Any]:
             raise VectorAnalysisError('Spatial Join requires different target and join layers')
         if parameters['predicate'] == 'within_distance' and parameters['distance'] is None:
             raise VectorAnalysisError('distance is required for within_distance')
+    if tool_id == 'summarize_within':
+        if parameters['zone_layer'] == parameters['summary_layer']:
+            raise VectorAnalysisError('Summarize Within requires different zone and summary layers')
+        unsupported = [
+            statistic['statistic'] for statistic in parameters['statistics']
+            if statistic['statistic'] not in {'count', 'sum', 'minimum', 'maximum', 'mean'}
+        ]
+        if unsupported:
+            raise VectorAnalysisError('Summarize Within supports count, sum, minimum, maximum, and mean')
     return parameters
 
 
@@ -1680,6 +1715,237 @@ def _execute_spatial_join(
     }
 
 
+def _execute_summarize_within(
+    cur,
+    parameters: dict[str, Any],
+    environments: dict[str, Any],
+    created_by: str | None,
+    progress: Callable[[int, str], None],
+) -> dict[str, Any]:
+    zone_layer_id = parameters['zone_layer']
+    summary_layer_id = parameters['summary_layer']
+    cur.execute(
+        'SELECT id, name, geometry_type FROM layers WHERE id = ANY(%s::uuid[])',
+        ([zone_layer_id, summary_layer_id],),
+    )
+    layers = {str(row['id']): dict(row) for row in cur.fetchall()}
+    if zone_layer_id not in layers or summary_layer_id not in layers:
+        raise VectorAnalysisError('One or more input layers were not found')
+    if _resolve_layer_family(cur, layers[zone_layer_id]) != 'polygon':
+        raise VectorAnalysisError('Summarize Within zone layer must contain polygon geometry')
+    summary_family = _resolve_layer_family(cur, layers[summary_layer_id])
+
+    cur.execute(
+        """
+        SELECT name, alias, field_type, length, precision, scale
+        FROM layer_fields WHERE layer_id = %s::uuid
+        """,
+        (summary_layer_id,),
+    )
+    summary_fields = {row['name']: dict(row) for row in cur.fetchall()}
+    group_field = parameters['group_field']
+    if group_field and group_field not in summary_fields:
+        raise VectorAnalysisError(f'Unknown group field: {group_field}')
+    for statistic in parameters['statistics']:
+        field_name = statistic['field']
+        if statistic['statistic'] != 'count':
+            if field_name not in summary_fields:
+                raise VectorAnalysisError(f'Unknown statistic field: {field_name}')
+            if summary_fields[field_name]['field_type'] not in {'integer', 'double'}:
+                raise VectorAnalysisError(f'{statistic["statistic"]} requires a numeric field: {field_name}')
+
+    scope_zone = environments['scope_a']
+    scope_summary = environments['scope_b']
+    selected_zones = environments['selected_feature_ids_a']
+    selected_summaries = environments['selected_feature_ids_b']
+    zone_count = _count_scoped_features(cur, zone_layer_id, scope_zone, selected_zones)
+    summary_count = _count_scoped_features(cur, summary_layer_id, scope_summary, selected_summaries)
+
+    progress(15, 'Creating summary schema')
+    output_layer_id = _create_output_layer(
+        cur,
+        name=parameters['output_name'],
+        description=f'Summary of "{layers[summary_layer_id]["name"]}" within "{layers[zone_layer_id]["name"]}"',
+        geometry_type='Polygon',
+        created_by=created_by,
+        source_layer_id=zone_layer_id,
+    )
+    _inherit_layer_style(cur, output_layer_id, zone_layer_id)
+    cur.execute('SELECT name FROM layer_fields WHERE layer_id = %s::uuid', (output_layer_id,))
+    used_fields = {row['name'] for row in cur.fetchall()}
+
+    generated_fields: dict[str, str] = {}
+    generated_definitions = [
+        ('summary_count', 'Summary feature count', 'integer'),
+        ('summary_length_m', 'Length within zone (metres)', 'double'),
+        ('summary_area_sqm', 'Area within zone (square metres)', 'double'),
+        ('zone_area_sqm', 'Zone area (square metres)', 'double'),
+        ('percent_of_zone', 'Percentage of zone area', 'double'),
+        ('percent_of_source', 'Percentage of source measure', 'double'),
+    ]
+    for index, (requested_name, alias, field_type) in enumerate(generated_definitions):
+        output_name = _bounded_identifier('', requested_name, used_fields)
+        generated_fields[requested_name] = output_name
+        cur.execute(
+            """
+            INSERT INTO layer_fields (layer_id, name, alias, field_type, nullable, sort_order)
+            VALUES (%s::uuid, %s, %s, %s, TRUE, %s)
+            """,
+            (output_layer_id, output_name, alias, field_type, 100_000 + index),
+        )
+    if group_field:
+        group_output_name = _bounded_identifier('', 'summary_group', used_fields)
+        generated_fields['summary_group'] = group_output_name
+        group_definition = summary_fields[group_field]
+        cur.execute(
+            """
+            INSERT INTO layer_fields (
+                layer_id, name, alias, field_type, nullable, length, precision, scale, sort_order
+            ) VALUES (%s::uuid, %s, %s, %s, TRUE, %s, %s, %s, 100100)
+            """,
+            (
+                output_layer_id,
+                group_output_name,
+                f'Summary group: {group_definition.get("alias") or group_field}'[:128],
+                group_definition['field_type'],
+                group_definition.get('length'),
+                group_definition.get('precision'),
+                group_definition.get('scale'),
+            ),
+        )
+
+    statistic_output_names: list[str] = []
+    for index, statistic in enumerate(parameters['statistics']):
+        output_name = _bounded_identifier('', statistic['output_field'], used_fields)
+        statistic_output_names.append(output_name)
+        field_type = 'integer' if statistic['statistic'] == 'count' else 'double'
+        cur.execute(
+            """
+            INSERT INTO layer_fields (layer_id, name, alias, field_type, nullable, sort_order)
+            VALUES (%s::uuid, %s, %s, %s, TRUE, %s)
+            """,
+            (output_layer_id, output_name, statistic['output_field'], field_type, 101000 + index),
+        )
+
+    predicate = (
+        'zone.geometry && summary.geometry AND ST_Intersects(summary.geometry, zone.geometry)'
+        if parameters['boundary_predicate'] == 'intersects'
+        else 'zone.geometry && summary.geometry AND ST_Within(summary.geometry, zone.geometry)'
+    )
+    summary_scope_clause = _selected_clause('summary', scope_summary)
+    zone_scope_clause = _selected_clause('zone', scope_zone)
+    query_parameters: list[Any] = [summary_layer_id]
+    if scope_summary == 'selected':
+        query_parameters.append(selected_summaries)
+    query_parameters.append(zone_layer_id)
+    if scope_zone == 'selected':
+        query_parameters.append(selected_zones)
+
+    group_select = f", summary.properties -> '{group_field}' AS group_value" if group_field else ', NULL::jsonb AS group_value'
+    group_clause = ', group_value' if group_field else ''
+    statistic_selects: list[str] = []
+    for index, statistic in enumerate(parameters['statistics']):
+        if statistic['statistic'] == 'count':
+            expression = 'COUNT(summary_id)'
+        else:
+            function = {'sum': 'SUM', 'minimum': 'MIN', 'maximum': 'MAX', 'mean': 'AVG'}[statistic['statistic']]
+            field_name = statistic['field']
+            expression = (
+                f"{function}(CASE WHEN jsonb_typeof(summary_properties -> '{field_name}') = 'number' "
+                f"THEN (summary_properties ->> '{field_name}')::double precision END)"
+            )
+        statistic_selects.append(f'{expression} AS statistic_{index}')
+
+    property_pairs = [
+        f"'{generated_fields['summary_count']}', matched_count",
+        f"'{generated_fields['summary_length_m']}', summary_length_m",
+        f"'{generated_fields['summary_area_sqm']}', summary_area_sqm",
+        f"'{generated_fields['zone_area_sqm']}', zone_area_sqm",
+        f"'{generated_fields['percent_of_zone']}', percent_of_zone",
+        f"'{generated_fields['percent_of_source']}', percent_of_source",
+    ]
+    if group_field:
+        property_pairs.append(f"'{generated_fields['summary_group']}', group_value")
+    property_pairs.extend(
+        f"'{statistic_output_names[index]}', statistic_{index}"
+        for index in range(len(statistic_output_names))
+    )
+
+    progress(42, 'Calculating zonal summaries')
+    cur.execute(
+        f"""
+        WITH matches AS MATERIALIZED (
+            SELECT zone.id AS zone_id,
+                   zone.geometry AS zone_geometry,
+                   zone.properties AS zone_properties,
+                   summary.id AS summary_id,
+                   summary.properties AS summary_properties,
+                   CASE WHEN summary.id IS NULL THEN NULL ELSE ST_Intersection(summary.geometry, zone.geometry) END AS clipped_geometry,
+                   CASE
+                       WHEN summary.id IS NULL THEN NULL
+                       WHEN {repr(summary_family)} = 'line' THEN ST_Length(summary.geometry::geography)
+                       WHEN {repr(summary_family)} = 'polygon' THEN ST_Area(summary.geometry::geography)
+                       ELSE 1
+                   END AS source_measure
+                   {group_select}
+            FROM features zone
+            LEFT JOIN features summary
+              ON summary.layer_id = %s::uuid
+             AND {predicate}
+             {summary_scope_clause}
+            WHERE zone.layer_id = %s::uuid
+              {zone_scope_clause}
+              {'AND summary.id IS NOT NULL' if not parameters['include_empty'] else ''}
+        ), grouped AS MATERIALIZED (
+            SELECT zone_id,
+                   zone_geometry,
+                   zone_properties,
+                   group_value,
+                   COUNT(summary_id)::integer AS matched_count,
+                   SUM(CASE WHEN {repr(summary_family)} = 'line' THEN ST_Length(clipped_geometry::geography) ELSE 0 END) AS summary_length_m,
+                   SUM(CASE WHEN {repr(summary_family)} = 'polygon' THEN ST_Area(clipped_geometry::geography) ELSE 0 END) AS summary_area_sqm,
+                   ST_Area(zone_geometry::geography) AS zone_area_sqm,
+                   CASE WHEN {repr(summary_family)} = 'polygon' THEN
+                       100 * SUM(ST_Area(clipped_geometry::geography)) / NULLIF(ST_Area(zone_geometry::geography), 0)
+                   END AS percent_of_zone,
+                   CASE WHEN {repr(summary_family)} IN ('line', 'polygon') THEN
+                       100 * SUM(CASE WHEN {repr(summary_family)} = 'line' THEN ST_Length(clipped_geometry::geography) ELSE ST_Area(clipped_geometry::geography) END)
+                       / NULLIF(SUM(source_measure), 0)
+                   END AS percent_of_source
+                   {',' if statistic_selects else ''} {', '.join(statistic_selects)}
+            FROM matches
+            GROUP BY zone_id, zone_geometry, zone_properties{group_clause}
+        )
+        INSERT INTO features (layer_id, geometry, properties, created_by)
+        SELECT %s::uuid,
+               zone_geometry,
+               zone_properties || jsonb_build_object({', '.join(property_pairs)}),
+               %s::uuid
+        FROM grouped
+        """,
+        tuple(query_parameters + [output_layer_id, created_by]),
+    )
+    feature_count = cur.rowcount
+    progress(80, 'Recording output provenance')
+    _record_output_history(cur, output_layer_id, created_by)
+    warnings = [] if feature_count else ['The operation produced an empty output layer.']
+    progress(92, 'Finalizing output')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id),
+        'count': feature_count,
+        'output_layer_ids': [output_layer_id],
+        'warnings': warnings,
+        'metrics': {
+            'zone_feature_count': zone_count,
+            'summary_feature_count': summary_count,
+            'output_row_count': feature_count,
+            'summary_geometry_family': summary_family,
+            'boundary_predicate': parameters['boundary_predicate'],
+            'include_empty': parameters['include_empty'],
+        },
+    }
+
+
 EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     'buffer': _execute_buffer,
     'intersect': _execute_intersect,
@@ -1687,6 +1953,7 @@ EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     'erase': _execute_erase,
     'dissolve': _execute_dissolve,
     'spatial_join': _execute_spatial_join,
+    'summarize_within': _execute_summarize_within,
 }
 
 

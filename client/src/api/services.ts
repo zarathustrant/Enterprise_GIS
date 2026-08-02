@@ -309,6 +309,19 @@ export interface AnalysisSpatialJoinPayload {
   environments?: AnalysisEnvironments
 }
 
+export interface AnalysisSummarizeWithinPayload {
+  zone_layer: string
+  summary_layer: string
+  output_name: string
+  group_field?: string
+  statistics?: AnalysisStatistic[]
+  include_empty?: boolean
+  boundary_predicate?: 'intersects' | 'within'
+  async?: boolean
+  execution_mode?: 'automatic' | 'synchronous' | 'asynchronous'
+  environments?: AnalysisEnvironments
+}
+
 export interface AnalysisWithinPayload {
   layer_id: string
   polygon: Geometry
@@ -330,7 +343,7 @@ export interface CreateViewPayload {
 }
 
 export interface CreateJobPayload {
-  job_type: 'analysis.buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.dissolve' | 'analysis.spatial_join' | 'analysis.within'
+  job_type: 'analysis.buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.dissolve' | 'analysis.spatial_join' | 'analysis.summarize_within' | 'analysis.within'
   payload: Record<string, unknown>
 }
 
@@ -1237,6 +1250,20 @@ export function runSpatialJoinAnalysis(
 ): Promise<AnalysisLayerResponse> {
   return apiRequest<AnalysisLayerResponse>(
     '/analysis/spatial-join',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token,
+  )
+}
+
+export function runSummarizeWithinAnalysis(
+  payload: AnalysisSummarizeWithinPayload,
+  token: string,
+): Promise<AnalysisLayerResponse> {
+  return apiRequest<AnalysisLayerResponse>(
+    '/analysis/summarize-within',
     {
       method: 'POST',
       body: JSON.stringify(payload),

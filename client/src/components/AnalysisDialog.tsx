@@ -26,7 +26,7 @@ import { fetchLayerFields } from '../api/services'
 import { useAuthStore } from '../store/auth'
 import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 
-export type AnalysisTab = 'buffer' | 'intersect' | 'clip' | 'erase' | 'dissolve' | 'spatial_join' | 'within'
+export type AnalysisTab = 'buffer' | 'intersect' | 'clip' | 'erase' | 'dissolve' | 'spatial_join' | 'summarize_within' | 'within'
 export type AnalysisJobStatus = 'queued' | 'running' | 'success' | 'error'
 
 export interface AnalysisJobState {
@@ -74,6 +74,15 @@ interface AnalysisDialogProps {
     targetPrefix: string
     joinPrefix: string
   }) => void
+  onRunSummarizeWithin: (payload: {
+    zoneLayer: string
+    summaryLayer: string
+    outputName: string
+    groupField: string
+    statistics: AnalysisStatistic[]
+    includeEmpty: boolean
+    boundaryPredicate: 'intersects' | 'within'
+  }) => void
   onRunWithin: (payload: { layerId: string; polygon: string }) => void
 }
 
@@ -92,6 +101,7 @@ export function AnalysisDialog({
   onRunErase,
   onRunDissolve,
   onRunSpatialJoin,
+  onRunSummarizeWithin,
   onRunWithin,
 }: AnalysisDialogProps) {
   const [tab, setTab] = useState<AnalysisTab>('buffer')
@@ -132,6 +142,16 @@ export function AnalysisDialog({
   const [spatialJoinTargetPrefix, setSpatialJoinTargetPrefix] = useState('target_')
   const [spatialJoinFieldPrefix, setSpatialJoinFieldPrefix] = useState('join_')
 
+  const [summaryZoneLayer, setSummaryZoneLayer] = useState('')
+  const [summaryFeatureLayer, setSummaryFeatureLayer] = useState('')
+  const [summaryOutputName, setSummaryOutputName] = useState('Summarize Within')
+  const [summaryGroupField, setSummaryGroupField] = useState('')
+  const [summaryStatistics, setSummaryStatistics] = useState<AnalysisStatistic[]>([])
+  const [summaryStatisticField, setSummaryStatisticField] = useState('')
+  const [summaryStatisticType, setSummaryStatisticType] = useState<'sum' | 'minimum' | 'maximum' | 'mean'>('sum')
+  const [summaryIncludeEmpty, setSummaryIncludeEmpty] = useState(true)
+  const [summaryBoundaryPredicate, setSummaryBoundaryPredicate] = useState<'intersects' | 'within'>('intersects')
+
   const [withinLayerId, setWithinLayerId] = useState('')
   const [withinPolygon, setWithinPolygon] = useState(
     '{\n  "type": "Polygon",\n  "coordinates": [[[5.58,6.29],[5.62,6.29],[5.62,6.31],[5.58,6.31],[5.58,6.29]]]\n}',
@@ -160,6 +180,13 @@ export function AnalysisDialog({
       ? ['sum', 'minimum', 'maximum', 'mean', 'first', 'last']
       : ['first', 'last']
     : ['count']
+  const summaryFieldsQuery = useQuery({
+    queryKey: ['analysis-summary-fields', summaryFeatureLayer],
+    queryFn: () => fetchLayerFields(summaryFeatureLayer, token as string),
+    enabled: Boolean(open && token && summaryFeatureLayer),
+  })
+  const availableSummaryFields = summaryFieldsQuery.data ?? []
+  const numericSummaryFields = availableSummaryFields.filter((field) => field.field_type === 'integer' || field.field_type === 'double')
 
   const renderMaskOverlayForm = (operation: 'clip' | 'erase') => (
     <Box display="grid" gap={2}>
@@ -255,6 +282,7 @@ export function AnalysisDialog({
           <Tab value="erase" label="Erase" />
           <Tab value="dissolve" label="Dissolve" />
           <Tab value="spatial_join" label="Spatial Join" />
+          <Tab value="summarize_within" label="Summarize Within" />
           <Tab value="within" label="Within" />
         </Tabs>
 
@@ -588,6 +616,78 @@ export function AnalysisDialog({
             >
               Run Spatial Join
             </Button>
+          </Box>
+        )}
+
+        {tab === 'summarize_within' && (
+          <Box display="grid" gap={2}>
+            <TextField label="Polygon zone layer" value={summaryZoneLayer} onChange={(event) => setSummaryZoneLayer(event.target.value)} size="small" select>
+              {polygonLayerOptions.map((item) => <MenuItem key={item.value} value={item.value}>{item.label}</MenuItem>)}
+            </TextField>
+            <TextField
+              label="Features to summarize"
+              value={summaryFeatureLayer}
+              onChange={(event) => {
+                setSummaryFeatureLayer(event.target.value)
+                setSummaryGroupField('')
+                setSummaryStatistics([])
+                setSummaryStatisticField('')
+              }}
+              size="small"
+              select
+            >
+              {layerOptions.map((item) => <MenuItem key={item.value} value={item.value} disabled={item.value === summaryZoneLayer}>{item.label}</MenuItem>)}
+            </TextField>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField label="Boundary relationship" value={summaryBoundaryPredicate} onChange={(event) => setSummaryBoundaryPredicate(event.target.value as 'intersects' | 'within')} size="small" select>
+                <MenuItem value="intersects">Intersects zone</MenuItem>
+                <MenuItem value="within">Completely within zone</MenuItem>
+              </TextField>
+              <TextField label="Group summaries by" value={summaryGroupField} onChange={(event) => setSummaryGroupField(event.target.value)} size="small" select disabled={!summaryFeatureLayer}>
+                <MenuItem value="">No categorical grouping</MenuItem>
+                {availableSummaryFields.map((field) => <MenuItem key={field.id} value={field.name}>{field.alias || field.name}</MenuItem>)}
+              </TextField>
+            </Box>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: 1 }}>
+              <TextField label="Numeric field" value={summaryStatisticField} onChange={(event) => setSummaryStatisticField(event.target.value)} size="small" select>
+                {numericSummaryFields.map((field) => <MenuItem key={field.id} value={field.name}>{field.alias || field.name}</MenuItem>)}
+              </TextField>
+              <TextField label="Statistic" value={summaryStatisticType} onChange={(event) => setSummaryStatisticType(event.target.value as typeof summaryStatisticType)} size="small" select>
+                {['sum', 'minimum', 'maximum', 'mean'].map((statistic) => <MenuItem key={statistic} value={statistic}>{statistic}</MenuItem>)}
+              </TextField>
+              <Button
+                variant="outlined"
+                disabled={!summaryStatisticField}
+                onClick={() => {
+                  const next: AnalysisStatistic = { field: summaryStatisticField, statistic: summaryStatisticType }
+                  if (!summaryStatistics.some((item) => item.field === next.field && item.statistic === next.statistic)) {
+                    setSummaryStatistics((current) => [...current, next])
+                  }
+                }}
+              >Add</Button>
+            </Box>
+            {summaryStatistics.length > 0 && (
+              <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.75 }}>
+                {summaryStatistics.map((statistic, index) => (
+                  <Chip key={`${statistic.field}-${statistic.statistic}`} label={`${statistic.statistic}: ${statistic.field}`} onDelete={() => setSummaryStatistics((current) => current.filter((_, itemIndex) => itemIndex !== index))} />
+                ))}
+              </Box>
+            )}
+            <FormControlLabel control={<Switch checked={summaryIncludeEmpty} onChange={(event) => setSummaryIncludeEmpty(event.target.checked)} />} label="Include zones without matching features" />
+            <TextField label="Output layer name" value={summaryOutputName} onChange={(event) => setSummaryOutputName(event.target.value)} size="small" />
+            <Button
+              variant="contained"
+              disabled={running || !summaryZoneLayer || !summaryFeatureLayer || summaryZoneLayer === summaryFeatureLayer}
+              onClick={() => onRunSummarizeWithin({
+                zoneLayer: summaryZoneLayer,
+                summaryLayer: summaryFeatureLayer,
+                outputName: summaryOutputName || 'Summarize Within',
+                groupField: summaryGroupField,
+                statistics: summaryStatistics,
+                includeEmpty: summaryIncludeEmpty,
+                boundaryPredicate: summaryBoundaryPredicate,
+              })}
+            >Run Summarize Within</Button>
           </Box>
         )}
 

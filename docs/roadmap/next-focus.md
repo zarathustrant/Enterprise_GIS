@@ -265,6 +265,15 @@ Exit gate:
 
 ## Phase 5: Summarize Within
 
+Implementation status:
+
+- point counts, geodesic line lengths, and geodesic polygon areas complete
+- intersects and completely-within boundary policies complete
+- categorical grouping and numeric sum/minimum/maximum/mean statistics complete
+- empty-zone retention, zone/source percentages, schema/style preservation, and selected scopes complete
+- shared sync/worker execution, schema-aware visual controls, metrics, and provenance complete
+- overlapping-zone and multipart database fixtures plus richer grouped summary tables remain
+
 Capabilities:
 
 - count points, lines, or polygons within polygon zones

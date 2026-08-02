@@ -132,6 +132,7 @@ import {
   runEraseAnalysis,
   runIntersectAnalysis,
   runSpatialJoinAnalysis,
+  runSummarizeWithinAnalysis,
   runWithinAnalysis,
   sendTelemetry,
   submitEditSession,
@@ -2561,6 +2562,44 @@ export default function App() {
     },
   })
 
+  const summarizeWithinMutation = useMutation({
+    mutationFn: async (payload: {
+      zoneLayer: string
+      summaryLayer: string
+      outputName: string
+      groupField: string
+      statistics: AnalysisStatistic[]
+      includeEmpty: boolean
+      boundaryPredicate: 'intersects' | 'within'
+    }) => {
+      if (!token) throw new Error('Sign in to run Summarize Within.')
+      return runSummarizeWithinAnalysis({
+        zone_layer: payload.zoneLayer,
+        summary_layer: payload.summaryLayer,
+        output_name: payload.outputName,
+        group_field: payload.groupField,
+        statistics: payload.statistics,
+        include_empty: payload.includeEmpty,
+        boundary_predicate: payload.boundaryPredicate,
+      }, token)
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['layer-features'] })
+      setAnalysisError(null)
+      setAnalysisOverlay(null)
+      setWithinCount(null)
+      const warningText = result.warnings?.length ? ` ${result.warnings.join(' ')}` : ''
+      completeAnalysisJob(`Summarize Within complete (${result.count} rows).${warningText}`)
+      notify(`Summarize Within complete (${result.count} rows).${warningText}`, result.warnings?.length ? 'warning' : 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Summarize Within failed'
+      setAnalysisError(message)
+      failAnalysisJob(message)
+    },
+  })
+
   const withinMutation = useMutation({
     mutationFn: async (payload: { layerId: string; polygonText: string }) => {
       const polygon = JSON.parse(payload.polygonText) as Geometry
@@ -2586,6 +2625,7 @@ export default function App() {
     || eraseMutation.isPending
     || dissolveMutation.isPending
     || spatialJoinMutation.isPending
+    || summarizeWithinMutation.isPending
     || withinMutation.isPending
 
   const handleAuthenticated = (response: AuthResponse) => {
@@ -4760,6 +4800,11 @@ export default function App() {
             setAnalysisError(null)
             startAnalysisJob('spatial_join')
             spatialJoinMutation.mutate(payload)
+          }}
+          onRunSummarizeWithin={(payload) => {
+            setAnalysisError(null)
+            startAnalysisJob('summarize_within')
+            summarizeWithinMutation.mutate(payload)
           }}
           onRunWithin={(payload) => {
             setAnalysisError(null)
