@@ -3,6 +3,7 @@ from flask import Blueprint, request, jsonify, Response
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from db import get_db
 from enterprise_utils import invalidate_layer_tile_cache, log_audit
+from style_validation import StyleValidationError, validate_layer_style
 
 layers_bp = Blueprint('layers', __name__)
 
@@ -145,6 +146,10 @@ def create_layer():
     name = data.get('name', '').strip()
     if not name:
         return jsonify({'error': 'name is required'}), 400
+    try:
+        validate_layer_style(data.get('style', {}))
+    except StyleValidationError as exc:
+        return jsonify({'error': 'Invalid layer style', 'details': exc.errors}), 400
 
     db = get_db()
     cur = db.cursor()
@@ -279,6 +284,10 @@ def update_layer(layer_id):
             fields.append(f"{f} = %s")
             values.append(data[f])
     if 'style' in data:
+        try:
+            validate_layer_style(data['style'])
+        except StyleValidationError as exc:
+            return jsonify({'error': 'Invalid layer style', 'details': exc.errors}), 400
         fields.append("style = %s")
         values.append(json.dumps(data['style']))
     if 'metadata' in data:

@@ -6,6 +6,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required
 
 from db import get_db
 from enterprise_utils import log_audit
+from style_validation import StyleValidationError, validate_layer_style
 
 
 catalog_bp = Blueprint('catalog', __name__)
@@ -453,6 +454,11 @@ def update_map_layer(map_id, map_layer_id):
     if not _fetch_map(cur, map_id, user_id, owner_only=True):
         return jsonify({'error': 'Map not found or permission denied'}), 404
     assignments, values = [], []
+    if 'style_override' in data and data['style_override'] is not None:
+        try:
+            validate_layer_style(data['style_override'])
+        except StyleValidationError as exc:
+            return jsonify({'error': 'Invalid layer style', 'details': exc.errors}), 400
     for field in ('title', 'draw_order', 'visible', 'min_zoom', 'max_zoom', 'opacity', 'selection_enabled'):
         if field in data:
             assignments.append(f'{field} = %s')

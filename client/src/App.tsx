@@ -1285,13 +1285,16 @@ export default function App() {
     return (activeMap.layers ?? [])
       .filter((item) => item.layer_kind === 'feature' && item.source_layer_id)
       .sort((a, b) => b.draw_order - a.draw_order)
-      .map((item) => {
+      .map<Layer | null>((item) => {
         const source = sourceById.get(item.source_layer_id as string)
         if (!source) return null
         return {
           ...source,
           name: item.title,
-          style: item.effective_style ?? source.style,
+          style: {
+            ...(item.effective_style ?? source.style),
+            layerOpacity: item.opacity,
+          } as Record<string, unknown>,
           min_zoom: item.min_zoom,
           max_zoom: item.max_zoom,
         }
@@ -4511,6 +4514,7 @@ export default function App() {
                     <span>
                       <IconButton
                         size="small"
+                        aria-label={`Edit ${layer.name}`}
                         color={activeEditLayerId === layer.id ? 'primary' : 'default'}
                         onClick={() => {
                           if (!isOwner) {
@@ -4551,7 +4555,12 @@ export default function App() {
 
                   <Tooltip title={isOwner ? 'Style layer' : 'Only owner can edit style'}>
                     <span>
-                      <IconButton size="small" onClick={() => handleOpenStyle(layer)} disabled={!isOwner || styleMutation.isPending}>
+                      <IconButton
+                        size="small"
+                        aria-label={`Style ${layer.name}`}
+                        onClick={() => handleOpenStyle(layer)}
+                        disabled={!isOwner || styleMutation.isPending}
+                      >
                         <PaletteIcon fontSize="small" />
                       </IconButton>
                     </span>

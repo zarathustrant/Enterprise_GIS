@@ -50,9 +50,7 @@ test('polygon editing tools enforce geometry and update cursor by advanced mode'
   expect(layer).toBeTruthy()
   const layerId = layer?.id as string
 
-  const ownerLayerItem = page.getByRole('listitem').filter({ hasText: layerName }).first()
-  const ownerLayerActions = ownerLayerItem.locator('xpath=following-sibling::*[1]')
-  await ownerLayerActions.getByRole('button').first().click()
+  await page.getByRole('button', { name: `Edit ${layerName}` }).click()
 
   await expect(page.getByRole('heading', { name: 'Editing Workbench' })).toBeVisible()
   await expect(page.getByRole('button', { name: /Point tool/i })).toHaveCount(0)

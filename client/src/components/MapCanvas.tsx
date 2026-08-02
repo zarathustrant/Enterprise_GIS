@@ -8,7 +8,7 @@ import maplibregl from 'maplibre-gl'
 import MapboxDraw from '@mapbox/mapbox-gl-draw'
 import { GeoJsonLayer, IconLayer, TextLayer } from '@deck.gl/layers'
 import { MapboxOverlay } from '@deck.gl/mapbox'
-import { CollisionFilterExtension, FillStyleExtension, PathStyleExtension } from '@deck.gl/extensions'
+import { FillStyleExtension, PathStyleExtension } from '@deck.gl/extensions'
 import type { Feature as GeoJsonFeature, FeatureCollection as GeoJsonFeatureCollection, Geometry } from 'geojson'
 import type { FeatureCollection, Layer, LayerIconLibrary, PolygonPatternLibrary } from '../types/gis'
 import { iconifySvgUrl, resolveIconId } from '../utils/iconLibrary'
@@ -310,7 +310,7 @@ function clampOpacity(value: unknown, fallback = 0.8): number {
   if (typeof value !== 'number' || Number.isNaN(value)) {
     return fallback
   }
-  return Math.max(0.05, Math.min(1, value))
+  return Math.max(0, Math.min(1, value))
 }
 
 function asNumber(value: unknown, fallback: number): number {
@@ -395,7 +395,9 @@ function mixNumber(a: number, b: number, t: number): number {
   return a + (b - a) * t
 }
 
-function evaluateExpression(expression: unknown, feature: unknown): unknown {
+// Exported for deterministic cartography regression tests.
+// eslint-disable-next-line react-refresh/only-export-components
+export function evaluateExpression(expression: unknown, feature: unknown): unknown {
   if (!Array.isArray(expression)) {
     return expression
   }
@@ -854,7 +856,8 @@ function drawControlsForGeometryFamily(family: GeometryFamily): {
   return { point: true, line_string: true, polygon: true, trash: true }
 }
 
-function resolveLayerStyle(layer: Layer, index: number, mapZoom: number): LayerStyleEvaluator {
+// eslint-disable-next-line react-refresh/only-export-components
+export function resolveLayerStyle(layer: Layer, index: number, mapZoom: number): LayerStyleEvaluator {
   const fallbackColor = palette[index % palette.length]
   const baseStyle = (layer.style ?? {}) as Record<string, unknown>
   const matchingScaleOverrides = (Array.isArray(baseStyle.scaleOverrides) ? baseStyle.scaleOverrides : [])
@@ -875,11 +878,12 @@ function resolveLayerStyle(layer: Layer, index: number, mapZoom: number): LayerS
     : 'simple'
 
   const baseColorHex = asHexColor(style.color, fallbackColor)
+  const layerOpacity = clampOpacity(style.layerOpacity, 1)
   const baseOpacity = clampOpacity(style.opacity, 0.8)
   const strokeColorHex = asHexColor(style.strokeColor, baseColorHex)
   const lineWidth = Math.max(1, asNumber(style.strokeWidth, 2))
   const lineCasingEnabled = style.lineCasingEnabled === true
-  const lineCasingColor = withAlpha(hexToRgb(asHexColor(style.lineCasingColor, '#ffffff')), 1)
+  const lineCasingColor = withAlpha(hexToRgb(asHexColor(style.lineCasingColor, '#ffffff')), layerOpacity)
   const lineCasingWidth = Math.max(0, asNumber(style.lineCasingWidth, 2))
   const lineSymbolLayers = (Array.isArray(style.lineSymbolLayers) ? style.lineSymbolLayers : [])
     .map((item, index) => {
@@ -892,7 +896,7 @@ function resolveLayerStyle(layer: Layer, index: number, mapZoom: number): LayerS
         id: typeof symbol.id === 'string' ? symbol.id : `line-symbol-${index + 1}`,
         color: withAlpha(
           hexToRgb(asHexColor(symbol.color, strokeColorHex)),
-          clampOpacity(symbol.opacity, 1),
+          clampOpacity(symbol.opacity, 1) * layerOpacity,
         ),
         width: Math.max(0.5, asNumber(symbol.width, lineWidth)),
         dashArray: [
@@ -967,7 +971,7 @@ function resolveLayerStyle(layer: Layer, index: number, mapZoom: number): LayerS
   )
   const polygonPatternScale = Math.max(0.25, Math.min(6, asNumber(style.polygonPatternScale, 1)))
   const polygonPatternColorHex = asHexColor(style.polygonPatternColor, strokeColorHex)
-  const polygonPatternOpacity = Math.max(0, Math.min(1, asNumber(style.polygonPatternOpacity, 0.65)))
+  const polygonPatternOpacity = Math.max(0, Math.min(1, asNumber(style.polygonPatternOpacity, 0.65))) * layerOpacity
   const fillColorExpression = parseExpression(style.fillColorExpression)
   const lineColorExpression = parseExpression(style.lineColorExpression)
   const pointRadiusExpression = parseExpression(style.pointRadiusExpression)
@@ -1011,25 +1015,25 @@ function resolveLayerStyle(layer: Layer, index: number, mapZoom: number): LayerS
         color: withAlpha(hexToRgb(asHexColor(rule.color, '#1b1f24')), 1),
         size: Math.max(8, asNumber(rule.size, labelSize)),
         minZoom: Math.max(0, asNumber(rule.minZoom, 0)),
-        maxZoom: Math.min(24, asNumber(rule.maxZoom, 24)),
+        maxZoom: Math.max(
+          Math.max(0, asNumber(rule.minZoom, 0)),
+          Math.min(24, asNumber(rule.maxZoom, 24)),
+        ),
         priority: asNumber(rule.priority, 0),
       }
     })
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
 
   const getActiveLabelClass = (feature: GeoJsonFeature) => {
-    let matched: typeof labelClasses[number] | null = null
-    for (const rule of labelClasses) {
-      if (mapZoom < rule.minZoom || mapZoom > rule.maxZoom) {
-        continue
-      }
-      const filterMatches = !rule.filterField
-        || String(featureProperty(feature, rule.filterField) ?? '') === rule.filterValue
-      if (filterMatches) {
-        matched = rule
-      }
-    }
-    return matched
+    return labelClasses
+      .filter((rule) => {
+        if (mapZoom < rule.minZoom || mapZoom > rule.maxZoom) {
+          return false
+        }
+        return !rule.filterField
+          || String(featureProperty(feature, rule.filterField) ?? '') === rule.filterValue
+      })
+      .sort((a, b) => b.priority - a.priority)[0] ?? null
   }
 
   const baseRgb = hexToRgb(baseColorHex)
@@ -1050,7 +1054,7 @@ function resolveLayerStyle(layer: Layer, index: number, mapZoom: number): LayerS
         opacity = fromExpression
       }
     }
-    return clampOpacity(opacity, baseOpacity)
+    return clampOpacity(opacity, baseOpacity) * layerOpacity
   }
 
   const resolvedPointRadius = (feature: unknown): number => {
@@ -1100,11 +1104,16 @@ function resolveLayerStyle(layer: Layer, index: number, mapZoom: number): LayerS
         const lines: string[] = []
         let line = ''
         for (const word of words) {
-          if (line && `${line} ${word}`.length > labelWrapLength) {
-            lines.push(line)
-            line = word
-          } else {
-            line = line ? `${line} ${word}` : word
+          const chunks = word.length > labelWrapLength
+            ? word.match(new RegExp(`.{1,${labelWrapLength}}`, 'g')) ?? [word]
+            : [word]
+          for (const chunk of chunks) {
+            if (line && `${line} ${chunk}`.length > labelWrapLength) {
+              lines.push(line)
+              line = chunk
+            } else {
+              line = line ? `${line} ${chunk}` : chunk
+            }
           }
         }
         if (line) {
@@ -1140,6 +1149,8 @@ function resolveLayerStyle(layer: Layer, index: number, mapZoom: number): LayerS
     return (Number.isFinite(value) ? value : 0) + classPriority
   }
 
+  const geometryFamily = geometryFamilyFromType(layer.geometry_type)
+
   const buildEvaluator = (getBaseSymbol: (feature: unknown) => { color: RgbColor; opacity: number }): LayerStyleEvaluator => ({
     getFillColor: (feature) => {
       const baseSymbol = getBaseSymbol(feature)
@@ -1147,8 +1158,11 @@ function resolveLayerStyle(layer: Layer, index: number, mapZoom: number): LayerS
       return resolveColorExpression(feature, fillColorExpression, baseSymbol.color, opacity)
     },
     getLineColor: (feature) => {
-      const opacity = resolvedOpacity(feature, baseOpacity)
-      return resolveColorExpression(feature, lineColorExpression, strokeRgb, opacity)
+      const baseSymbol = getBaseSymbol(feature)
+      const fallbackColor = geometryFamily === 'line' ? baseSymbol.color : strokeRgb
+      const fallbackOpacity = geometryFamily === 'line' ? baseSymbol.opacity : baseOpacity
+      const opacity = resolvedOpacity(feature, fallbackOpacity)
+      return resolveColorExpression(feature, lineColorExpression, fallbackColor, opacity)
     },
     getPointColor: (feature) => {
       const baseSymbol = getBaseSymbol(feature)
@@ -1387,7 +1401,8 @@ function polygonRingArea(ring: Position[]): number {
   return area / 2
 }
 
-function polygonMarkerPosition(geometry: Geometry, placement: 'centroid' | 'interior'): [number, number] | null {
+// eslint-disable-next-line react-refresh/only-export-components
+export function polygonMarkerPosition(geometry: Geometry, placement: 'centroid' | 'interior'): [number, number] | null {
   const polygons = geometry.type === 'Polygon'
     ? [geometry.coordinates.map((ring) => toPositionArray(ring))]
     : geometry.type === 'MultiPolygon'
@@ -1455,7 +1470,40 @@ function polygonLabelFits(
   return estimatedWidth <= availableWidth && estimatedHeight <= availableHeight
 }
 
-function labelPosition(feature: GeoJsonFeature): [number, number] | null {
+function lineMidpointByLength(lines: Position[][]): [number, number] | null {
+  const candidates = lines
+    .filter((line) => line.length >= 2)
+    .map((line) => ({
+      line,
+      lengths: line.slice(1).map((point, index) => markerSegmentDistanceMeters(line[index], point)),
+    }))
+    .map((item) => ({ ...item, total: item.lengths.reduce((sum, length) => sum + length, 0) }))
+    .sort((a, b) => b.total - a.total)
+  const candidate = candidates[0]
+  if (!candidate || candidate.total <= 0) {
+    return null
+  }
+  const target = candidate.total / 2
+  let traversed = 0
+  for (let index = 0; index < candidate.lengths.length; index += 1) {
+    const segmentLength = candidate.lengths[index]
+    if (traversed + segmentLength >= target) {
+      const ratio = (target - traversed) / segmentLength
+      const start = candidate.line[index]
+      const end = candidate.line[index + 1]
+      return [
+        start[0] + (end[0] - start[0]) * ratio,
+        start[1] + (end[1] - start[1]) * ratio,
+      ]
+    }
+    traversed += segmentLength
+  }
+  const last = candidate.line[candidate.line.length - 1]
+  return [last[0], last[1]]
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function labelPosition(feature: GeoJsonFeature): [number, number] | null {
   const geometry = feature.geometry
   if (!geometry) {
     return null
@@ -1469,15 +1517,12 @@ function labelPosition(feature: GeoJsonFeature): [number, number] | null {
     return [geometry.coordinates[0][0], geometry.coordinates[0][1]]
   }
 
-  if (geometry.type === 'LineString' && geometry.coordinates[0]) {
-    const mid = geometry.coordinates[Math.floor(geometry.coordinates.length / 2)]
-    return [mid[0], mid[1]]
+  if (geometry.type === 'LineString') {
+    return lineMidpointByLength([toPositionArray(geometry.coordinates)])
   }
 
-  if (geometry.type === 'MultiLineString' && geometry.coordinates[0]?.length) {
-    const line = geometry.coordinates[0]
-    const mid = line[Math.floor(line.length / 2)]
-    return [mid[0], mid[1]]
+  if (geometry.type === 'MultiLineString') {
+    return lineMidpointByLength(geometry.coordinates.map((line) => toPositionArray(line)))
   }
 
   if (geometry.type === 'Polygon' || geometry.type === 'MultiPolygon') {
@@ -1487,6 +1532,57 @@ function labelPosition(feature: GeoJsonFeature): [number, number] | null {
   }
 
   return null
+}
+
+interface LabelCollisionCandidate {
+  text: string
+  position: [number, number]
+  size: number
+  angle: number
+  priority: number
+  collisionEnabled: boolean
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function filterLabelCollisions<T extends LabelCollisionCandidate>(
+  candidates: T[],
+  project: (position: [number, number]) => { x: number; y: number } | null,
+): T[] {
+  const occupied: Array<{ left: number; right: number; top: number; bottom: number }> = []
+  const accepted: T[] = []
+  const ordered = candidates
+    .map((candidate, index) => ({ candidate, index }))
+    .sort((a, b) => b.candidate.priority - a.candidate.priority || a.index - b.index)
+
+  for (const { candidate } of ordered) {
+    if (!candidate.collisionEnabled) {
+      accepted.push(candidate)
+      continue
+    }
+    const screen = project(candidate.position)
+    if (!screen) continue
+    const lines = candidate.text.split('\n')
+    const textWidth = Math.max(...lines.map((line) => line.length), 1) * candidate.size * 0.62
+    const textHeight = Math.max(lines.length, 1) * candidate.size * 1.2
+    const radians = Math.abs(candidate.angle) * Math.PI / 180
+    const width = Math.abs(textWidth * Math.cos(radians)) + Math.abs(textHeight * Math.sin(radians)) + 6
+    const height = Math.abs(textWidth * Math.sin(radians)) + Math.abs(textHeight * Math.cos(radians)) + 6
+    const bounds = {
+      left: screen.x - width / 2,
+      right: screen.x + width / 2,
+      top: screen.y - height / 2,
+      bottom: screen.y + height / 2,
+    }
+    const overlaps = occupied.some((other) => (
+      bounds.left < other.right && bounds.right > other.left
+      && bounds.top < other.bottom && bounds.bottom > other.top
+    ))
+    if (!overlaps) {
+      accepted.push(candidate)
+      occupied.push(bounds)
+    }
+  }
+  return accepted
 }
 
 function fitCollectionBounds(map: maplibregl.Map, collection: GeoJsonFeatureCollection | null | undefined): boolean {
@@ -2522,6 +2618,7 @@ export function MapCanvas({
   const syncingDrawRef = useRef(false)
   const [mapInitError, setMapInitError] = useState<string | null>(null)
   const [mapZoom, setMapZoom] = useState(12)
+  const [labelLayoutRevision, setLabelLayoutRevision] = useState(0)
   const [cursor, setCursor] = useState('default')
   const [drawMode, setDrawMode] = useState('simple_select')
   const [snapTemporarilyDisabled, setSnapTemporarilyDisabled] = useState(false)
@@ -3563,12 +3660,17 @@ export function MapCanvas({
 
   const deckLayers = useMemo(() => {
     const builtLayers: Array<GeoJsonLayer | IconLayer | TextLayer> = []
+    const labelCandidates: Array<LabelCollisionCandidate & {
+      color: RgbaColor
+      haloColor: RgbaColor
+      haloWidth: number
+      textAnchor: 'start' | 'middle' | 'end'
+      alignmentBaseline: 'top' | 'center' | 'bottom'
+    }> = []
 
     const pushLabelLayer = (
-      layer: Layer,
       data: GeoJsonFeatureCollection,
       evaluator: LayerStyleEvaluator,
-      idSuffix = '',
     ) => {
       if (mapZoom < evaluator.labelMinZoom || mapZoom > evaluator.labelMaxZoom) {
         return
@@ -3584,6 +3686,11 @@ export function MapCanvas({
             priority: evaluator.getLabelPriority(feature),
             color: evaluator.getLabelColor(feature),
             size: evaluator.getLabelSize(feature),
+            collisionEnabled: evaluator.labelCollisionEnabled,
+            haloColor: evaluator.labelHaloColor,
+            haloWidth: evaluator.labelHaloWidth,
+            textAnchor: evaluator.labelTextAnchor,
+            alignmentBaseline: evaluator.labelAlignmentBaseline,
           }
           if (
             evaluator.labelPolygonFitEnabled &&
@@ -3611,10 +3718,21 @@ export function MapCanvas({
         .slice(0, evaluator.labelMaxCount)
 
       if (!labelData.length) return
+      labelCandidates.push(...labelData)
+    }
 
+    const pushAcceptedLabels = () => {
+      if (!labelCandidates.length) return
+      const map = mapRef.current
+      const accepted = filterLabelCollisions(labelCandidates, (position) => {
+        if (!map) return { x: position[0], y: position[1] }
+        const point = map.project(position)
+        return { x: point.x, y: point.y }
+      })
+      if (!accepted.length) return
       builtLayers.push(new TextLayer({
-        id: `layer-label-${layer.id}${idSuffix}`,
-        data: labelData,
+        id: 'map-feature-labels',
+        data: accepted,
         pickable: false,
         billboard: true,
         getPosition: (d) => d.position,
@@ -3622,16 +3740,13 @@ export function MapCanvas({
         getColor: (d) => d.color,
         getSize: (d) => d.size,
         getAngle: (d) => d.angle,
-        getTextAnchor: evaluator.labelTextAnchor,
-        getAlignmentBaseline: evaluator.labelAlignmentBaseline,
-        getOutlineColor: evaluator.labelHaloColor,
-        getOutlineWidth: evaluator.labelHaloWidth,
+        getTextAnchor: (d: (typeof accepted)[number]) => d.textAnchor,
+        getAlignmentBaseline: (d: (typeof accepted)[number]) => d.alignmentBaseline,
+        getOutlineColor: (d: (typeof accepted)[number]) => d.haloColor,
+        getOutlineWidth: (d: (typeof accepted)[number]) => d.haloWidth,
         outlineWidthMaxPixels: 3,
         characterSet: 'auto',
-        collisionEnabled: evaluator.labelCollisionEnabled,
-        collisionGroup: `labels-${layer.id}`,
-        getCollisionPriority: (d: { priority: number }) => d.priority,
-        extensions: evaluator.labelCollisionEnabled ? [new CollisionFilterExtension()] : [],
+        parameters: { depthTest: false },
       }))
     }
 
@@ -3953,7 +4068,7 @@ export function MapCanvas({
         }
       }
 
-      pushLabelLayer(layer, filteredData, evaluator)
+      pushLabelLayer(filteredData, evaluator)
     }
 
     // Mapbox Draw replaces the active layer's geometry while editing. Keep its
@@ -3965,9 +4080,12 @@ export function MapCanvas({
       if (activeLayer && activeData && visibleByLayerId[activeEditLayerId]) {
         const hiddenLegendKeys = new Set(legendFilters[activeEditLayerId] ?? [])
         const filteredData = filterFeatureCollectionByLegend(activeLayer, activeData, hiddenLegendKeys)
-        pushLabelLayer(activeLayer, filteredData, resolveLayerStyle(activeLayer, activeLayerIndex, mapZoom), '-editing')
+        pushLabelLayer(filteredData, resolveLayerStyle(activeLayer, activeLayerIndex, mapZoom))
       }
     }
+
+    // Draw accepted labels after all feature geometry so symbols cannot obscure text.
+    pushAcceptedLabels()
 
     if (analysisOverlay?.features?.length) {
       builtLayers.push(
@@ -4352,6 +4470,7 @@ export function MapCanvas({
     editLayerFeatures,
     measurementOverlay,
     mapZoom,
+    labelLayoutRevision,
     selectedVertexGuides,
     selectedBoundsGuides,
     rotateScaleGuides,
@@ -4652,6 +4771,7 @@ export function MapCanvas({
       const center = map?.getCenter()
       const zoom = map?.getZoom() ?? 12
       setMapZoom(zoom)
+      setLabelLayoutRevision((revision) => revision + 1)
       if (center) {
         const bounds = map?.getBounds()
         onViewStateChange?.({

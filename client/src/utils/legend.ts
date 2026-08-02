@@ -17,6 +17,7 @@ export interface LegendItemModel {
   key: string
   label: string
   color: string
+  opacity: number
   count: number
   isDefault?: boolean
   iconId?: string
@@ -48,6 +49,7 @@ interface ParsedUniqueStop {
   key: string
   value: string
   color: string
+  opacity: number
 }
 
 interface ParsedClassBreakStop {
@@ -55,19 +57,26 @@ interface ParsedClassBreakStop {
   min: number
   max: number
   color: string
+  opacity: number
 }
 
 interface ParsedStyle {
   renderer: LayerRendererType
   baseColor: string
+  baseOpacity: number
+  layerOpacity: number
   uniqueField: string
   uniqueStops: ParsedUniqueStop[]
   uniqueDefaultColor: string
+  uniqueDefaultOpacity: number
   uniqueNullColor: string
+  uniqueNullOpacity: number
   classBreakField: string
   classBreakStops: ParsedClassBreakStop[]
   classBreakDefaultColor: string
+  classBreakDefaultOpacity: number
   classBreakNullColor: string
+  classBreakNullOpacity: number
   lineCasingEnabled: boolean
   lineCasingColor: string
   lineCasingWidth: number
@@ -159,7 +168,7 @@ function parseStyle(layer: Layer, mapZoom?: number | null): ParsedStyle {
       if (!item || typeof item !== 'object') {
         return null
       }
-      const token = item as { value?: unknown; color?: unknown }
+      const token = item as { value?: unknown; color?: unknown; opacity?: unknown }
       if (token.value === undefined || token.value === null) {
         return null
       }
@@ -168,6 +177,7 @@ function parseStyle(layer: Layer, mapZoom?: number | null): ParsedStyle {
         key: `uv:${value}`,
         value,
         color: normalizeColor(token.color, '#3f88c5'),
+        opacity: clamp01(token.opacity, 0.75) * clamp01(style.layerOpacity, 1),
       }
     })
     .filter((item): item is ParsedUniqueStop => Boolean(item))
@@ -177,7 +187,7 @@ function parseStyle(layer: Layer, mapZoom?: number | null): ParsedStyle {
       if (!item || typeof item !== 'object') {
         return null
       }
-      const token = item as { min?: unknown; max?: unknown; color?: unknown }
+      const token = item as { min?: unknown; max?: unknown; color?: unknown; opacity?: unknown }
       if (typeof token.min !== 'number' || typeof token.max !== 'number') {
         return null
       }
@@ -186,9 +196,11 @@ function parseStyle(layer: Layer, mapZoom?: number | null): ParsedStyle {
         min: token.min,
         max: token.max,
         color: normalizeColor(token.color, '#3f88c5'),
+        opacity: clamp01(token.opacity, 0.75) * clamp01(style.layerOpacity, 1),
       }
     })
     .filter((item): item is ParsedClassBreakStop => Boolean(item))
+    .sort((a, b) => a.min - b.min || a.max - b.max)
 
   const polygonPatternLibrary = normalizePolygonPatternLibrary(
     style.polygonPatternLibrary ??
@@ -202,14 +214,20 @@ function parseStyle(layer: Layer, mapZoom?: number | null): ParsedStyle {
   return {
     renderer: normalizeRenderer(style.rendererType),
     baseColor: normalizeColor(style.color, '#136f63'),
+    baseOpacity: clamp01(style.opacity, 0.8) * clamp01(style.layerOpacity, 1),
+    layerOpacity: clamp01(style.layerOpacity, 1),
     uniqueField: typeof style.uniqueValueField === 'string' ? style.uniqueValueField : '',
     uniqueStops,
     uniqueDefaultColor: normalizeColor(style.uniqueDefaultColor, '#3f88c5'),
+    uniqueDefaultOpacity: clamp01(style.uniqueDefaultOpacity, 0.75) * clamp01(style.layerOpacity, 1),
     uniqueNullColor: normalizeColor(style.uniqueNullColor, '#9ca3af'),
+    uniqueNullOpacity: clamp01(style.uniqueNullOpacity, 0.75) * clamp01(style.layerOpacity, 1),
     classBreakField: typeof style.classBreakField === 'string' ? style.classBreakField : '',
     classBreakStops,
     classBreakDefaultColor: normalizeColor(style.classBreakDefaultColor, '#3f88c5'),
+    classBreakDefaultOpacity: clamp01(style.classBreakDefaultOpacity, 0.75) * clamp01(style.layerOpacity, 1),
     classBreakNullColor: normalizeColor(style.classBreakNullColor, '#9ca3af'),
+    classBreakNullOpacity: clamp01(style.classBreakNullOpacity, 0.75) * clamp01(style.layerOpacity, 1),
     lineCasingEnabled: style.lineCasingEnabled === true,
     lineCasingColor: normalizeColor(style.lineCasingColor, '#ffffff'),
     lineCasingWidth: typeof style.lineCasingWidth === 'number' ? Math.max(0, style.lineCasingWidth) : 2,
@@ -334,6 +352,7 @@ export function buildLayerLegendModel(
       key: 'simple',
       label: simpleLabel,
       color: style.baseColor,
+      opacity: style.baseOpacity,
       count: 0,
       iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
     })
@@ -343,6 +362,7 @@ export function buildLayerLegendModel(
         key: stop.key,
         label: stop.value,
         color: stop.color,
+        opacity: stop.opacity,
         count: 0,
         iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
       })
@@ -352,6 +372,7 @@ export function buildLayerLegendModel(
       key: 'uv:__other',
       label: 'All other values',
       color: style.uniqueDefaultColor,
+      opacity: style.uniqueDefaultOpacity,
       count: 0,
       isDefault: true,
       iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
@@ -360,6 +381,7 @@ export function buildLayerLegendModel(
       key: 'uv:__null',
       label: 'Null / empty',
       color: style.uniqueNullColor,
+      opacity: style.uniqueNullOpacity,
       count: 0,
       isDefault: true,
       iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
@@ -370,6 +392,7 @@ export function buildLayerLegendModel(
         key: stop.key,
         label: `${stop.min} - ${stop.max}`,
         color: stop.color,
+        opacity: stop.opacity,
         count: 0,
         iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
       })
@@ -379,6 +402,7 @@ export function buildLayerLegendModel(
       key: 'cb:__other',
       label: 'Outside breaks',
       color: style.classBreakDefaultColor,
+      opacity: style.classBreakDefaultOpacity,
       count: 0,
       isDefault: true,
       iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,
@@ -387,6 +411,7 @@ export function buildLayerLegendModel(
       key: 'cb:__null',
       label: 'Null / empty',
       color: style.classBreakNullColor,
+      opacity: style.classBreakNullOpacity,
       count: 0,
       isDefault: true,
       iconId: geometryFamily === 'point' && style.pointShape === 'icon' ? iconId : undefined,

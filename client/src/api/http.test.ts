@@ -97,3 +97,16 @@ describe('apiRequest', () => {
     expect(retryHeaders.get('Authorization')).toBe('Bearer new-access-token')
   })
 })
+
+describe('API validation errors', () => {
+  it('includes actionable style validation details', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: 'Invalid layer style',
+      details: ['opacity must be between 0 and 1', 'labels.minZoom cannot exceed maxZoom'],
+    }), { status: 400, headers: { 'Content-Type': 'application/json' } })))
+
+    await expect(apiRequest('/layers/test', { method: 'PUT' }, 'token')).rejects.toThrow(
+      'Invalid layer style: opacity must be between 0 and 1; labels.minZoom cannot exceed maxZoom',
+    )
+  })
+})

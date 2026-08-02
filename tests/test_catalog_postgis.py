@@ -79,8 +79,9 @@ class CatalogPostgisTests(unittest.TestCase):
 
     def tearDown(self):
         self.connection.rollback()
-        self.cursor.execute('DELETE FROM users WHERE id = %s::uuid', (self.user_id,))
-        self.connection.commit()
+        # The suite deliberately verifies that map removal preserves source layers.
+        # Those layers retain their creator FK, so cleanup happens by dropping the
+        # guarded disposable database after the suite rather than deleting users.
         self.connection.close()
 
     def test_map_reference_style_and_source_preservation(self):
@@ -208,6 +209,66 @@ class CatalogPostgisTests(unittest.TestCase):
 
         self.cursor.execute('DELETE FROM users WHERE id = %s::uuid', (viewer_id,))
         self.connection.commit()
+
+    def test_style_validation_and_map_override_persistence(self):
+        valid_style = {
+            'rendererType': 'classBreaks',
+            'classBreakField': 'pressure',
+            'classBreakStops': [
+                {'min': 50, 'max': 100, 'color': '#d1495b', 'opacity': 1},
+                {'min': 0, 'max': 50, 'color': '#2a9d8f', 'opacity': 0.75},
+            ],
+            'classBreakDefaultColor': '#6c757d',
+            'classBreakDefaultOpacity': 0,
+            'labelField': 'name',
+            'labelMinZoom': 4,
+            'labelMaxZoom': 18,
+            'labelTextExpression': '["coalesce",["get","name"],"Unnamed"]',
+        }
+        updated = self.client.put(
+            f'/api/v1/layers/{self.layer_id}',
+            json={'style': valid_style}, headers=self.headers,
+        )
+        self.assertEqual(updated.status_code, 200, updated.get_json())
+        self.assertEqual(updated.get_json()['style']['classBreakDefaultOpacity'], 0)
+
+        invalid = self.client.put(
+            f'/api/v1/layers/{self.layer_id}',
+            json={'style': {
+                'rendererType': 'classBreaks',
+                'classBreakStops': [
+                    {'min': 0, 'max': 10, 'color': '#00ff00'},
+                    {'min': 5, 'max': 20, 'color': 'red'},
+                ],
+            }},
+            headers=self.headers,
+        )
+        self.assertEqual(invalid.status_code, 400, invalid.get_json())
+        self.assertEqual(invalid.get_json()['error'], 'Invalid layer style')
+        self.assertTrue(any('overlaps' in detail for detail in invalid.get_json()['details']))
+
+        source = self.client.get(f'/api/v1/layers/{self.layer_id}', headers=self.headers)
+        self.assertEqual(source.get_json()['style'], valid_style)
+
+        map_id = next(
+            item['id'] for item in self.client.get('/api/v1/maps', headers=self.headers).get_json()
+            if item['is_default']
+        )
+        added = self.client.post(
+            f'/api/v1/maps/{map_id}/layers',
+            json={'source_layer_ids': [self.layer_id]}, headers=self.headers,
+        )
+        self.assertEqual(added.status_code, 201, added.get_json())
+        map_layer_id = added.get_json()[0]['id']
+        override = {**valid_style, 'labelColor': '#ffffff', 'labelHaloColor': '#000000'}
+        patched = self.client.patch(
+            f'/api/v1/maps/{map_id}/layers/{map_layer_id}',
+            json={'style_override': override}, headers=self.headers,
+        )
+        self.assertEqual(patched.status_code, 200, patched.get_json())
+        loaded = self.client.get(f'/api/v1/maps/{map_id}', headers=self.headers).get_json()
+        map_layer = next(item for item in loaded['layers'] if item['id'] == map_layer_id)
+        self.assertEqual(map_layer['effective_style'], override)
 
 
 if __name__ == '__main__':

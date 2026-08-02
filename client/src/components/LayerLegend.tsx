@@ -76,7 +76,7 @@ function paperStyle(mode: LegendMode) {
   }
 }
 
-function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: string) {
+function renderLegendSwatch(model: LayerLegendModel, color: string, opacity = 1, iconId?: string) {
   const patchFamily = model.legendPatchShape === 'line'
     ? 'line'
     : model.legendPatchShape === 'area'
@@ -91,7 +91,7 @@ function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: str
         component="img"
         src={iconifySvgUrl(iconId, color)}
         alt={iconId}
-        sx={{ width: 18, height: 18 }}
+        sx={{ width: 18, height: 18, opacity }}
       />
     )
   }
@@ -109,6 +109,7 @@ function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: str
             : '1px solid #111827',
           boxShadow: model.lineCasingEnabled ? '0 0 0 1px rgba(15,23,42,0.35)' : 'none',
           flexShrink: 0,
+          opacity,
         }}
       />
     )
@@ -139,6 +140,7 @@ function renderLegendSwatch(model: LayerLegendModel, color: string, iconId?: str
         backgroundSize: polygonPatternStyle.backgroundSize,
         border: '1px solid #111827',
         flexShrink: 0,
+        opacity,
       }}
     />
   )
@@ -154,7 +156,7 @@ function renderMinimal(models: LayerLegendModel[]) {
         }
         return (
           <Stack key={model.layerId} direction="row" spacing={1} alignItems="center">
-            {renderLegendSwatch(model, first.color, first.iconId)}
+            {renderLegendSwatch(model, first.color, first.opacity, first.iconId)}
             <Typography variant="caption" sx={{ fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis' }}>
               {model.layerName}
             </Typography>
@@ -225,7 +227,7 @@ function renderDetailed(
                         sx={{ justifyContent: 'space-between', textTransform: 'none', px: 1 }}
                       >
                         <Stack direction="row" spacing={1} alignItems="center">
-                          {renderLegendSwatch(model, item.color, item.iconId)}
+                          {renderLegendSwatch(model, item.color, item.opacity, item.iconId)}
                           <Typography
                             variant="caption"
                             sx={{
@@ -243,7 +245,7 @@ function renderDetailed(
 
                   return (
                     <Stack key={`${model.layerId}-${item.key}`} direction="row" spacing={1} alignItems="center">
-                      {renderLegendSwatch(model, item.color, item.iconId)}
+                      {renderLegendSwatch(model, item.color, item.opacity, item.iconId)}
                       <Typography
                         variant={presentation ? 'body2' : 'caption'}
                         sx={{ flexGrow: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}

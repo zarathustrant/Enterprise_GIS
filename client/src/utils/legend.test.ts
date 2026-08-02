@@ -97,4 +97,36 @@ describe('buildLayerLegendModel', () => {
     expect(model.items.find((item) => item.key === 'uv:__other')?.count).toBe(1)
     expect(model.items.find((item) => item.key === 'uv:__null')?.count).toBe(1)
   })
+
+  it('sorts class breaks consistently and preserves default/null opacity', () => {
+    const layer: Layer = {
+      ...lineLayer,
+      style: {
+        rendererType: 'classBreaks',
+        classBreakField: 'score',
+        classBreakStops: [
+          { min: 10, max: 20, color: '#dc2626', opacity: 1 },
+          { min: 0, max: 10, color: '#16a34a', opacity: 0.6 },
+        ],
+        classBreakDefaultColor: '#2563eb',
+        classBreakDefaultOpacity: 0,
+        classBreakNullColor: '#9ca3af',
+        classBreakNullOpacity: 0.25,
+      },
+    }
+    const features: FeatureCollection = {
+      type: 'FeatureCollection',
+      features: [
+        { type: 'Feature', geometry: { type: 'Point', coordinates: [0, 0] }, properties: { score: 10 } },
+        { type: 'Feature', geometry: { type: 'Point', coordinates: [1, 1] }, properties: { score: 30 } },
+        { type: 'Feature', geometry: { type: 'Point', coordinates: [2, 2] }, properties: { score: null } },
+      ],
+    }
+
+    expect(getFeatureLegendKey(layer, features.features[0])).toBe('cb:0')
+    const model = buildLayerLegendModel(layer, features)
+    expect(model.items.filter((item) => item.key.startsWith('cb:')).slice(0, 2).map((item) => item.label)).toEqual(['0 - 10', '10 - 20'])
+    expect(model.items.find((item) => item.key === 'cb:__other')?.opacity).toBe(0)
+    expect(model.items.find((item) => item.key === 'cb:__null')?.opacity).toBe(0.25)
+  })
 })
