@@ -39,6 +39,7 @@ The documentation here is organized around that goal:
 
 - [roadmap/next-focus.md](./roadmap/next-focus.md)
 - [roadmap/look-ahead.md](./roadmap/look-ahead.md)
+- [roadmap/catalog-geodatabase-maps.md](./roadmap/catalog-geodatabase-maps.md)
 
 ## Existing planning and analysis docs
 
