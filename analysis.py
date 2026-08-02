@@ -66,23 +66,6 @@ def analysis_run(run_id):
     return jsonify(serialize_analysis_run(dict(row)))
 
 
-def _serialize_layer(r):
-    return {
-        'id':            str(r['id']),
-        'name':          r['name'],
-        'description':   r['description'],
-        'geometry_type': r['geometry_type'],
-        'crs':           r['crs'],
-        'style':         r['style'],
-        'min_zoom':      r['min_zoom'],
-        'max_zoom':      r['max_zoom'],
-        'is_public':     r['is_public'],
-        'created_by':    r.get('created_by'),
-        'created_at':    r['created_at'].isoformat(),
-        'updated_at':    r['updated_at'].isoformat(),
-    }
-
-
 def _check_layer(cur, layer_id, user_id):
     """Return layer row if accessible, else None."""
     cur.execute(
@@ -107,34 +90,10 @@ def _check_layer(cur, layer_id, user_id):
     return cur.fetchone()
 
 
-def _new_layer(cur, name, desc, geom_type, user_id):
-    """Create output layer and return its id."""
-    cur.execute("""
-        INSERT INTO layers (name, description, geometry_type, is_public, created_by)
-        VALUES (%s, %s, %s, FALSE, %s::uuid)
-        RETURNING id
-    """, (name, desc, geom_type, user_id))
-    return cur.fetchone()['id']
-
-
-def _fetch_layer_full(cur, layer_id):
-    cur.execute("""
-        SELECT l.*, u.username AS created_by
-        FROM layers l LEFT JOIN users u ON u.id = l.created_by
-        WHERE l.id = %s
-    """, (layer_id,))
-    return cur.fetchone()
-
-
-# ── Buffer ────────────────────────────────────────────────────────────────────
-
-@analysis_bp.route('/buffer', methods=['POST'])
-@jwt_required()
-def buffer():
-    data = request.get_json() or {}
+def _run_layer_tool(tool_id, data, input_parameter_names, audit_prefix):
     user_id = get_jwt_identity()
     try:
-        parameters = validate_tool_parameters('buffer', data)
+        parameters = validate_tool_parameters(tool_id, data)
         environments = normalize_environments(data.get('environments'))
     except VectorAnalysisError as exc:
         return jsonify({'error': str(exc)}), 400
@@ -145,21 +104,24 @@ def buffer():
         run_async = True
     elif requested_mode not in {'', 'automatic', 'synchronous', 'sync'}:
         return jsonify({'error': 'execution_mode must be automatic, synchronous, or asynchronous'}), 400
-    execution_mode = 'asynchronous' if run_async else ('automatic' if requested_mode == 'automatic' else 'synchronous')
+    execution_mode = 'asynchronous' if run_async else (
+        'automatic' if requested_mode == 'automatic' else 'synchronous'
+    )
 
     db = get_db()
     cur = db.cursor()
-    src = _check_layer(cur, parameters['layer_id'], user_id)
-    if not src:
-        return jsonify({'error': 'Source layer not found'}), 404
+    input_layer_ids = [parameters[name] for name in input_parameter_names]
+    for layer_id in input_layer_ids:
+        if not _check_layer(cur, layer_id, user_id):
+            return jsonify({'error': f'Input layer {layer_id} not found'}), 404
 
     run = create_analysis_run(
         cur,
-        tool_id='buffer',
+        tool_id=tool_id,
         execution_mode=execution_mode,
         parameters=parameters,
         environments=environments,
-        input_layer_ids=[parameters['layer_id']],
+        input_layer_ids=input_layer_ids,
         created_by=user_id,
         status='queued' if run_async else 'running',
     )
@@ -168,10 +130,10 @@ def buffer():
     if run_async:
         job = create_async_job(
             cur,
-            job_type='analysis.buffer',
+            job_type=f'analysis.{tool_id}',
             payload={
                 'analysis_run_id': run_id,
-                'tool_id': 'buffer',
+                'tool_id': tool_id,
                 'parameters': parameters,
                 'environments': environments,
             },
@@ -186,10 +148,10 @@ def buffer():
         log_audit(
             cur,
             user_id=user_id,
-            action='analysis_buffer_queued',
+            action=f'{audit_prefix}_queued',
             entity_type='async_job',
             entity_id=str(job['id']),
-            payload={'analysis_run_id': run_id, 'layer_id': parameters['layer_id'], 'queued': queued},
+            payload={'analysis_run_id': run_id, 'input_layer_ids': input_layer_ids, 'queued': queued},
         )
         db.commit()
         run['async_job_id'] = job['id']
@@ -199,12 +161,12 @@ def buffer():
             'analysis_run': serialize_analysis_run(run),
         }), 202
 
-    # Persist the run before execution so a failed transaction cannot erase provenance.
+    # Persist the run independently so execution failures remain discoverable.
     db.commit()
     try:
         result = execute_vector_tool(
             cur,
-            tool_id='buffer',
+            tool_id=tool_id,
             parameters=parameters,
             environments=environments,
             created_by=user_id,
@@ -213,11 +175,11 @@ def buffer():
         log_audit(
             cur,
             user_id=user_id,
-            action='analysis_buffer_completed',
+            action=f'{audit_prefix}_completed',
             entity_type='analysis_run',
             entity_id=run_id,
             layer_id=result['output_layer_ids'][0],
-            payload={'source_layer_id': parameters['layer_id'], 'count': result['count']},
+            payload={'input_layer_ids': input_layer_ids, 'count': result['count']},
         )
         cur.execute('SELECT * FROM analysis_runs WHERE id = %s::uuid', (run_id,))
         completed_run = serialize_analysis_run(dict(cur.fetchone()))
@@ -241,8 +203,21 @@ def buffer():
         )
         db.commit()
         status = 400 if isinstance(exc, VectorAnalysisError) else 500
-        current_app.logger.exception('Buffer analysis failed run_id=%s', run_id)
+        current_app.logger.exception('%s failed run_id=%s', audit_prefix, run_id)
         return jsonify({'error': str(exc), 'analysis_run_id': run_id}), status
+
+
+# ── Buffer ────────────────────────────────────────────────────────────────────
+
+@analysis_bp.route('/buffer', methods=['POST'])
+@jwt_required()
+def buffer():
+    return _run_layer_tool(
+        'buffer',
+        request.get_json() or {},
+        ('layer_id',),
+        'analysis_buffer',
+    )
 
 
 # ── Intersect ─────────────────────────────────────────────────────────────────
@@ -250,73 +225,12 @@ def buffer():
 @analysis_bp.route('/intersect', methods=['POST'])
 @jwt_required()
 def intersect():
-    data     = request.get_json() or {}
-    layer_a  = data.get('layer_a')
-    layer_b  = data.get('layer_b')
-    out_name = (data.get('output_name') or 'Intersection').strip()
-    user_id  = get_jwt_identity()
-    run_async = bool(data.get('async')) or request.args.get('async') == 'true'
-
-    if not layer_a or not layer_b:
-        return jsonify({'error': 'layer_a and layer_b are required'}), 400
-
-    db  = get_db()
-    cur = db.cursor()
-
-    for lid in (layer_a, layer_b):
-        if not _check_layer(cur, lid, user_id):
-            return jsonify({'error': f'Layer {lid} not found'}), 404
-
-    if run_async:
-        job = create_async_job(
-            cur,
-            job_type='analysis.intersect',
-            payload={'layer_a': layer_a, 'layer_b': layer_b, 'output_name': out_name},
-            created_by=user_id,
-        )
-        queued = enqueue_job(
-            current_app.config.get('REDIS_URL', 'redis://localhost:6379/0'),
-            current_app.config.get('JOB_QUEUE_NAME', 'enterprise_gis_jobs'),
-            str(job['id']),
-        )
-        log_audit(
-            cur,
-            user_id=user_id,
-            action='analysis_intersect_queued',
-            entity_type='async_job',
-            entity_id=str(job['id']),
-            payload={'layer_a': layer_a, 'layer_b': layer_b, 'queued': queued},
-        )
-        db.commit()
-        return jsonify({**serialize_job(job), 'queued': queued}), 202
-
-    out_id = _new_layer(cur, out_name, 'Spatial intersection', None, user_id)
-
-    cur.execute("""
-        INSERT INTO features (layer_id, geometry, properties, created_by)
-        SELECT %s,
-               ST_Intersection(a.geometry, b.geometry),
-               a.properties,
-               %s::uuid
-        FROM features a
-        JOIN features b ON ST_Intersects(a.geometry, b.geometry)
-        WHERE a.layer_id = %s
-          AND b.layer_id = %s
-          AND NOT ST_IsEmpty(ST_Intersection(a.geometry, b.geometry))
-    """, (out_id, user_id, layer_a, layer_b))
-    count = cur.rowcount
-    log_audit(
-        cur,
-        user_id=user_id,
-        action='analysis_intersect_completed',
-        entity_type='layer',
-        entity_id=str(out_id),
-        layer_id=str(out_id),
-        payload={'layer_a': layer_a, 'layer_b': layer_b, 'count': count},
+    return _run_layer_tool(
+        'intersect',
+        request.get_json() or {},
+        ('layer_a', 'layer_b'),
+        'analysis_intersect',
     )
-    db.commit()
-
-    return jsonify({'layer': _serialize_layer(_fetch_layer_full(cur, out_id)), 'count': count}), 201
 
 
 # ── Spatial query (features within a polygon) ─────────────────────────────────

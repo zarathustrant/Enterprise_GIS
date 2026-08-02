@@ -37,7 +37,9 @@ Run history is user-scoped:
 
 The shared output service creates a private output layer, clones the source layer's domains and fields, inserts derived features, and records create events in feature history. Results include feature count, elapsed time, warnings, and output layer IDs.
 
-## Buffer Migration
+## Migrated Tools
+
+### Buffer
 
 Buffer is the first migrated tool. The existing `POST /api/v1/analysis/buffer` payload remains compatible:
 
@@ -65,6 +67,24 @@ It additionally accepts environments and execution mode:
 
 Set `async: true`, `execution_mode: "asynchronous"`, or `?async=true` for worker execution. Synchronous and asynchronous paths now use the same executor.
 
+### Intersect
+
+Intersect now uses the shared executor for both request and worker execution. It provides:
+
+- spatial-index bounding-box candidate filtering before `ST_Intersects`
+- one materialized intersection calculation per candidate pair
+- automatic output geometry based on the lowest input dimension
+- explicit Point, Line, or Polygon component extraction
+- deterministic Layer A and Layer B field prefixes
+- fields, aliases, domains, nullability, defaults, and ordering from both inputs
+- `source_a_id` and `source_b_id` provenance fields
+- independent all-feature or selected-feature scope for each input
+- optional precision-grid snapping
+- input counts, maximum pair estimate, output geometry family, elapsed time, and output count metrics
+- explicit warnings for dimensional extraction, large pair potential, and empty outputs
+
+The endpoint remains `POST /api/v1/analysis/intersect`. Optional parameters are `output_type`, `prefix_a`, and `prefix_b`. Self-intersection is rejected until a dedicated tool can provide correct duplicate-pair and topology behavior.
+
 ## Transaction Guarantees
 
 - A run is committed before synchronous execution, so failures remain visible.
@@ -74,9 +94,8 @@ Set `async: true`, `execution_mode: "asynchronous"`, or `?async=true` for worker
 
 ## Next Migration Order
 
-1. Intersect with field-collision policies and geometry-family inference.
-2. Clip and Erase using the shared overlay kernel.
-3. Dissolve with grouping fields and aggregate statistics.
-4. Spatial Join and Summarize Within with explicit cardinality behavior.
-5. Near and nearest-feature tables with geodesic distances.
-6. Analysis Workbench UI generated from the registry and run-history APIs.
+1. Clip and Erase using the shared overlay kernel.
+2. Dissolve with grouping fields and aggregate statistics.
+3. Spatial Join and Summarize Within with explicit cardinality behavior.
+4. Near and nearest-feature tables with geodesic distances.
+5. Analysis Workbench UI generated from the registry and run-history APIs.

@@ -2374,11 +2374,25 @@ export default function App() {
   })
 
   const intersectMutation = useMutation({
-    mutationFn: async (payload: { layerA: string; layerB: string; outputName: string }) => {
+    mutationFn: async (payload: {
+      layerA: string
+      layerB: string
+      outputName: string
+      outputType: 'auto' | 'point' | 'line' | 'polygon'
+      prefixA: string
+      prefixB: string
+    }) => {
       if (!token) {
         throw new Error('Sign in to run intersect analysis.')
       }
-      return runIntersectAnalysis({ layer_a: payload.layerA, layer_b: payload.layerB, output_name: payload.outputName }, token)
+      return runIntersectAnalysis({
+        layer_a: payload.layerA,
+        layer_b: payload.layerB,
+        output_name: payload.outputName,
+        output_type: payload.outputType,
+        prefix_a: payload.prefixA,
+        prefix_b: payload.prefixB,
+      }, token)
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['layers'] })
@@ -2386,8 +2400,12 @@ export default function App() {
       setAnalysisError(null)
       setAnalysisOverlay(null)
       setWithinCount(null)
-      completeAnalysisJob(`Intersect complete (${result.count} features)`)
-      notify(`Intersect complete (${result.count} features)`, 'success')
+      const warningText = result.warnings?.length ? ` ${result.warnings.join(' ')}` : ''
+      completeAnalysisJob(`Intersect complete (${result.count} features).${warningText}`)
+      notify(
+        `Intersect complete (${result.count} features).${warningText}`,
+        result.warnings?.length ? 'warning' : 'success',
+      )
     },
     onError: (error) => {
       const message = error instanceof Error ? error.message : 'Intersect analysis failed'

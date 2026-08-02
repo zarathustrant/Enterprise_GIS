@@ -37,7 +37,14 @@ interface AnalysisDialogProps {
   workMode?: boolean
   onClose: () => void
   onRunBuffer: (payload: { layerId: string; distance: number; outputName: string }) => void
-  onRunIntersect: (payload: { layerA: string; layerB: string; outputName: string }) => void
+  onRunIntersect: (payload: {
+    layerA: string
+    layerB: string
+    outputName: string
+    outputType: 'auto' | 'point' | 'line' | 'polygon'
+    prefixA: string
+    prefixB: string
+  }) => void
   onRunWithin: (payload: { layerId: string; polygon: string }) => void
 }
 
@@ -62,6 +69,9 @@ export function AnalysisDialog({
   const [intersectA, setIntersectA] = useState('')
   const [intersectB, setIntersectB] = useState('')
   const [intersectName, setIntersectName] = useState('Intersection')
+  const [intersectOutputType, setIntersectOutputType] = useState<'auto' | 'point' | 'line' | 'polygon'>('auto')
+  const [intersectPrefixA, setIntersectPrefixA] = useState('a_')
+  const [intersectPrefixB, setIntersectPrefixB] = useState('b_')
 
   const [withinLayerId, setWithinLayerId] = useState('')
   const [withinPolygon, setWithinPolygon] = useState(
@@ -178,9 +188,44 @@ export function AnalysisDialog({
               fullWidth
             >
               {layerOptions.map((item) => (
-                <MenuItem key={item.value} value={item.value}>{item.label}</MenuItem>
+                <MenuItem key={item.value} value={item.value} disabled={item.value === intersectA}>
+                  {item.label}
+                </MenuItem>
               ))}
             </TextField>
+            {intersectA && intersectA === intersectB && (
+              <Alert severity="warning">Choose two different layers. Self-intersection is a separate operation.</Alert>
+            )}
+            <TextField
+              label="Output geometry"
+              value={intersectOutputType}
+              onChange={(event) => setIntersectOutputType(event.target.value as typeof intersectOutputType)}
+              size="small"
+              select
+              fullWidth
+              helperText="Auto uses the lowest input dimension. Explicit types retain only matching components."
+            >
+              <MenuItem value="auto">Automatic</MenuItem>
+              <MenuItem value="polygon">Polygon components</MenuItem>
+              <MenuItem value="line">Line components</MenuItem>
+              <MenuItem value="point">Point components</MenuItem>
+            </TextField>
+            <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 1.5 }}>
+              <TextField
+                label="Layer A prefix"
+                value={intersectPrefixA}
+                onChange={(event) => setIntersectPrefixA(event.target.value)}
+                size="small"
+                inputProps={{ maxLength: 16 }}
+              />
+              <TextField
+                label="Layer B prefix"
+                value={intersectPrefixB}
+                onChange={(event) => setIntersectPrefixB(event.target.value)}
+                size="small"
+                inputProps={{ maxLength: 16 }}
+              />
+            </Box>
             <TextField
               label="Output layer name"
               value={intersectName}
@@ -190,8 +235,15 @@ export function AnalysisDialog({
             />
             <Button
               variant="contained"
-              disabled={running || !intersectA || !intersectB}
-              onClick={() => onRunIntersect({ layerA: intersectA, layerB: intersectB, outputName: intersectName || 'Intersection' })}
+              disabled={running || !intersectA || !intersectB || intersectA === intersectB || !intersectPrefixA || !intersectPrefixB}
+              onClick={() => onRunIntersect({
+                layerA: intersectA,
+                layerB: intersectB,
+                outputName: intersectName || 'Intersection',
+                outputType: intersectOutputType,
+                prefixA: intersectPrefixA,
+                prefixB: intersectPrefixB,
+              })}
             >
               Run Intersect
             </Button>

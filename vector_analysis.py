@@ -1,4 +1,6 @@
+import hashlib
 import json
+import re
 import time
 from dataclasses import asdict, dataclass, field
 from typing import Any, Callable
@@ -74,8 +76,18 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
             ToolParameter('layer_a', 'Input layer', 'layer', required=True),
             ToolParameter('layer_b', 'Overlay layer', 'layer', required=True),
             ToolParameter('output_name', 'Output layer name', 'string', required=True, default='Intersection'),
+            ToolParameter(
+                'output_type',
+                'Output geometry',
+                'choice',
+                required=True,
+                default='auto',
+                choices=('auto', 'point', 'line', 'polygon'),
+            ),
+            ToolParameter('prefix_a', 'Layer A field prefix', 'string', required=True, default='a_'),
+            ToolParameter('prefix_b', 'Layer B field prefix', 'string', required=True, default='b_'),
         ),
-        migrated=False,
+        migrated=True,
         keywords=('overlay', 'shared geometry'),
     ),
     'within': VectorToolSpec(
@@ -114,17 +126,33 @@ def normalize_environments(raw: Any) -> dict[str, Any]:
     if scope not in {'all', 'selected'}:
         raise VectorAnalysisError('environment scope must be all or selected')
 
-    selected_ids: list[str] = []
-    if scope == 'selected':
-        values = data.get('selected_feature_ids')
+    def normalize_scope(name: str, fallback: str) -> str:
+        value = str(data.get(name, fallback)).strip().lower()
+        if value not in {'all', 'selected'}:
+            raise VectorAnalysisError(f'{name} must be all or selected')
+        return value
+
+    def normalize_ids(name: str, required: bool) -> list[str]:
+        values = data.get(name)
+        if not required and values in (None, []):
+            return []
         if not isinstance(values, list) or not values:
-            raise VectorAnalysisError('selected scope requires selected_feature_ids')
+            raise VectorAnalysisError(f'selected scope requires {name}')
         if len(values) > 100_000:
             raise VectorAnalysisError('selected scope is limited to 100,000 feature IDs')
         try:
-            selected_ids = [str(UUID(str(value))) for value in values]
+            return [str(UUID(str(value))) for value in values]
         except (TypeError, ValueError) as exc:
-            raise VectorAnalysisError('selected_feature_ids must contain UUID values') from exc
+            raise VectorAnalysisError(f'{name} must contain UUID values') from exc
+
+    scope_a = normalize_scope('scope_a', scope)
+    scope_b = normalize_scope('scope_b', 'all')
+    selected_ids = normalize_ids('selected_feature_ids', scope == 'selected')
+    selected_ids_a = normalize_ids(
+        'selected_feature_ids_a',
+        scope_a == 'selected' and not selected_ids,
+    ) or selected_ids
+    selected_ids_b = normalize_ids('selected_feature_ids_b', scope_b == 'selected')
 
     precision_grid = data.get('precision_grid')
     if precision_grid in (None, ''):
@@ -144,6 +172,10 @@ def normalize_environments(raw: Any) -> dict[str, Any]:
     return {
         'scope': scope,
         'selected_feature_ids': selected_ids,
+        'scope_a': scope_a,
+        'scope_b': scope_b,
+        'selected_feature_ids_a': selected_ids_a,
+        'selected_feature_ids_b': selected_ids_b,
         'precision_grid': precision_grid,
         'output_crs': 'EPSG:4326',
         'invalid_geometry_policy': 'reject',
@@ -178,6 +210,10 @@ def validate_tool_parameters(tool_id: str, raw: Any) -> dict[str, Any]:
                 value = str(UUID(str(value)))
             except (TypeError, ValueError) as exc:
                 raise VectorAnalysisError(f'{definition.name} must be a layer UUID') from exc
+        if definition.type == 'choice' and value not in definition.choices:
+            raise VectorAnalysisError(
+                f'{definition.name} must be one of {", ".join(definition.choices)}'
+            )
         parameters[definition.name] = value
     return parameters
 
@@ -370,6 +406,125 @@ def _clone_layer_schema(cur, source_layer_id: str, output_layer_id: str) -> None
         )
 
 
+def _bounded_identifier(prefix: str, name: str, used: set[str], max_length: int = 64) -> str:
+    raw = re.sub(r'[^A-Za-z0-9_]', '_', f'{prefix}{name}')
+    if not raw or not re.match(r'^[A-Za-z_]', raw):
+        raw = f'_{raw}'
+    candidate = raw[:max_length]
+    if candidate not in used:
+        used.add(candidate)
+        return candidate
+
+    digest = hashlib.sha1(raw.encode('utf-8')).hexdigest()[:8]
+    base = raw[:max_length - len(digest) - 1]
+    candidate = f'{base}_{digest}'
+    counter = 2
+    while candidate in used:
+        suffix = f'_{counter}'
+        candidate = f'{base[:max_length - len(digest) - len(suffix) - 1]}_{digest}{suffix}'
+        counter += 1
+    used.add(candidate)
+    return candidate
+
+
+def _append_prefixed_layer_schema(
+    cur,
+    *,
+    source_layer_id: str,
+    output_layer_id: str,
+    prefix: str,
+    alias_prefix: str,
+    sort_offset: int,
+    used_field_names: set[str],
+    used_domain_names: set[str],
+) -> dict[str, str]:
+    if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]{0,15}', prefix):
+        raise VectorAnalysisError(
+            f'Field prefix "{prefix}" must begin with a letter or underscore and contain at most 16 characters'
+        )
+
+    cur.execute(
+        """
+        SELECT id, name, description, domain_type, coded_values, min_value, max_value
+        FROM layer_domains WHERE layer_id = %s::uuid ORDER BY created_at
+        """,
+        (source_layer_id,),
+    )
+    domain_mapping: dict[str, str] = {}
+    for domain in cur.fetchall():
+        output_name = _bounded_identifier(prefix, domain['name'], used_domain_names, 100)
+        cur.execute(
+            """
+            INSERT INTO layer_domains (
+                layer_id, name, description, domain_type, coded_values, min_value, max_value
+            ) VALUES (%s::uuid, %s, %s, %s, %s::jsonb, %s, %s)
+            RETURNING id
+            """,
+            (
+                output_layer_id,
+                output_name,
+                f'{alias_prefix} - {domain.get("description") or domain["name"]}',
+                domain['domain_type'],
+                json.dumps(domain.get('coded_values')) if domain.get('coded_values') is not None else None,
+                domain.get('min_value'),
+                domain.get('max_value'),
+            ),
+        )
+        domain_mapping[str(domain['id'])] = str(cur.fetchone()['id'])
+
+    cur.execute(
+        """
+        SELECT name, alias, field_type, nullable, default_value, domain_id,
+               length, precision, scale, sort_order
+        FROM layer_fields WHERE layer_id = %s::uuid ORDER BY sort_order, created_at
+        """,
+        (source_layer_id,),
+    )
+    field_mapping: dict[str, str] = {}
+    for index, source_field in enumerate(cur.fetchall()):
+        output_name = _bounded_identifier(prefix, source_field['name'], used_field_names)
+        source_domain_id = str(source_field['domain_id']) if source_field.get('domain_id') else None
+        cur.execute(
+            """
+            INSERT INTO layer_fields (
+                layer_id, name, alias, field_type, nullable, default_value, domain_id,
+                length, precision, scale, sort_order
+            ) VALUES (
+                %s::uuid, %s, %s, %s, %s, %s::jsonb, %s::uuid,
+                %s, %s, %s, %s
+            )
+            """,
+            (
+                output_layer_id,
+                output_name,
+                f'{alias_prefix} - {source_field.get("alias") or source_field["name"]}'[:128],
+                source_field['field_type'],
+                source_field['nullable'],
+                json.dumps(source_field.get('default_value')) if source_field.get('default_value') is not None else None,
+                domain_mapping.get(source_domain_id),
+                source_field.get('length'),
+                source_field.get('precision'),
+                source_field.get('scale'),
+                sort_offset + index,
+            ),
+        )
+        field_mapping[source_field['name']] = output_name
+    return field_mapping
+
+
+def _add_source_id_fields(cur, output_layer_id: str) -> None:
+    cur.execute(
+        """
+        INSERT INTO layer_fields (
+            layer_id, name, alias, field_type, nullable, length, sort_order
+        ) VALUES
+            (%s::uuid, 'source_a_id', 'Layer A source feature ID', 'string', FALSE, 36, 0),
+            (%s::uuid, 'source_b_id', 'Layer B source feature ID', 'string', FALSE, 36, 1)
+        """,
+        (output_layer_id, output_layer_id),
+    )
+
+
 def _create_output_layer(
     cur,
     *,
@@ -377,7 +532,7 @@ def _create_output_layer(
     description: str,
     geometry_type: str,
     created_by: str | None,
-    source_layer_id: str,
+    source_layer_id: str | None = None,
 ) -> str:
     cur.execute(
         """
@@ -388,7 +543,8 @@ def _create_output_layer(
         (name, description, geometry_type, created_by),
     )
     output_layer_id = str(cur.fetchone()['id'])
-    _clone_layer_schema(cur, source_layer_id, output_layer_id)
+    if source_layer_id:
+        _clone_layer_schema(cur, source_layer_id, output_layer_id)
     return output_layer_id
 
 
@@ -475,6 +631,17 @@ def _execute_buffer(
     feature_count = cur.rowcount
 
     progress(75, 'Recording output provenance')
+    _record_output_history(cur, output_layer_id, created_by)
+    progress(90, 'Finalizing output')
+    return {
+        'layer': _serialize_layer(cur, output_layer_id),
+        'count': feature_count,
+        'output_layer_ids': [output_layer_id],
+        'warnings': [] if feature_count else ['The operation produced an empty output layer.'],
+    }
+
+
+def _record_output_history(cur, output_layer_id: str, created_by: str | None) -> None:
     cur.execute(
         """
         INSERT INTO feature_history (
@@ -485,16 +652,235 @@ def _execute_buffer(
         """,
         (created_by, output_layer_id),
     )
-    progress(90, 'Finalizing output')
+
+
+def _geometry_family(value: str | None) -> str | None:
+    normalized = (value or '').lower()
+    if 'point' in normalized:
+        return 'point'
+    if 'line' in normalized or 'curve' in normalized:
+        return 'line'
+    if 'polygon' in normalized or 'surface' in normalized:
+        return 'polygon'
+    return None
+
+
+def _resolve_layer_family(cur, layer: dict[str, Any]) -> str:
+    family = _geometry_family(layer.get('geometry_type'))
+    if family:
+        return family
+    cur.execute(
+        """
+        SELECT MAX(ST_Dimension(geometry)) AS dimension
+        FROM features WHERE layer_id = %s::uuid AND geometry IS NOT NULL
+        """,
+        (str(layer['id']),),
+    )
+    dimension = cur.fetchone()['dimension']
+    family_by_dimension = {0: 'point', 1: 'line', 2: 'polygon'}
+    if dimension not in family_by_dimension:
+        raise VectorAnalysisError(f'Cannot determine geometry family for layer "{layer["name"]}"')
+    return family_by_dimension[dimension]
+
+
+def _resolve_intersection_output_type(family_a: str, family_b: str, requested: str) -> str:
+    dimensions = {'point': 0, 'line': 1, 'polygon': 2}
+    maximum_dimension = min(dimensions[family_a], dimensions[family_b])
+    if requested == 'auto':
+        return ('point', 'line', 'polygon')[maximum_dimension]
+    if dimensions[requested] > maximum_dimension:
+        raise VectorAnalysisError(
+            f'{requested} output is not possible for {family_a} and {family_b} inputs'
+        )
+    return requested
+
+
+def _selected_clause(alias: str, scope: str) -> str:
+    return f'AND {alias}.id = ANY(%s::uuid[])' if scope == 'selected' else ''
+
+
+def _count_scoped_features(cur, layer_id: str, scope: str, selected_ids: list[str]) -> int:
+    clause = 'AND id = ANY(%s::uuid[])' if scope == 'selected' else ''
+    parameters: list[Any] = [layer_id]
+    if scope == 'selected':
+        parameters.append(selected_ids)
+    cur.execute(
+        f'SELECT COUNT(*) AS count FROM features WHERE layer_id = %s::uuid {clause}',
+        tuple(parameters),
+    )
+    return int(cur.fetchone()['count'])
+
+
+def _execute_intersect(
+    cur,
+    parameters: dict[str, Any],
+    environments: dict[str, Any],
+    created_by: str | None,
+    progress: Callable[[int, str], None],
+) -> dict[str, Any]:
+    layer_a_id = parameters['layer_a']
+    layer_b_id = parameters['layer_b']
+    if layer_a_id == layer_b_id:
+        raise VectorAnalysisError('Self-intersection requires a dedicated self-intersect tool')
+
+    cur.execute(
+        'SELECT id, name, geometry_type FROM layers WHERE id = ANY(%s::uuid[])',
+        ([layer_a_id, layer_b_id],),
+    )
+    layers = {str(row['id']): dict(row) for row in cur.fetchall()}
+    if layer_a_id not in layers or layer_b_id not in layers:
+        raise VectorAnalysisError('One or more input layers were not found')
+
+    family_a = _resolve_layer_family(cur, layers[layer_a_id])
+    family_b = _resolve_layer_family(cur, layers[layer_b_id])
+    output_family = _resolve_intersection_output_type(
+        family_a,
+        family_b,
+        parameters['output_type'],
+    )
+    geometry_types = {'point': ('Point', 1), 'line': ('LineString', 2), 'polygon': ('Polygon', 3)}
+    layer_geometry_type, collection_type = geometry_types[output_family]
+
+    scope_a = environments['scope_a']
+    scope_b = environments['scope_b']
+    selected_a = environments['selected_feature_ids_a']
+    selected_b = environments['selected_feature_ids_b']
+    input_count_a = _count_scoped_features(cur, layer_a_id, scope_a, selected_a)
+    input_count_b = _count_scoped_features(cur, layer_b_id, scope_b, selected_b)
+    maximum_pairs = input_count_a * input_count_b
+
+    progress(15, 'Creating output schema')
+    output_layer_id = _create_output_layer(
+        cur,
+        name=parameters['output_name'],
+        description=f'Intersection of "{layers[layer_a_id]["name"]}" and "{layers[layer_b_id]["name"]}"',
+        geometry_type=layer_geometry_type,
+        created_by=created_by,
+    )
+    _add_source_id_fields(cur, output_layer_id)
+    used_fields = {'source_a_id', 'source_b_id'}
+    used_domains: set[str] = set()
+    mapping_a = _append_prefixed_layer_schema(
+        cur,
+        source_layer_id=layer_a_id,
+        output_layer_id=output_layer_id,
+        prefix=parameters['prefix_a'],
+        alias_prefix='Layer A',
+        sort_offset=10,
+        used_field_names=used_fields,
+        used_domain_names=used_domains,
+    )
+    mapping_b = _append_prefixed_layer_schema(
+        cur,
+        source_layer_id=layer_b_id,
+        output_layer_id=output_layer_id,
+        prefix=parameters['prefix_b'],
+        alias_prefix='Layer B',
+        sort_offset=10_000,
+        used_field_names=used_fields,
+        used_domain_names=used_domains,
+    )
+
+    raw_parameters: list[Any] = [layer_a_id, layer_b_id]
+    if scope_a == 'selected':
+        raw_parameters.append(selected_a)
+    if scope_b == 'selected':
+        raw_parameters.append(selected_b)
+
+    raw_geometry = 'ST_Intersection(a.geometry, b.geometry)'
+    geometry_parameters: list[Any] = []
+    if environments['precision_grid'] is not None:
+        raw_geometry = f'ST_SnapToGrid({raw_geometry}, %s)'
+        geometry_parameters.append(environments['precision_grid'])
+
+    progress(40, 'Intersecting candidate features')
+    cur.execute(
+        f"""
+        WITH raw_intersections AS MATERIALIZED (
+            SELECT a.id AS source_a_id,
+                   b.id AS source_b_id,
+                   a.properties AS properties_a,
+                   b.properties AS properties_b,
+                   {raw_geometry} AS geometry
+            FROM features a
+            JOIN features b
+              ON a.geometry && b.geometry
+             AND ST_Intersects(a.geometry, b.geometry)
+            WHERE a.layer_id = %s::uuid
+              AND b.layer_id = %s::uuid
+              {_selected_clause('a', scope_a)}
+              {_selected_clause('b', scope_b)}
+        ), typed_intersections AS MATERIALIZED (
+            SELECT source_a_id,
+                   source_b_id,
+                   properties_a,
+                   properties_b,
+                   ST_CollectionExtract(geometry, %s) AS geometry
+            FROM raw_intersections
+        )
+        INSERT INTO features (layer_id, geometry, properties, created_by)
+        SELECT %s::uuid,
+               geometry,
+               jsonb_build_object(
+                   'source_a_id', source_a_id::text,
+                   'source_b_id', source_b_id::text
+               )
+               || COALESCE((
+                   SELECT jsonb_object_agg(field_map.value, source_property.value)
+                   FROM jsonb_each_text(%s::jsonb) field_map
+                   JOIN jsonb_each(properties_a) source_property ON source_property.key = field_map.key
+               ), '{{}}'::jsonb)
+               || COALESCE((
+                   SELECT jsonb_object_agg(field_map.value, source_property.value)
+                   FROM jsonb_each_text(%s::jsonb) field_map
+                   JOIN jsonb_each(properties_b) source_property ON source_property.key = field_map.key
+               ), '{{}}'::jsonb),
+               %s::uuid
+        FROM typed_intersections
+        WHERE geometry IS NOT NULL AND NOT ST_IsEmpty(geometry)
+        """,
+        tuple(
+            geometry_parameters
+            + raw_parameters
+            + [collection_type]
+            + [output_layer_id, json.dumps(mapping_a), json.dumps(mapping_b), created_by]
+        ),
+    )
+    feature_count = cur.rowcount
+
+    progress(78, 'Recording output provenance')
+    _record_output_history(cur, output_layer_id, created_by)
+    warnings: list[str] = []
+    if parameters['output_type'] != 'auto':
+        warnings.append(
+            f'Only {output_family} components were retained from intersection results.'
+        )
+    if maximum_pairs > 1_000_000:
+        warnings.append(
+            f'The inputs contain up to {maximum_pairs:,} feature pairs; spatial indexes limited actual candidates.'
+        )
+    if not feature_count:
+        warnings.append('The operation produced an empty output layer.')
+
+    progress(92, 'Finalizing output')
     return {
         'layer': _serialize_layer(cur, output_layer_id),
         'count': feature_count,
         'output_layer_ids': [output_layer_id],
-        'warnings': [] if feature_count else ['The operation produced an empty output layer.'],
+        'warnings': warnings,
+        'metrics': {
+            'input_feature_count_a': input_count_a,
+            'input_feature_count_b': input_count_b,
+            'maximum_feature_pairs': maximum_pairs,
+            'output_geometry_family': output_family,
+        },
     }
 
 
-EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {'buffer': _execute_buffer}
+EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
+    'buffer': _execute_buffer,
+    'intersect': _execute_intersect,
+}
 
 
 def execute_vector_tool(
@@ -527,7 +913,11 @@ def execute_vector_tool(
 
     result = executor(cur, normalized_parameters, normalized_environments, created_by, report)
     elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
-    result['metrics'] = {'elapsed_ms': elapsed_ms, 'output_feature_count': result['count']}
+    result['metrics'] = {
+        **result.get('metrics', {}),
+        'elapsed_ms': elapsed_ms,
+        'output_feature_count': result['count'],
+    }
     if run_id:
         update_analysis_run(
             cur,

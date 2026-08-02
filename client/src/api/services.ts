@@ -190,6 +190,10 @@ export interface AnalysisBufferPayload {
 export interface AnalysisEnvironments {
   scope?: 'all' | 'selected'
   selected_feature_ids?: string[]
+  scope_a?: 'all' | 'selected'
+  scope_b?: 'all' | 'selected'
+  selected_feature_ids_a?: string[]
+  selected_feature_ids_b?: string[]
   precision_grid?: number | null
   output_crs?: 'EPSG:4326'
 }
@@ -197,7 +201,7 @@ export interface AnalysisEnvironments {
 export interface VectorToolParameter {
   name: string
   label: string
-  type: 'layer' | 'number' | 'string' | 'geometry'
+  type: 'layer' | 'number' | 'string' | 'geometry' | 'choice'
   required: boolean
   default: unknown
   minimum: number | null
@@ -245,6 +249,12 @@ export interface AnalysisIntersectPayload {
   layer_a: string
   layer_b: string
   output_name: string
+  output_type?: 'auto' | 'point' | 'line' | 'polygon'
+  prefix_a?: string
+  prefix_b?: string
+  async?: boolean
+  execution_mode?: 'automatic' | 'synchronous' | 'asynchronous'
+  environments?: AnalysisEnvironments
 }
 
 export interface AnalysisWithinPayload {

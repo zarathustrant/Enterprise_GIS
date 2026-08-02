@@ -138,6 +138,15 @@ Replace the three-tab dialog with a compact, map-safe right-side analysis workbe
 
 ## Phase 1: Professional Intersect
 
+Implementation status:
+
+- shared synchronous/worker executor complete
+- spatial-index candidate filtering and single materialized intersection calculation complete
+- geometry-family inference and explicit component extraction complete
+- prefixed Layer A/Layer B schema, domain, and property propagation complete
+- source feature IDs, independent selected-input environments, metrics, and warnings complete
+- field-map preview, automatic cost-based async selection, sliver controls, and database geometry fixtures remain
+
 Capabilities:
 
 - point, line, and polygon combinations
