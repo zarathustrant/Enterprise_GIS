@@ -347,6 +347,17 @@ export interface AnalysisNearPayload {
   environments?: AnalysisEnvironments
 }
 
+export interface AnalysisPolygonizePayload {
+  line_layer: string
+  output_name: string
+  snap_tolerance?: number | null
+  attribute_transfer?: 'none' | 'first_intersecting' | 'majority_boundary'
+  create_diagnostics?: boolean
+  async?: boolean
+  execution_mode?: 'automatic' | 'synchronous' | 'asynchronous'
+  environments?: AnalysisEnvironments
+}
+
 export interface AnalysisWithinPayload {
   layer_id: string
   polygon: Geometry
@@ -368,7 +379,7 @@ export interface CreateViewPayload {
 }
 
 export interface CreateJobPayload {
-  job_type: 'analysis.buffer' | 'analysis.multi_ring_buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.dissolve' | 'analysis.spatial_join' | 'analysis.summarize_within' | 'analysis.near' | 'analysis.within'
+  job_type: 'analysis.buffer' | 'analysis.multi_ring_buffer' | 'analysis.intersect' | 'analysis.clip' | 'analysis.erase' | 'analysis.dissolve' | 'analysis.spatial_join' | 'analysis.summarize_within' | 'analysis.near' | 'analysis.polygonize' | 'analysis.within'
   payload: Record<string, unknown>
 }
 
@@ -1317,6 +1328,20 @@ export function runNearAnalysis(
 ): Promise<AnalysisLayerResponse> {
   return apiRequest<AnalysisLayerResponse>(
     '/analysis/near',
+    {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    },
+    token,
+  )
+}
+
+export function runPolygonizeAnalysis(
+  payload: AnalysisPolygonizePayload,
+  token: string,
+): Promise<AnalysisLayerResponse> {
+  return apiRequest<AnalysisLayerResponse>(
+    '/analysis/polygonize',
     {
       method: 'POST',
       body: JSON.stringify(payload),

@@ -26,7 +26,7 @@ import { fetchLayerFields } from '../api/services'
 import { useAuthStore } from '../store/auth'
 import { WORK_MODE_DIALOG_PROPS, normalModeDialogSx, workModeDialogSx } from './workModeDialog'
 
-export type AnalysisTab = 'buffer' | 'multi_ring_buffer' | 'intersect' | 'clip' | 'erase' | 'dissolve' | 'spatial_join' | 'summarize_within' | 'near' | 'within'
+export type AnalysisTab = 'buffer' | 'multi_ring_buffer' | 'intersect' | 'clip' | 'erase' | 'dissolve' | 'spatial_join' | 'summarize_within' | 'near' | 'polygonize' | 'within'
 export type AnalysisJobStatus = 'queued' | 'running' | 'success' | 'error'
 
 export interface AnalysisJobState {
@@ -95,6 +95,13 @@ interface AnalysisDialogProps {
     sourcePrefix: string
     nearPrefix: string
   }) => void
+  onRunPolygonize: (payload: {
+    lineLayer: string
+    outputName: string
+    snapTolerance: number | null
+    attributeTransfer: 'none' | 'first_intersecting' | 'majority_boundary'
+    createDiagnostics: boolean
+  }) => void
   onRunWithin: (payload: { layerId: string; polygon: string }) => void
 }
 
@@ -116,6 +123,7 @@ export function AnalysisDialog({
   onRunSpatialJoin,
   onRunSummarizeWithin,
   onRunNear,
+  onRunPolygonize,
   onRunWithin,
 }: AnalysisDialogProps) {
   const [tab, setTab] = useState<AnalysisTab>('buffer')
@@ -180,6 +188,12 @@ export function AnalysisDialog({
   const [nearSourcePrefix, setNearSourcePrefix] = useState('source_')
   const [nearFieldPrefix, setNearFieldPrefix] = useState('near_')
 
+  const [polygonizeLayer, setPolygonizeLayer] = useState('')
+  const [polygonizeName, setPolygonizeName] = useState('Polygonized Lines')
+  const [polygonizeTolerance, setPolygonizeTolerance] = useState('')
+  const [polygonizeTransfer, setPolygonizeTransfer] = useState<'none' | 'first_intersecting' | 'majority_boundary'>('majority_boundary')
+  const [polygonizeDiagnostics, setPolygonizeDiagnostics] = useState(true)
+
   const [withinLayerId, setWithinLayerId] = useState('')
   const [withinPolygon, setWithinPolygon] = useState(
     '{\n  "type": "Polygon",\n  "coordinates": [[[5.58,6.29],[5.62,6.29],[5.62,6.31],[5.58,6.31],[5.58,6.29]]]\n}',
@@ -193,6 +207,13 @@ export function AnalysisDialog({
     () => layerOptions.filter((item) => {
       const layer = layers.find((candidate) => candidate.id === item.value)
       return (layer?.geometry_type ?? '').toLowerCase().includes('polygon')
+    }),
+    [layerOptions, layers],
+  )
+  const lineLayerOptions = useMemo(
+    () => layerOptions.filter((item) => {
+      const layer = layers.find((candidate) => candidate.id === item.value)
+      return (layer?.geometry_type ?? '').toLowerCase().includes('line')
     }),
     [layerOptions, layers],
   )
@@ -313,6 +334,7 @@ export function AnalysisDialog({
           <Tab value="spatial_join" label="Spatial Join" />
           <Tab value="summarize_within" label="Summarize Within" />
           <Tab value="near" label="Near" />
+          <Tab value="polygonize" label="Polygonize" />
           <Tab value="within" label="Within" />
         </Tabs>
 
@@ -792,6 +814,36 @@ export function AnalysisDialog({
                 nearPrefix: nearFieldPrefix,
               })}
             >Run Near</Button>
+          </Box>
+        )}
+
+        {tab === 'polygonize' && (
+          <Box display="grid" gap={2}>
+            <TextField label="Line network" value={polygonizeLayer} onChange={(event) => setPolygonizeLayer(event.target.value)} size="small" select>
+              {lineLayerOptions.map((item) => <MenuItem key={item.value} value={item.value}>{item.label}</MenuItem>)}
+            </TextField>
+            <Alert severity="info">
+              Intersections are noded before polygonization. Source lines are never modified.
+            </Alert>
+            <TextField label="Snap tolerance (decimal degrees)" type="number" value={polygonizeTolerance} onChange={(event) => setPolygonizeTolerance(event.target.value)} helperText="Optional. Use a small value appropriate to the source CRS precision." size="small" />
+            <TextField label="Transfer source attributes" value={polygonizeTransfer} onChange={(event) => setPolygonizeTransfer(event.target.value as typeof polygonizeTransfer)} size="small" select>
+              <MenuItem value="majority_boundary">Line with greatest boundary coverage</MenuItem>
+              <MenuItem value="first_intersecting">First intersecting line (deterministic)</MenuItem>
+              <MenuItem value="none">No source attributes</MenuItem>
+            </TextField>
+            <FormControlLabel control={<Switch checked={polygonizeDiagnostics} onChange={(event) => setPolygonizeDiagnostics(event.target.checked)} />} label="Create diagnostics layer for unconsumed edges" />
+            <TextField label="Output polygon layer name" value={polygonizeName} onChange={(event) => setPolygonizeName(event.target.value)} size="small" />
+            <Button
+              variant="contained"
+              disabled={running || !polygonizeLayer}
+              onClick={() => onRunPolygonize({
+                lineLayer: polygonizeLayer,
+                outputName: polygonizeName || 'Polygonized Lines',
+                snapTolerance: polygonizeTolerance ? Number(polygonizeTolerance) : null,
+                attributeTransfer: polygonizeTransfer,
+                createDiagnostics: polygonizeDiagnostics,
+              })}
+            >Run Polygonize</Button>
           </Box>
         )}
 

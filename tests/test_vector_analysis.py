@@ -13,6 +13,7 @@ from vector_analysis import (
     _execute_intersect,
     _execute_multi_ring_buffer,
     _execute_near,
+    _execute_polygonize,
     _geometry_family,
     _resolve_intersection_output_type,
     get_tool_spec,
@@ -312,6 +313,7 @@ class PlaceholderCheckingCursor:
         self.summarize_within_parameters = None
         self.near_parameters = None
         self.multi_ring_parameters = None
+        self.polygonize_parameters = []
 
     def execute(self, query, parameters=()):
         parameters = tuple(parameters)
@@ -356,6 +358,9 @@ class PlaceholderCheckingCursor:
         elif normalized.startswith('WITH distance_steps AS MATERIALIZED'):
             self.multi_ring_parameters = parameters
             self.rowcount = 6
+        elif normalized.startswith('WITH scoped_lines AS MATERIALIZED') and 'ST_Polygonize' in normalized:
+            self.polygonize_parameters.append(parameters)
+            self.rowcount = 4 if len(self.polygonize_parameters) == 1 else 2
         elif normalized.startswith('SELECT l.*, u.username AS created_by'):
             now = datetime.now(timezone.utc)
             self._one = {
@@ -764,6 +769,73 @@ class NearExecutorContractTests(unittest.TestCase):
             source_layer,
             [source_feature],
         ))
+
+
+class PolygonizeExecutorContractTests(unittest.TestCase):
+    def test_polygonize_nodes_selected_lines_and_emits_diagnostics(self):
+        line_layer = str(uuid4())
+        output_layer = str(uuid4())
+        user_id = str(uuid4())
+        selected_feature = str(uuid4())
+        cursor = PlaceholderCheckingCursor(
+            line_layer,
+            str(uuid4()),
+            output_layer,
+            geometry_a='LineString',
+        )
+        parameters = validate_tool_parameters('polygonize', {
+            'line_layer': line_layer,
+            'output_name': 'Survey blocks',
+            'snap_tolerance': 0.00001,
+            'attribute_transfer': 'majority_boundary',
+            'create_diagnostics': True,
+        })
+        environments = normalize_environments({
+            'scope': 'selected',
+            'selected_feature_ids': [selected_feature],
+        })
+
+        result = _execute_polygonize(
+            cursor, parameters, environments, user_id, lambda _progress, _stage: None
+        )
+
+        self.assertEqual(result['count'], 4)
+        self.assertEqual(result['metrics']['diagnostic_count'], 2)
+        self.assertEqual(cursor.polygonize_parameters[0], (
+            0.00001,
+            line_layer,
+            [selected_feature],
+            output_layer,
+            user_id,
+            line_layer,
+        ))
+        self.assertEqual(cursor.polygonize_parameters[1], (
+            0.00001,
+            line_layer,
+            [selected_feature],
+            output_layer,
+            user_id,
+        ))
+
+    def test_polygonize_rejects_non_line_layer(self):
+        line_layer = str(uuid4())
+        cursor = PlaceholderCheckingCursor(
+            line_layer,
+            str(uuid4()),
+            str(uuid4()),
+            geometry_a='Polygon',
+        )
+        with self.assertRaisesRegex(VectorAnalysisError, 'line geometry'):
+            _execute_polygonize(
+                cursor,
+                validate_tool_parameters('polygonize', {
+                    'line_layer': line_layer,
+                    'output_name': 'Invalid',
+                }),
+                normalize_environments({}),
+                str(uuid4()),
+                lambda _progress, _stage: None,
+            )
 
 
 if __name__ == '__main__':

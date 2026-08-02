@@ -320,6 +320,19 @@ def near():
     )
 
 
+# ── Polygonize Lines ─────────────────────────────────────────────────────────
+
+@analysis_bp.route('/polygonize', methods=['POST'])
+@jwt_required()
+def polygonize():
+    return _run_layer_tool(
+        'polygonize',
+        request.get_json() or {},
+        ('line_layer',),
+        'analysis_polygonize',
+    )
+
+
 # ── Spatial query (features within a polygon) ─────────────────────────────────
 
 @analysis_bp.route('/within', methods=['POST'])

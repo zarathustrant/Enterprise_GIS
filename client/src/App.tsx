@@ -133,6 +133,7 @@ import {
   runIntersectAnalysis,
   runMultiRingBufferAnalysis,
   runNearAnalysis,
+  runPolygonizeAnalysis,
   runSpatialJoinAnalysis,
   runSummarizeWithinAnalysis,
   runWithinAnalysis,
@@ -2670,6 +2671,40 @@ export default function App() {
     },
   })
 
+  const polygonizeMutation = useMutation({
+    mutationFn: async (payload: {
+      lineLayer: string
+      outputName: string
+      snapTolerance: number | null
+      attributeTransfer: 'none' | 'first_intersecting' | 'majority_boundary'
+      createDiagnostics: boolean
+    }) => {
+      if (!token) throw new Error('Sign in to polygonize linework.')
+      return runPolygonizeAnalysis({
+        line_layer: payload.lineLayer,
+        output_name: payload.outputName,
+        snap_tolerance: payload.snapTolerance,
+        attribute_transfer: payload.attributeTransfer,
+        create_diagnostics: payload.createDiagnostics,
+      }, token)
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['layers'] })
+      queryClient.invalidateQueries({ queryKey: ['layer-features'] })
+      setAnalysisError(null)
+      setAnalysisOverlay(null)
+      setWithinCount(null)
+      const warningText = result.warnings?.length ? ` ${result.warnings.join(' ')}` : ''
+      completeAnalysisJob(`Polygonize complete (${result.count} polygons).${warningText}`)
+      notify(`Polygonize complete (${result.count} polygons).${warningText}`, result.warnings?.length ? 'warning' : 'success')
+    },
+    onError: (error) => {
+      const message = error instanceof Error ? error.message : 'Polygonize failed'
+      setAnalysisError(message)
+      failAnalysisJob(message)
+    },
+  })
+
   const withinMutation = useMutation({
     mutationFn: async (payload: { layerId: string; polygonText: string }) => {
       const polygon = JSON.parse(payload.polygonText) as Geometry
@@ -2698,6 +2733,7 @@ export default function App() {
     || spatialJoinMutation.isPending
     || summarizeWithinMutation.isPending
     || nearMutation.isPending
+    || polygonizeMutation.isPending
     || withinMutation.isPending
 
   const handleAuthenticated = (response: AuthResponse) => {
@@ -4887,6 +4923,11 @@ export default function App() {
             setAnalysisError(null)
             startAnalysisJob('near')
             nearMutation.mutate(payload)
+          }}
+          onRunPolygonize={(payload) => {
+            setAnalysisError(null)
+            startAnalysisJob('polygonize')
+            polygonizeMutation.mutate(payload)
           }}
           onRunWithin={(payload) => {
             setAnalysisError(null)

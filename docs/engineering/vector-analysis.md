@@ -151,6 +151,12 @@ For very large candidate layers, exact geodesic ranking is refined from at least
 
 Multi-Ring Buffer creates up to 50 ordered geodesic distance levels per source feature. Non-overlapping ring mode subtracts each previous geography buffer from the next; cumulative disk mode retains complete buffers at every distance. Outputs preserve source schema and add collision-safe source ID, ring index, inner distance, and outer distance fields. Selected scope, precision snapping, durable runs, and worker execution use the same framework. The endpoint is `POST /api/v1/analysis/multi-ring-buffer`.
 
+### Polygonize Lines
+
+Polygonize constructs polygons without mutating source linework. It optionally snaps coordinates on a user-supplied decimal-degree grid, removes repeated points, unions and nodes all intersections, and passes the resulting network to `ST_Polygonize`; closed rings and holes are preserved by PostGIS topology construction.
+
+Attribute transfer can be disabled, use the deterministic lowest intersecting feature UUID, or choose the source line contributing the greatest polygon-boundary length. An optional companion diagnostics layer contains line components not consumed by the generated polygon boundaries, making gaps, dangles, and cut edges inspectable on the map. Independent run metrics identify polygon and diagnostic counts. The endpoint is `POST /api/v1/analysis/polygonize`.
+
 ## Transaction Guarantees
 
 - A run is committed before synchronous execution, so failures remain visible.
@@ -160,6 +166,5 @@ Multi-Ring Buffer creates up to 50 ordered geodesic distance levels per source f
 
 ## Next Migration Order
 
-1. Polygonize line networks with diagnostics.
-2. Geometry construction, quality, and statistics tool groups.
-3. Analysis Workbench UI generated from the registry and run-history APIs.
+1. Geometry construction, quality, and statistics tool groups.
+2. Analysis Workbench UI generated from the registry and run-history APIs.

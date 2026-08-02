@@ -253,6 +253,30 @@ TOOL_REGISTRY: dict[str, VectorToolSpec] = {
         migrated=True,
         keywords=('nearest', 'distance', 'bearing', 'near table', 'knn'),
     ),
+    'polygonize': VectorToolSpec(
+        id='polygonize',
+        version=1,
+        title='Polygonize Lines',
+        category='Data management',
+        description='Build polygons from noded line networks and optionally retain unconsumed edges as diagnostics.',
+        input_geometry_families=('line',),
+        output_geometry_family='polygon',
+        parameters=(
+            ToolParameter('line_layer', 'Input line layer', 'layer', required=True),
+            ToolParameter('output_name', 'Output polygon layer name', 'string', required=True, default='Polygonized Lines'),
+            ToolParameter('snap_tolerance', 'Optional snapping tolerance (degrees)', 'number', minimum=0.000000001),
+            ToolParameter(
+                'attribute_transfer',
+                'Attribute transfer',
+                'choice',
+                default='majority_boundary',
+                choices=('none', 'first_intersecting', 'majority_boundary'),
+            ),
+            ToolParameter('create_diagnostics', 'Create unconsumed-edge diagnostics', 'boolean', default=True),
+        ),
+        migrated=True,
+        keywords=('line network', 'topology', 'closed rings', 'dangles', 'cut edges'),
+    ),
     'within': VectorToolSpec(
         id='within',
         version=1,
@@ -2319,6 +2343,184 @@ def _execute_near(
     }
 
 
+def _execute_polygonize(
+    cur,
+    parameters: dict[str, Any],
+    environments: dict[str, Any],
+    created_by: str | None,
+    progress: Callable[[int, str], None],
+) -> dict[str, Any]:
+    line_layer_id = parameters['line_layer']
+    cur.execute('SELECT id, name, geometry_type FROM layers WHERE id = %s::uuid', (line_layer_id,))
+    source = cur.fetchone()
+    if not source:
+        raise VectorAnalysisError('Input line layer was not found')
+    if _resolve_layer_family(cur, dict(source)) != 'line':
+        raise VectorAnalysisError('Polygonize requires a line geometry layer')
+    scope = environments['scope']
+    selected_ids = environments['selected_feature_ids']
+    source_count = _count_scoped_features(cur, line_layer_id, scope, selected_ids)
+
+    progress(15, 'Creating polygon and diagnostics schemas')
+    output_layer_id = _create_output_layer(
+        cur,
+        name=parameters['output_name'],
+        description=f'Polygons constructed from "{source["name"]}"',
+        geometry_type='Polygon',
+        created_by=created_by,
+        source_layer_id=line_layer_id if parameters['attribute_transfer'] != 'none' else None,
+    )
+    diagnostic_layer_id: str | None = None
+    if parameters['create_diagnostics']:
+        diagnostic_layer_id = _create_output_layer(
+            cur,
+            name=f'{parameters["output_name"]} - Diagnostics',
+            description=f'Linework from "{source["name"]}" not consumed by polygon boundaries',
+            geometry_type='LineString',
+            created_by=created_by,
+        )
+        cur.execute(
+            """
+            INSERT INTO layer_fields (layer_id, name, alias, field_type, nullable, length, sort_order)
+            VALUES
+                (%s::uuid, 'issue_type', 'Topology issue', 'string', FALSE, 32, 0),
+                (%s::uuid, 'length_map_units', 'Diagnostic length (degrees)', 'double', FALSE, NULL, 1)
+            """,
+            (diagnostic_layer_id, diagnostic_layer_id),
+        )
+
+    scope_clause = _selected_clause('source', scope)
+    prepared_geometry = 'ST_RemoveRepeatedPoints(source.geometry)'
+    base_parameters: list[Any] = [line_layer_id]
+    if scope == 'selected':
+        base_parameters.append(selected_ids)
+    if parameters['snap_tolerance'] is not None:
+        prepared_geometry = 'ST_RemoveRepeatedPoints(ST_SnapToGrid(source.geometry, %s))'
+        base_parameters = [parameters['snap_tolerance'], line_layer_id]
+        if scope == 'selected':
+            base_parameters.append(selected_ids)
+
+    transfer_join = ''
+    transfer_properties = "'{}'::jsonb"
+    transfer_parameters: list[Any] = []
+    if parameters['attribute_transfer'] != 'none':
+        order_expression = (
+            'candidate.id'
+            if parameters['attribute_transfer'] == 'first_intersecting'
+            else 'ST_Length(ST_Intersection(candidate.geometry, ST_Boundary(polygon.geometry))) DESC, candidate.id'
+        )
+        transfer_join = f"""
+            LEFT JOIN LATERAL (
+                SELECT candidate.properties
+                FROM features candidate
+                WHERE candidate.layer_id = %s::uuid
+                  AND candidate.geometry && polygon.geometry
+                  AND ST_Intersects(candidate.geometry, ST_Boundary(polygon.geometry))
+                ORDER BY {order_expression}
+                LIMIT 1
+            ) transferred ON TRUE
+        """
+        transfer_parameters.append(line_layer_id)
+        transfer_properties = "COALESCE(transferred.properties, '{}'::jsonb)"
+
+    progress(38, 'Noding intersections and polygonizing rings')
+    cur.execute(
+        f"""
+        WITH scoped_lines AS MATERIALIZED (
+            SELECT source.id, source.properties, {prepared_geometry} AS geometry
+            FROM features source
+            WHERE source.layer_id = %s::uuid
+              {scope_clause}
+              AND source.geometry IS NOT NULL
+              AND NOT ST_IsEmpty(source.geometry)
+        ), network AS MATERIALIZED (
+            SELECT ST_Node(ST_UnaryUnion(ST_Collect(geometry))) AS geometry
+            FROM scoped_lines
+        ), polygons AS MATERIALIZED (
+            SELECT (ST_Dump(ST_Polygonize(geometry))).geom AS geometry
+            FROM network
+        )
+        INSERT INTO features (layer_id, geometry, properties, created_by)
+        SELECT %s::uuid,
+               polygon.geometry,
+               {transfer_properties},
+               %s::uuid
+        FROM polygons polygon
+        {transfer_join}
+        WHERE NOT ST_IsEmpty(polygon.geometry)
+          AND ST_IsValid(polygon.geometry)
+        """,
+        tuple(base_parameters + [output_layer_id, created_by] + transfer_parameters),
+    )
+    feature_count = cur.rowcount
+    _record_output_history(cur, output_layer_id, created_by)
+
+    diagnostic_count = 0
+    if diagnostic_layer_id:
+        progress(68, 'Extracting unconsumed network edges')
+        cur.execute(
+            f"""
+            WITH scoped_lines AS MATERIALIZED (
+                SELECT {prepared_geometry} AS geometry
+                FROM features source
+                WHERE source.layer_id = %s::uuid
+                  {scope_clause}
+                  AND source.geometry IS NOT NULL
+                  AND NOT ST_IsEmpty(source.geometry)
+            ), network AS MATERIALIZED (
+                SELECT ST_Node(ST_UnaryUnion(ST_Collect(geometry))) AS geometry
+                FROM scoped_lines
+            ), polygons AS MATERIALIZED (
+                SELECT (ST_Dump(ST_Polygonize(geometry))).geom AS geometry
+                FROM network
+            ), unused AS MATERIALIZED (
+                SELECT ST_Difference(
+                    network.geometry,
+                    COALESCE(ST_Boundary(ST_UnaryUnion(ST_Collect(polygons.geometry))), ST_GeomFromText('MULTILINESTRING EMPTY', 4326))
+                ) AS geometry
+                FROM network LEFT JOIN polygons ON TRUE
+                GROUP BY network.geometry
+            ), parts AS (
+                SELECT (ST_Dump(ST_CollectionExtract(geometry, 2))).geom AS geometry
+                FROM unused
+            )
+            INSERT INTO features (layer_id, geometry, properties, created_by)
+            SELECT %s::uuid,
+                   geometry,
+                   jsonb_build_object('issue_type', 'unconsumed_edge', 'length_map_units', ST_Length(geometry)),
+                   %s::uuid
+            FROM parts
+            WHERE NOT ST_IsEmpty(geometry) AND ST_Length(geometry) > 0
+            """,
+            tuple(base_parameters + [diagnostic_layer_id, created_by]),
+        )
+        diagnostic_count = cur.rowcount
+        _record_output_history(cur, diagnostic_layer_id, created_by)
+
+    warnings: list[str] = []
+    if not feature_count:
+        warnings.append('No closed rings formed polygons; inspect the diagnostics layer for gaps and dangles.')
+    if diagnostic_count:
+        warnings.append(f'{diagnostic_count} unconsumed line part(s) were written to the diagnostics layer.')
+    progress(92, 'Finalizing polygonized output')
+    output_layer_ids = [output_layer_id] + ([diagnostic_layer_id] if diagnostic_layer_id else [])
+    return {
+        'layer': _serialize_layer(cur, output_layer_id),
+        'count': feature_count,
+        'output_layer_ids': output_layer_ids,
+        'warnings': warnings,
+        'metrics': {
+            'source_feature_count': source_count,
+            'polygon_count': feature_count,
+            'diagnostic_count': diagnostic_count,
+            'diagnostic_layer_id': diagnostic_layer_id,
+            'snap_tolerance_degrees': parameters['snap_tolerance'],
+            'attribute_transfer': parameters['attribute_transfer'],
+            'intersections_noded': True,
+        },
+    }
+
+
 EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     'buffer': _execute_buffer,
     'multi_ring_buffer': _execute_multi_ring_buffer,
@@ -2329,6 +2531,7 @@ EXECUTORS: dict[str, Callable[..., dict[str, Any]]] = {
     'spatial_join': _execute_spatial_join,
     'summarize_within': _execute_summarize_within,
     'near': _execute_near,
+    'polygonize': _execute_polygonize,
 }
 
 

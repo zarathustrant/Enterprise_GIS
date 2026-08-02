@@ -323,6 +323,16 @@ Exit gate:
 
 This tool directly supports seismic grids, cadastral boundaries, survey lines, and imported linework.
 
+Implementation status:
+
+- closed line-network polygon construction and intersection noding complete
+- optional decimal-degree precision snapping and repeated-point removal complete
+- holes preserved through PostGIS polygonization complete
+- deterministic first-intersecting and majority-boundary attribute transfer complete
+- companion unconsumed-edge diagnostics layer complete
+- selected scope, shared worker execution, visual controls, run metrics, and provenance complete
+- explicit dangle/cut-edge classification, invalid-ring diagnostics, and database topology fixtures remain
+
 Capabilities:
 
 - construct polygons from closed line networks
